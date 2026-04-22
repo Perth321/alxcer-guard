@@ -16,35 +16,14 @@ import {
   getVoiceConnection,
   entersState,
 } from "@discordjs/voice";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { loadConfig } from "./config.js";
+import {
+  registerCommands,
+  handleSettingCommand,
+  handleSettingComponent,
+} from "./commands.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const CONFIG_PATH = path.resolve(__dirname, "..", "config.json");
-
-function loadConfig() {
-  if (!fs.existsSync(CONFIG_PATH)) {
-    throw new Error(
-      `config.json not found at ${CONFIG_PATH}. Use the settings web app to create one.`,
-    );
-  }
-  const raw = fs.readFileSync(CONFIG_PATH, "utf8");
-  const cfg = JSON.parse(raw);
-  if (!cfg.guildId) throw new Error("guildId is required in config.json");
-  return {
-    guildId: String(cfg.guildId),
-    voiceChannelId: cfg.voiceChannelId ? String(cfg.voiceChannelId) : null,
-    notifyChannelId: cfg.notifyChannelId ? String(cfg.notifyChannelId) : null,
-    warningSeconds: Number(cfg.warningSeconds ?? 180),
-    muteSeconds: Number(cfg.muteSeconds ?? 300),
-    ignoreBots: cfg.ignoreBots !== false,
-  };
-}
-
-const config = loadConfig();
+let config = loadConfig();
 const TOKEN = process.env.DISCORD_PERSONAL_ACCESS_TOKEN;
 
 if (!TOKEN) {
@@ -53,9 +32,15 @@ if (!TOKEN) {
   );
 }
 
+if (!config.guildId) {
+  console.warn(
+    "[boot] guildId is empty in config.json — bot will start but won't watch any guild until /setting is configured.",
+  );
+}
+
 console.log("[boot] Alxcer Guard starting", {
-  guildId: config.guildId,
-  notifyChannelId: config.notifyChannelId,
+  guildId: config.guildId || "(none)",
+  notifyChannelId: config.notifyChannelId || "(none)",
   warningSeconds: config.warningSeconds,
   muteSeconds: config.muteSeconds,
 });
@@ -71,14 +56,31 @@ const client = new Client({
   partials: [Partials.Channel],
 });
 
-// Per-user tracking inside the channel the bot is currently watching
 const userState = new Map();
-// userId -> { lastSpoke: number, warned: boolean, muted: boolean }
+const subscribed = new Set();
 
 let currentChannelId = null;
 let pollHandle = null;
 let joining = false;
 let reevalQueued = false;
+let activeReceiver = null;
+
+const runtime = {
+  getConfig: () => config,
+  setConfig: (next) => {
+    config = next;
+    client.config = config;
+  },
+  requestRejoin: () => {
+    if (!config.guildId) return;
+    client.guilds
+      .fetch(config.guildId)
+      .then((g) => reevaluateAndJoin(g))
+      .catch((err) => console.error("[rejoin] error", err?.message));
+  },
+};
+
+client.config = config;
 
 function getNotifyChannel(guild) {
   if (!config.notifyChannelId) return null;
@@ -96,7 +98,6 @@ async function announce(guild, payload) {
 }
 
 function pickBestVoiceChannel(guild) {
-  // If the user pinned a specific voice channel in config, always use that one
   if (config.voiceChannelId) {
     const pinned = guild.channels.cache.get(config.voiceChannelId);
     if (
@@ -133,6 +134,7 @@ function pickBestVoiceChannel(guild) {
 
 function resetUserState(channel) {
   userState.clear();
+  subscribed.clear();
   const now = Date.now();
   for (const [, member] of channel.members) {
     if (config.ignoreBots && member.user.bot) continue;
@@ -144,29 +146,51 @@ function resetUserState(channel) {
   }
 }
 
+function subscribeUser(receiver, userId) {
+  if (subscribed.has(userId)) return;
+  if (!userState.has(userId)) return;
+  try {
+    const sub = receiver.subscribe(userId, {
+      end: { behavior: EndBehaviorType.Manual },
+    });
+    subscribed.add(userId);
+    sub.on("data", () => {
+      const s = userState.get(userId);
+      if (!s) return;
+      s.lastSpoke = Date.now();
+      if (s.warned) s.warned = false;
+    });
+    sub.on("error", () => {
+      subscribed.delete(userId);
+    });
+    sub.on("end", () => {
+      subscribed.delete(userId);
+    });
+    sub.on("close", () => {
+      subscribed.delete(userId);
+    });
+  } catch (err) {
+    console.error(`[voice] subscribe failed for ${userId}`, err?.message);
+  }
+}
+
 async function attachReceiver(connection, channel) {
   const receiver = connection.receiver;
+  activeReceiver = receiver;
 
   receiver.speaking.on("start", (userId) => {
     const s = userState.get(userId);
-    if (!s) return;
-    s.lastSpoke = Date.now();
-    if (s.warned) {
-      s.warned = false;
+    if (s) {
+      s.lastSpoke = Date.now();
+      if (s.warned) s.warned = false;
     }
+    subscribeUser(receiver, userId);
   });
 
-  // Subscribe to a silent stream so the speaking event keeps firing for everyone
-  receiver.speaking.on("start", (userId) => {
-    if (userState.has(userId)) {
-      try {
-        const sub = receiver.subscribe(userId, {
-          end: { behavior: EndBehaviorType.Manual },
-        });
-        sub.on("data", () => {});
-      } catch {}
-    }
-  });
+  for (const [, member] of channel.members) {
+    if (config.ignoreBots && member.user.bot) continue;
+    subscribeUser(receiver, member.id);
+  }
 
   console.log(`[voice] receiver attached on #${channel.name}`);
 }
@@ -178,7 +202,6 @@ async function checkInactivity(guild) {
 
   const now = Date.now();
 
-  // Sync members in case they joined/left
   for (const [, member] of channel.members) {
     if (config.ignoreBots && member.user.bot) continue;
     if (!userState.has(member.id)) {
@@ -188,10 +211,12 @@ async function checkInactivity(guild) {
         muted: false,
       });
     }
+    if (activeReceiver) subscribeUser(activeReceiver, member.id);
   }
   for (const userId of [...userState.keys()]) {
     if (!channel.members.has(userId)) {
       userState.delete(userId);
+      subscribed.delete(userId);
     }
   }
 
@@ -202,7 +227,6 @@ async function checkInactivity(guild) {
       s.muted = true;
       continue;
     } else if (s.muted) {
-      // user got unmuted externally — reset
       s.muted = false;
       s.warned = false;
       s.lastSpoke = now;
@@ -212,7 +236,9 @@ async function checkInactivity(guild) {
 
     if (!s.warned && silentFor >= config.warningSeconds) {
       s.warned = true;
-      console.log(`[warn] ${member.user.tag} silent for ${silentFor.toFixed(0)}s`);
+      console.log(
+        `[warn] ${member.user.tag} silent for ${silentFor.toFixed(0)}s`,
+      );
       const remaining = Math.max(
         0,
         Math.round(config.muteSeconds - silentFor),
@@ -271,9 +297,7 @@ function safeDestroy(conn) {
     if (conn.state.status !== VoiceConnectionStatus.Destroyed) {
       conn.destroy();
     }
-  } catch (err) {
-    // ignore — already destroyed
-  }
+  } catch {}
 }
 
 async function reevaluateAndJoin(guild) {
@@ -292,11 +316,12 @@ async function reevaluateAndJoin(guild) {
         safeDestroy(existing);
         currentChannelId = null;
         userState.clear();
+        subscribed.clear();
+        activeReceiver = null;
       }
       return;
     }
 
-    // Already on the right channel and connection is healthy → nothing to do
     if (currentChannelId === target.id) {
       const existing = getVoiceConnection(guild.id);
       if (
@@ -307,7 +332,6 @@ async function reevaluateAndJoin(guild) {
       }
     }
 
-    // Claim the channel BEFORE the async join so concurrent events don't re-join
     currentChannelId = target.id;
 
     const existing = getVoiceConnection(guild.id);
@@ -340,7 +364,6 @@ async function reevaluateAndJoin(guild) {
     joining = false;
     if (reevalQueued) {
       reevalQueued = false;
-      // Schedule a follow-up but don't await — avoid recursion stack
       setImmediate(() => {
         reevaluateAndJoin(guild).catch((err) =>
           console.error("[voice] queued reeval error", err?.message),
@@ -352,30 +375,40 @@ async function reevaluateAndJoin(guild) {
 
 client.once(Events.ClientReady, async (c) => {
   console.log(`[ready] logged in as ${c.user.tag}`);
-  const guild = await client.guilds.fetch(config.guildId);
-  await guild.members.fetch().catch(() => {});
-  await reevaluateAndJoin(guild);
 
-  // Periodic check loop
-  pollHandle = setInterval(async () => {
-    try {
-      const g = await client.guilds.fetch(config.guildId);
-      await reevaluateAndJoin(g);
-      await checkInactivity(g);
-    } catch (err) {
-      console.error("[loop] error", err?.message);
-    }
-  }, 5_000);
+  try {
+    await registerCommands(client);
+  } catch (err) {
+    console.error("[commands] register failed", err?.message);
+  }
+
+  if (!config.guildId) return;
+
+  try {
+    const guild = await client.guilds.fetch(config.guildId);
+    await guild.members.fetch().catch(() => {});
+    await reevaluateAndJoin(guild);
+
+    pollHandle = setInterval(async () => {
+      try {
+        const g = await client.guilds.fetch(config.guildId);
+        await reevaluateAndJoin(g);
+        await checkInactivity(g);
+      } catch (err) {
+        console.error("[loop] error", err?.message);
+      }
+    }, 5_000);
+  } catch (err) {
+    console.error("[ready] guild init failed", err?.message);
+  }
 });
 
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
+  if (!config.guildId) return;
   if (newState.guild.id !== config.guildId) return;
-  // Ignore the bot's own voice state changes — they would cause an infinite loop
   if (newState.member?.id === client.user?.id) return;
   if (oldState.member?.id === client.user?.id) return;
 
-  // If a user toggled mute/unmute, refresh their lastSpoke timer so unmuting
-  // gives them a fresh chance instead of being instantly re-muted.
   const userId = newState.member?.id ?? oldState.member?.id;
   if (userId && userState.has(userId)) {
     const wasSelfMuted = oldState.selfMute || oldState.serverMute;
@@ -397,51 +430,67 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isButton()) return;
-  if (!interaction.customId.startsWith("alxcer-unmute:")) return;
-
-  const targetUserId = interaction.customId.split(":")[1];
-  if (interaction.user.id !== targetUserId) {
-    await interaction.reply({
-      content: "ปุ่มนี้สำหรับเจ้าของไมค์เท่านั้นครับ",
-      ephemeral: true,
-    });
-    return;
-  }
-
   try {
-    const guild = await client.guilds.fetch(config.guildId);
-    const member = await guild.members.fetch(targetUserId);
-    if (!member.voice.channel) {
+    if (interaction.isChatInputCommand() && interaction.commandName === "setting") {
+      await handleSettingCommand(interaction, runtime);
+      return;
+    }
+
+    if (
+      interaction.isButton() ||
+      interaction.isAnySelectMenu?.() ||
+      interaction.isModalSubmit()
+    ) {
+      const handled = await handleSettingComponent(interaction, runtime);
+      if (handled) return;
+    }
+
+    if (
+      interaction.isButton() &&
+      interaction.customId.startsWith("alxcer-unmute:")
+    ) {
+      const targetUserId = interaction.customId.split(":")[1];
+      if (interaction.user.id !== targetUserId) {
+        await interaction.reply({
+          content: "ปุ่มนี้สำหรับเจ้าของไมค์เท่านั้นครับ",
+          ephemeral: true,
+        });
+        return;
+      }
+      const guild = await client.guilds.fetch(config.guildId);
+      const member = await guild.members.fetch(targetUserId);
+      if (!member.voice.channel) {
+        await interaction.reply({
+          content: "คุณไม่ได้อยู่ในห้องเสียงตอนนี้",
+          ephemeral: true,
+        });
+        return;
+      }
+      await member.voice.setMute(false, "Alxcer Guard: user requested unmute");
+
+      const s = userState.get(targetUserId);
+      if (s) {
+        s.muted = false;
+        s.warned = false;
+        s.lastSpoke = Date.now();
+      }
+
       await interaction.reply({
-        content: "คุณไม่ได้อยู่ในห้องเสียงตอนนี้",
+        content: "✅ Unmute เรียบร้อย — พูดได้เลยครับ",
         ephemeral: true,
       });
       return;
     }
-    await member.voice.setMute(false, "Alxcer Guard: user requested unmute");
-
-    const s = userState.get(targetUserId);
-    if (s) {
-      s.muted = false;
-      s.warned = false;
-      s.lastSpoke = Date.now();
-    }
-
-    await interaction.reply({
-      content: "✅ Unmute เรียบร้อย — พูดได้เลยครับ",
-      ephemeral: true,
-    });
   } catch (err) {
-    console.error("[unmute] failed", err?.message);
-    await interaction.reply({
-      content: "ไม่สามารถ unmute ได้ในตอนนี้",
-      ephemeral: true,
-    });
+    console.error("[interaction] error", err?.message);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction
+        .reply({ content: "เกิดข้อผิดพลาด", ephemeral: true })
+        .catch(() => {});
+    }
   }
 });
 
-// Graceful shutdown — important for GitHub Actions runner cleanup
 function shutdown(signal) {
   console.log(`[shutdown] received ${signal}`);
   if (pollHandle) clearInterval(pollHandle);
