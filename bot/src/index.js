@@ -328,63 +328,50 @@ async function checkInactivity(guild) {
 
   const conn = getVoiceConnection(guild.id);
   const connStatus = conn?.state?.status ?? "none";
-  // Treat the connection as functionally usable when either:
-  //  - it reports Ready, OR
-  //  - it reports any non-destroyed state but we've actually received audio
-  //    packets in the last WATCHDOG_SECONDS. discord.js sometimes gets stuck
-  //    reporting `signalling` even though UDP packets ARE flowing.
-  const audioRecent = (Date.now() - lastAnyAudio) / 1000 < WATCHDOG_SECONDS;
-  const usable =
-    !!conn &&
-    (conn.state.status === VoiceConnectionStatus.Ready ||
-      (conn.state.status !== VoiceConnectionStatus.Destroyed && audioRecent));
 
-  if (!usable) {
-    notReadyTicks++;
-    console.log(
-      `[loop] connection not usable (state=${connStatus}, audioRecent=${audioRecent}, ticks=${notReadyTicks})`,
-    );
-    if (notReadyTicks >= 12) {
-      console.warn(
-        "[loop] connection stuck unusable for 1 minute — forcing rejoin",
-      );
-      notReadyTicks = 0;
-      if (conn) safeDestroy(conn);
-      currentChannelId = null;
-      activeReceiver = null;
-      subscribed.clear();
-      await reevaluateAndJoin(guild);
+  // If the receiver looks degraded (no audio in WATCHDOG_SECONDS), kick off
+  // a background rejoin — but DO NOT block the mute logic on it. Muting is
+  // done via Discord's REST API and works independently from the voice UDP
+  // connection. The user explicitly wants silent members muted; refusing to
+  // act because the bot is unsure of itself defeats the whole purpose.
+  if (conn && connStatus !== VoiceConnectionStatus.Destroyed) {
+    if (activeReceiver !== conn.receiver) {
+      console.log(`[voice] receiver changed — re-attaching`);
+      await attachReceiver(conn, channel);
     }
-    return;
-  }
-  notReadyTicks = 0;
-
-  if (activeReceiver !== conn.receiver) {
-    console.log(`[voice] receiver changed — re-attaching`);
-    await attachReceiver(conn, channel);
   }
 
   const humansInChannel = [...channel.members.values()].filter(
     (m) => !(config.ignoreBots && m.user.bot),
   );
 
-  if (humansInChannel.length > 0 && !isReceiverHealthy()) {
-    if (!receiverHealthLogged) {
+  const audioStale = (Date.now() - lastAnyAudio) / 1000 >= WATCHDOG_SECONDS;
+  const connBad =
+    !conn ||
+    (connStatus !== VoiceConnectionStatus.Ready && audioStale);
+
+  if (connBad && humansInChannel.length > 0) {
+    notReadyTicks++;
+    if (
+      notReadyTicks >= 12 &&
+      Date.now() - lastWatchdogRejoin > WATCHDOG_COOLDOWN_MS
+    ) {
       console.warn(
-        `[health] no audio activity for ${WATCHDOG_SECONDS}s while ${humansInChannel.length} humans present — pausing mutes`,
+        `[health] connection degraded (state=${connStatus}, audioStale=${audioStale}) — background rejoin attempt`,
       );
-      receiverHealthLogged = true;
-    }
-    if (Date.now() - lastWatchdogRejoin > WATCHDOG_COOLDOWN_MS) {
-      console.warn(`[health] attempting receiver rejoin (cooldown elapsed)`);
       lastWatchdogRejoin = Date.now();
-      safeDestroy(conn);
+      notReadyTicks = 0;
+      if (conn) safeDestroy(conn);
       currentChannelId = null;
       activeReceiver = null;
       subscribed.clear();
-      await reevaluateAndJoin(guild);
+      // Fire-and-forget so we still proceed to mute decisions this tick.
+      reevaluateAndJoin(guild).catch((err) =>
+        console.error("[health] background rejoin error", err?.message),
+      );
     }
-    return;
+  } else {
+    notReadyTicks = 0;
   }
 
   for (const [userId, s] of userState) {
