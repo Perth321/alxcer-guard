@@ -309,9 +309,9 @@ async function checkInactivity(guild) {
     console.log(
       `[loop] connection not ready (state=${status}, ticks=${notReadyTicks}), skipping mute decisions`,
     );
-    if (notReadyTicks >= 6) {
+    if (notReadyTicks >= 24) {
       console.warn(
-        "[loop] connection stuck non-ready for 30s — forcing rejoin",
+        "[loop] connection stuck non-ready for 2 minutes — forcing rejoin",
       );
       notReadyTicks = 0;
       if (conn) safeDestroy(conn);
@@ -530,20 +530,28 @@ async function reevaluateAndJoin(guild) {
       }
     });
 
+    const me = target.guild.members.me;
+    if (me) {
+      const perms = target.permissionsFor(me);
+      console.log(
+        `[perms] in #${target.name}: View=${perms?.has("ViewChannel")} Connect=${perms?.has("Connect")} Speak=${perms?.has("Speak")} MuteMembers=${perms?.has("MuteMembers")} UseVAD=${perms?.has("UseVAD")}`,
+      );
+    }
+
     try {
-      await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+      await entersState(connection, VoiceConnectionStatus.Ready, 60_000);
+      console.log(`[voice] connection READY for #${target.name}`);
     } catch (err) {
-      console.error("[voice] failed to become ready:", err?.message, "current state:", connection.state.status);
-      safeDestroy(connection);
-      currentChannelId = null;
-      return;
+      console.warn(
+        `[voice] not Ready after 60s (state=${connection.state.status}) — keeping connection alive, will retry mute decisions when Ready`,
+      );
     }
 
     resetUserState(target);
     lastAnyAudio = Date.now();
     receiverHealthLogged = false;
     await attachReceiver(connection, target);
-    console.log(`[voice] connected & monitoring #${target.name}`);
+    console.log(`[voice] monitoring #${target.name}`);
   } finally {
     joining = false;
     if (reevalQueued) {
