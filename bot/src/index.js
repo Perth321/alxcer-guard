@@ -41,6 +41,7 @@ if (!config.guildId) {
 console.log("[boot] Alxcer Guard starting", {
   guildId: config.guildId || "(none)",
   notifyChannelId: config.notifyChannelId || "(none)",
+  voiceChannelId: config.voiceChannelId || "(auto)",
   warningSeconds: config.warningSeconds,
   muteSeconds: config.muteSeconds,
 });
@@ -58,13 +59,16 @@ const client = new Client({
 
 const userState = new Map();
 const subscribed = new Set();
-const DEBUG_VOICE = process.env.DEBUG_VOICE === "1";
 
 let currentChannelId = null;
 let pollHandle = null;
 let joining = false;
 let reevalQueued = false;
 let activeReceiver = null;
+let lastAnyAudio = Date.now();
+let receiverHealthLogged = false;
+
+const WATCHDOG_SECONDS = 60;
 
 const runtime = {
   getConfig: () => config,
@@ -133,18 +137,42 @@ function pickBestVoiceChannel(guild) {
   return best;
 }
 
+function newUserState(now) {
+  return {
+    lastSpoke: now,
+    warned: false,
+    muted: false,
+    speaking: false,
+    heardOnce: false,
+    silentTicks: 0,
+  };
+}
+
 function resetUserState(channel) {
   userState.clear();
   subscribed.clear();
   const now = Date.now();
   for (const [, member] of channel.members) {
     if (config.ignoreBots && member.user.bot) continue;
-    userState.set(member.id, {
-      lastSpoke: now,
-      warned: false,
-      muted: false,
-      speaking: false,
-    });
+    userState.set(member.id, newUserState(now));
+  }
+}
+
+function markHeard(userId, source) {
+  const s = userState.get(userId);
+  if (!s) return;
+  const wasHeard = s.heardOnce;
+  s.lastSpoke = Date.now();
+  s.heardOnce = true;
+  s.silentTicks = 0;
+  if (s.warned) s.warned = false;
+  lastAnyAudio = Date.now();
+  if (receiverHealthLogged) {
+    console.log("[health] receiver recovered — audio flowing again");
+    receiverHealthLogged = false;
+  }
+  if (!wasHeard) {
+    console.log(`[voice] first audio confirmed from ${userId} via ${source}`);
   }
 }
 
@@ -156,12 +184,7 @@ function subscribeUser(receiver, userId) {
       end: { behavior: EndBehaviorType.Manual },
     });
     subscribed.add(userId);
-    sub.on("data", () => {
-      const s = userState.get(userId);
-      if (!s) return;
-      s.lastSpoke = Date.now();
-      if (s.warned) s.warned = false;
-    });
+    sub.on("data", () => markHeard(userId, "packet"));
     const cleanup = () => subscribed.delete(userId);
     sub.on("error", cleanup);
     sub.on("end", cleanup);
@@ -178,10 +201,8 @@ async function attachReceiver(connection, channel) {
   receiver.speaking.on("start", (userId) => {
     const s = userState.get(userId);
     if (s) {
-      s.lastSpoke = Date.now();
       s.speaking = true;
-      if (s.warned) s.warned = false;
-      if (DEBUG_VOICE) console.log(`[voice] start ${userId}`);
+      markHeard(userId, "start");
     }
     subscribeUser(receiver, userId);
   });
@@ -189,13 +210,16 @@ async function attachReceiver(connection, channel) {
   receiver.speaking.on("end", (userId) => {
     const s = userState.get(userId);
     if (s) {
-      s.lastSpoke = Date.now();
       s.speaking = false;
-      if (DEBUG_VOICE) console.log(`[voice] end ${userId}`);
+      markHeard(userId, "end");
     }
   });
 
   console.log(`[voice] receiver attached on #${channel.name}`);
+}
+
+function isReceiverHealthy() {
+  return (Date.now() - lastAnyAudio) / 1000 < WATCHDOG_SECONDS;
 }
 
 async function checkInactivity(guild) {
@@ -203,17 +227,17 @@ async function checkInactivity(guild) {
   const channel = guild.channels.cache.get(currentChannelId);
   if (!channel) return;
 
+  const conn = getVoiceConnection(guild.id);
+  if (!conn || conn.state.status !== VoiceConnectionStatus.Ready) {
+    return;
+  }
+
   const now = Date.now();
 
   for (const [, member] of channel.members) {
     if (config.ignoreBots && member.user.bot) continue;
     if (!userState.has(member.id)) {
-      userState.set(member.id, {
-        lastSpoke: now,
-        warned: false,
-        muted: false,
-        speaking: false,
-      });
+      userState.set(member.id, newUserState(now));
     }
   }
   for (const userId of [...userState.keys()]) {
@@ -223,9 +247,29 @@ async function checkInactivity(guild) {
     }
   }
 
+  const humansInChannel = [...channel.members.values()].filter(
+    (m) => !(config.ignoreBots && m.user.bot),
+  );
+
+  if (humansInChannel.length > 0 && !isReceiverHealthy()) {
+    if (!receiverHealthLogged) {
+      console.warn(
+        `[health] no audio activity for ${WATCHDOG_SECONDS}s while ${humansInChannel.length} humans present — pausing mutes & rejoining`,
+      );
+      receiverHealthLogged = true;
+    }
+    safeDestroy(conn);
+    currentChannelId = null;
+    activeReceiver = null;
+    subscribed.clear();
+    await reevaluateAndJoin(guild);
+    return;
+  }
+
   for (const [userId, s] of userState) {
     const member = channel.members.get(userId);
     if (!member) continue;
+
     if (member.voice.serverMute) {
       s.muted = true;
       continue;
@@ -233,14 +277,29 @@ async function checkInactivity(guild) {
       s.muted = false;
       s.warned = false;
       s.lastSpoke = now;
+      s.silentTicks = 0;
+    }
+
+    if (member.voice.selfMute || member.voice.selfDeaf) {
+      s.lastSpoke = now;
+      s.silentTicks = 0;
+      continue;
     }
 
     if (s.speaking) {
       s.lastSpoke = now;
+      s.silentTicks = 0;
       if (s.warned) s.warned = false;
+      continue;
+    }
+
+    if (!s.heardOnce) {
+      s.lastSpoke = now;
+      continue;
     }
 
     const silentFor = (now - s.lastSpoke) / 1000;
+    s.silentTicks = silentFor >= config.warningSeconds ? s.silentTicks + 1 : 0;
 
     if (!s.warned && silentFor >= config.warningSeconds) {
       s.warned = true;
@@ -265,11 +324,18 @@ async function checkInactivity(guild) {
       } catch {}
     }
 
-    if (!s.muted && silentFor >= config.muteSeconds) {
+    if (
+      !s.muted &&
+      silentFor >= config.muteSeconds &&
+      s.silentTicks >= 2 &&
+      isReceiverHealthy()
+    ) {
       try {
         await member.voice.setMute(true, "Alxcer Guard: inactive in voice");
         s.muted = true;
-        console.log(`[mute] ${member.user.tag}`);
+        console.log(
+          `[mute] ${member.user.tag} (silent ${silentFor.toFixed(0)}s)`,
+        );
 
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
@@ -366,6 +432,8 @@ async function reevaluateAndJoin(guild) {
     }
 
     resetUserState(target);
+    lastAnyAudio = Date.now();
+    receiverHealthLogged = false;
     await attachReceiver(connection, target);
     console.log(`[voice] connected & monitoring #${target.name}`);
   } finally {
@@ -406,6 +474,18 @@ client.once(Events.ClientReady, async (c) => {
         console.error("[loop] error", err?.message);
       }
     }, 5_000);
+
+    setInterval(() => {
+      if (!currentChannelId) return;
+      const lines = [];
+      for (const [uid, s] of userState) {
+        const age = Math.round((Date.now() - s.lastSpoke) / 1000);
+        lines.push(
+          `${uid} heard=${s.heardOnce} speak=${s.speaking} silent=${age}s warn=${s.warned} mute=${s.muted}`,
+        );
+      }
+      console.log(`[stats] ${lines.length} tracked\n  ` + lines.join("\n  "));
+    }, 30_000);
   } catch (err) {
     console.error("[ready] guild init failed", err?.message);
   }
@@ -426,6 +506,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       s.lastSpoke = Date.now();
       s.warned = false;
       s.muted = false;
+      s.silentTicks = 0;
       console.log(`[voice] ${newState.member.user.tag} unmuted — timer reset`);
     }
   }
@@ -439,7 +520,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
-    if (interaction.isChatInputCommand() && interaction.commandName === "setting") {
+    if (
+      interaction.isChatInputCommand() &&
+      interaction.commandName === "setting"
+    ) {
       await handleSettingCommand(interaction, runtime);
       return;
     }
@@ -481,6 +565,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         s.muted = false;
         s.warned = false;
         s.lastSpoke = Date.now();
+        s.silentTicks = 0;
       }
 
       await interaction.reply({
