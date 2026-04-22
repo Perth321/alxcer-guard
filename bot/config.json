@@ -2,7 +2,7 @@
   "guildId": "1485726181398548490",
   "voiceChannelId": "1485726181973037130",
   "notifyChannelId": "1487341409089486888",
-  "warningSeconds": 5,
-  "muteSeconds": 10,
+  "warningSeconds": 300,
+  "muteSeconds": 600,
   "ignoreBots": true
 }
