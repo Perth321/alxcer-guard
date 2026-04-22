@@ -58,6 +58,7 @@ const client = new Client({
 
 const userState = new Map();
 const subscribed = new Set();
+const DEBUG_VOICE = process.env.DEBUG_VOICE === "1";
 
 let currentChannelId = null;
 let pollHandle = null;
@@ -142,6 +143,7 @@ function resetUserState(channel) {
       lastSpoke: now,
       warned: false,
       muted: false,
+      speaking: false,
     });
   }
 }
@@ -160,15 +162,10 @@ function subscribeUser(receiver, userId) {
       s.lastSpoke = Date.now();
       if (s.warned) s.warned = false;
     });
-    sub.on("error", () => {
-      subscribed.delete(userId);
-    });
-    sub.on("end", () => {
-      subscribed.delete(userId);
-    });
-    sub.on("close", () => {
-      subscribed.delete(userId);
-    });
+    const cleanup = () => subscribed.delete(userId);
+    sub.on("error", cleanup);
+    sub.on("end", cleanup);
+    sub.on("close", cleanup);
   } catch (err) {
     console.error(`[voice] subscribe failed for ${userId}`, err?.message);
   }
@@ -182,15 +179,21 @@ async function attachReceiver(connection, channel) {
     const s = userState.get(userId);
     if (s) {
       s.lastSpoke = Date.now();
+      s.speaking = true;
       if (s.warned) s.warned = false;
+      if (DEBUG_VOICE) console.log(`[voice] start ${userId}`);
     }
     subscribeUser(receiver, userId);
   });
 
-  for (const [, member] of channel.members) {
-    if (config.ignoreBots && member.user.bot) continue;
-    subscribeUser(receiver, member.id);
-  }
+  receiver.speaking.on("end", (userId) => {
+    const s = userState.get(userId);
+    if (s) {
+      s.lastSpoke = Date.now();
+      s.speaking = false;
+      if (DEBUG_VOICE) console.log(`[voice] end ${userId}`);
+    }
+  });
 
   console.log(`[voice] receiver attached on #${channel.name}`);
 }
@@ -209,9 +212,9 @@ async function checkInactivity(guild) {
         lastSpoke: now,
         warned: false,
         muted: false,
+        speaking: false,
       });
     }
-    if (activeReceiver) subscribeUser(activeReceiver, member.id);
   }
   for (const userId of [...userState.keys()]) {
     if (!channel.members.has(userId)) {
@@ -230,6 +233,11 @@ async function checkInactivity(guild) {
       s.muted = false;
       s.warned = false;
       s.lastSpoke = now;
+    }
+
+    if (s.speaking) {
+      s.lastSpoke = now;
+      if (s.warned) s.warned = false;
     }
 
     const silentFor = (now - s.lastSpoke) / 1000;
