@@ -77,6 +77,8 @@ const userState = new Map();
 
 let currentChannelId = null;
 let pollHandle = null;
+let joining = false;
+let reevalQueued = false;
 
 function getNotifyChannel(guild) {
   if (!config.notifyChannelId) return null;
@@ -263,45 +265,89 @@ async function checkInactivity(guild) {
   }
 }
 
-async function reevaluateAndJoin(guild) {
-  const target = pickBestVoiceChannel(guild);
-
-  if (!target) {
-    const existing = getVoiceConnection(guild.id);
-    if (existing) {
-      console.log("[voice] no humans in any channel, leaving");
-      existing.destroy();
-      currentChannelId = null;
-      userState.clear();
-    }
-    return;
-  }
-
-  if (currentChannelId === target.id) return;
-
-  const existing = getVoiceConnection(guild.id);
-  if (existing) existing.destroy();
-
-  console.log(`[voice] joining #${target.name} (${target.members.size} members)`);
-  const connection = joinVoiceChannel({
-    channelId: target.id,
-    guildId: guild.id,
-    adapterCreator: guild.voiceAdapterCreator,
-    selfDeaf: false,
-    selfMute: true,
-  });
-
+function safeDestroy(conn) {
+  if (!conn) return;
   try {
-    await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    if (conn.state.status !== VoiceConnectionStatus.Destroyed) {
+      conn.destroy();
+    }
   } catch (err) {
-    console.error("[voice] failed to become ready", err?.message);
-    connection.destroy();
+    // ignore — already destroyed
+  }
+}
+
+async function reevaluateAndJoin(guild) {
+  if (joining) {
+    reevalQueued = true;
     return;
   }
+  joining = true;
+  try {
+    const target = pickBestVoiceChannel(guild);
 
-  currentChannelId = target.id;
-  resetUserState(target);
-  await attachReceiver(connection, target);
+    if (!target) {
+      const existing = getVoiceConnection(guild.id);
+      if (existing) {
+        console.log("[voice] no humans in any channel, leaving");
+        safeDestroy(existing);
+        currentChannelId = null;
+        userState.clear();
+      }
+      return;
+    }
+
+    // Already on the right channel and connection is healthy → nothing to do
+    if (currentChannelId === target.id) {
+      const existing = getVoiceConnection(guild.id);
+      if (
+        existing &&
+        existing.state.status !== VoiceConnectionStatus.Destroyed
+      ) {
+        return;
+      }
+    }
+
+    // Claim the channel BEFORE the async join so concurrent events don't re-join
+    currentChannelId = target.id;
+
+    const existing = getVoiceConnection(guild.id);
+    if (existing) safeDestroy(existing);
+
+    console.log(
+      `[voice] joining #${target.name} (${target.members.size} members)`,
+    );
+    const connection = joinVoiceChannel({
+      channelId: target.id,
+      guildId: guild.id,
+      adapterCreator: guild.voiceAdapterCreator,
+      selfDeaf: false,
+      selfMute: true,
+    });
+
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    } catch (err) {
+      console.error("[voice] failed to become ready:", err?.message);
+      safeDestroy(connection);
+      currentChannelId = null;
+      return;
+    }
+
+    resetUserState(target);
+    await attachReceiver(connection, target);
+    console.log(`[voice] connected & monitoring #${target.name}`);
+  } finally {
+    joining = false;
+    if (reevalQueued) {
+      reevalQueued = false;
+      // Schedule a follow-up but don't await — avoid recursion stack
+      setImmediate(() => {
+        reevaluateAndJoin(guild).catch((err) =>
+          console.error("[voice] queued reeval error", err?.message),
+        );
+      });
+    }
+  }
 }
 
 client.once(Events.ClientReady, async (c) => {
@@ -324,7 +370,25 @@ client.once(Events.ClientReady, async (c) => {
 
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   if (newState.guild.id !== config.guildId) return;
-  // If our current channel emptied, re-evaluate quickly
+  // Ignore the bot's own voice state changes — they would cause an infinite loop
+  if (newState.member?.id === client.user?.id) return;
+  if (oldState.member?.id === client.user?.id) return;
+
+  // If a user toggled mute/unmute, refresh their lastSpoke timer so unmuting
+  // gives them a fresh chance instead of being instantly re-muted.
+  const userId = newState.member?.id ?? oldState.member?.id;
+  if (userId && userState.has(userId)) {
+    const wasSelfMuted = oldState.selfMute || oldState.serverMute;
+    const isSelfMuted = newState.selfMute || newState.serverMute;
+    if (wasSelfMuted && !isSelfMuted) {
+      const s = userState.get(userId);
+      s.lastSpoke = Date.now();
+      s.warned = false;
+      s.muted = false;
+      console.log(`[voice] ${newState.member.user.tag} unmuted — timer reset`);
+    }
+  }
+
   try {
     await reevaluateAndJoin(newState.guild);
   } catch (err) {
