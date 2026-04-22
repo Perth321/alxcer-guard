@@ -82,6 +82,7 @@ let joining = false;
 let reevalQueued = false;
 let activeReceiver = null;
 let lastAnyAudio = Date.now();
+let receiverProven = false;
 let lastSpeakingFlag = 0;
 let lastWatchdogRejoin = 0;
 let receiverHealthLogged = false;
@@ -230,6 +231,10 @@ function markHeard(userId, source) {
   // which used to mask a broken receiver and also wrongly kept the watchdog quiet.
   if (source === "packet") {
     lastAnyAudio = Date.now();
+    if (!receiverProven) {
+      receiverProven = true;
+      console.log("[health] receiver PROVEN working — first real audio packet decoded");
+    }
     if (receiverHealthLogged) {
       console.log("[health] receiver recovered — audio flowing again");
       receiverHealthLogged = false;
@@ -262,6 +267,8 @@ async function attachReceiver(connection, channel) {
   const receiver = connection.receiver;
   activeReceiver = receiver;
   subscribed.clear();
+  // Fresh receiver = no proof yet that it works. Will be set true on first packet.
+  receiverProven = false;
 
   receiver.speaking.on("start", (userId) => {
     lastSpeakingFlag = Date.now();
@@ -293,11 +300,14 @@ async function attachReceiver(connection, channel) {
 }
 
 function isReceiverHealthy() {
-  // We can only safely mute users when we have proof the receiver actually
-  // works. "Proof" = at least one real audio packet arrived recently. A
-  // dead-silent receiver (no packets ever) is indistinguishable from a
-  // genuinely quiet room, so we must err on the side of NOT muting — the
-  // alternative is muting innocent people who are in fact speaking.
+  // Once we've decoded even ONE real audio packet on the current connection,
+  // we KNOW: encryption works, UDP works, opus decoding works. Any subsequent
+  // silence is real silence (people just aren't talking) — exactly what we
+  // want to mute on. So treat the receiver as healthy permanently after the
+  // first proven packet, until the connection is destroyed/reattached.
+  if (receiverProven) return true;
+  // Before the first packet, fall back to the recency window so a brand-new
+  // connection that immediately receives audio is also treated as healthy.
   const sinceAudio = (Date.now() - lastAnyAudio) / 1000;
   return sinceAudio < WATCHDOG_SECONDS;
 }
