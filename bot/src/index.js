@@ -261,6 +261,7 @@ function subscribeUser(receiver, userId) {
 async function attachReceiver(connection, channel) {
   const receiver = connection.receiver;
   activeReceiver = receiver;
+  subscribed.clear();
 
   receiver.speaking.on("start", (userId) => {
     lastSpeakingFlag = Date.now();
@@ -280,6 +281,13 @@ async function attachReceiver(connection, channel) {
       markHeard(userId, "end");
     }
   });
+
+  // Subscribe to every currently-tracked user up front so the very first
+  // audio packet they emit lands in `markHeard` (and proves the receiver
+  // is healthy) without waiting for a speaking-start event.
+  for (const userId of userState.keys()) {
+    subscribeUser(receiver, userId);
+  }
 
   console.log(`[voice] receiver attached on #${channel.name}`);
 }
@@ -319,15 +327,26 @@ async function checkInactivity(guild) {
   }
 
   const conn = getVoiceConnection(guild.id);
-  if (!conn || conn.state.status !== VoiceConnectionStatus.Ready) {
-    const status = conn?.state?.status ?? "none";
+  const connStatus = conn?.state?.status ?? "none";
+  // Treat the connection as functionally usable when either:
+  //  - it reports Ready, OR
+  //  - it reports any non-destroyed state but we've actually received audio
+  //    packets in the last WATCHDOG_SECONDS. discord.js sometimes gets stuck
+  //    reporting `signalling` even though UDP packets ARE flowing.
+  const audioRecent = (Date.now() - lastAnyAudio) / 1000 < WATCHDOG_SECONDS;
+  const usable =
+    !!conn &&
+    (conn.state.status === VoiceConnectionStatus.Ready ||
+      (conn.state.status !== VoiceConnectionStatus.Destroyed && audioRecent));
+
+  if (!usable) {
     notReadyTicks++;
     console.log(
-      `[loop] connection not ready (state=${status}, ticks=${notReadyTicks}), skipping mute decisions`,
+      `[loop] connection not usable (state=${connStatus}, audioRecent=${audioRecent}, ticks=${notReadyTicks})`,
     );
-    if (notReadyTicks >= 24) {
+    if (notReadyTicks >= 12) {
       console.warn(
-        "[loop] connection stuck non-ready for 2 minutes — forcing rejoin",
+        "[loop] connection stuck unusable for 1 minute — forcing rejoin",
       );
       notReadyTicks = 0;
       if (conn) safeDestroy(conn);
@@ -499,6 +518,14 @@ async function reevaluateAndJoin(guild) {
         existing &&
         existing.state.status !== VoiceConnectionStatus.Destroyed
       ) {
+        // Already in the right channel — just make sure the user list is
+        // populated. Previously we returned here without syncing, which left
+        // userState empty after any earlier clear (e.g. transient cache miss
+        // in pickBestVoiceChannel).
+        syncUserState(target);
+        if (activeReceiver !== existing.receiver) {
+          await attachReceiver(existing, target);
+        }
         return;
       }
     }
