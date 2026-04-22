@@ -206,13 +206,13 @@ function newUserState(now) {
   };
 }
 
-function resetUserState(channel) {
-  userState.clear();
-  subscribed.clear();
+function syncUserState(channel) {
   const now = Date.now();
   for (const [, member] of channel.members) {
     if (config.ignoreBots && member.user.bot) continue;
-    userState.set(member.id, newUserState(now));
+    if (!userState.has(member.id)) {
+      userState.set(member.id, newUserState(now));
+    }
   }
 }
 
@@ -547,8 +547,7 @@ async function reevaluateAndJoin(guild) {
       );
     }
 
-    resetUserState(target);
-    lastAnyAudio = Date.now();
+    syncUserState(target);
     receiverHealthLogged = false;
     await attachReceiver(connection, target);
     console.log(`[voice] monitoring #${target.name}`);
