@@ -293,14 +293,12 @@ async function attachReceiver(connection, channel) {
 }
 
 function isReceiverHealthy() {
-  // The receiver is "broken" only when Discord told us someone is actively
-  // speaking but no audio packets arrived for a while. A perfectly quiet
-  // room (nobody speaking) is NOT a broken receiver — it's the exact case
-  // we want to mute, so it must not pause the mute logic.
-  const now = Date.now();
-  const sinceSpeakingFlag = (now - lastSpeakingFlag) / 1000;
-  const sinceAudio = (now - lastAnyAudio) / 1000;
-  if (sinceSpeakingFlag > WATCHDOG_SECONDS) return true;
+  // We can only safely mute users when we have proof the receiver actually
+  // works. "Proof" = at least one real audio packet arrived recently. A
+  // dead-silent receiver (no packets ever) is indistinguishable from a
+  // genuinely quiet room, so we must err on the side of NOT muting — the
+  // alternative is muting innocent people who are in fact speaking.
+  const sinceAudio = (Date.now() - lastAnyAudio) / 1000;
   return sinceAudio < WATCHDOG_SECONDS;
 }
 
@@ -329,11 +327,6 @@ async function checkInactivity(guild) {
   const conn = getVoiceConnection(guild.id);
   const connStatus = conn?.state?.status ?? "none";
 
-  // If the receiver looks degraded (no audio in WATCHDOG_SECONDS), kick off
-  // a background rejoin — but DO NOT block the mute logic on it. Muting is
-  // done via Discord's REST API and works independently from the voice UDP
-  // connection. The user explicitly wants silent members muted; refusing to
-  // act because the bot is unsure of itself defeats the whole purpose.
   if (conn && connStatus !== VoiceConnectionStatus.Destroyed) {
     if (activeReceiver !== conn.receiver) {
       console.log(`[voice] receiver changed — re-attaching`);
@@ -345,19 +338,25 @@ async function checkInactivity(guild) {
     (m) => !(config.ignoreBots && m.user.bot),
   );
 
-  const audioStale = (Date.now() - lastAnyAudio) / 1000 >= WATCHDOG_SECONDS;
-  const connBad =
-    !conn ||
-    (connStatus !== VoiceConnectionStatus.Ready && audioStale);
-
-  if (connBad && humansInChannel.length > 0) {
+  // Critical safeguard: only run mute decisions when we actually have proof
+  // the voice receiver works (a real audio packet within WATCHDOG_SECONDS).
+  // Without this, a runner that can't open inbound UDP would mute every
+  // single user in the channel even if they ARE speaking — because the bot
+  // simply can't hear them.
+  if (humansInChannel.length > 0 && !isReceiverHealthy()) {
+    if (!receiverHealthLogged) {
+      console.warn(
+        `[health] receiver has no audio for ${WATCHDOG_SECONDS}s+ — pausing mute decisions until packets flow`,
+      );
+      receiverHealthLogged = true;
+    }
     notReadyTicks++;
     if (
       notReadyTicks >= 12 &&
       Date.now() - lastWatchdogRejoin > WATCHDOG_COOLDOWN_MS
     ) {
       console.warn(
-        `[health] connection degraded (state=${connStatus}, audioStale=${audioStale}) — background rejoin attempt`,
+        `[health] receiver dead 1m+ (state=${connStatus}) — background rejoin`,
       );
       lastWatchdogRejoin = Date.now();
       notReadyTicks = 0;
@@ -365,14 +364,13 @@ async function checkInactivity(guild) {
       currentChannelId = null;
       activeReceiver = null;
       subscribed.clear();
-      // Fire-and-forget so we still proceed to mute decisions this tick.
       reevaluateAndJoin(guild).catch((err) =>
         console.error("[health] background rejoin error", err?.message),
       );
     }
-  } else {
-    notReadyTicks = 0;
+    return;
   }
+  notReadyTicks = 0;
 
   for (const [userId, s] of userState) {
     const member = channel.members.get(userId);
