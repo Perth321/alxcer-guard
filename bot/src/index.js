@@ -84,6 +84,7 @@ let activeReceiver = null;
 let lastAnyAudio = Date.now();
 let lastWatchdogRejoin = 0;
 let receiverHealthLogged = false;
+let notReadyTicks = 0;
 
 const WATCHDOG_SECONDS = 60;
 const WATCHDOG_COOLDOWN_MS = 3 * 60 * 1000;
@@ -303,11 +304,25 @@ async function checkInactivity(guild) {
 
   const conn = getVoiceConnection(guild.id);
   if (!conn || conn.state.status !== VoiceConnectionStatus.Ready) {
+    const status = conn?.state?.status ?? "none";
+    notReadyTicks++;
     console.log(
-      `[loop] connection not ready (state=${conn?.state?.status ?? "none"}), skipping mute decisions`,
+      `[loop] connection not ready (state=${status}, ticks=${notReadyTicks}), skipping mute decisions`,
     );
+    if (notReadyTicks >= 6) {
+      console.warn(
+        "[loop] connection stuck non-ready for 30s — forcing rejoin",
+      );
+      notReadyTicks = 0;
+      if (conn) safeDestroy(conn);
+      currentChannelId = null;
+      activeReceiver = null;
+      subscribed.clear();
+      await reevaluateAndJoin(guild);
+    }
     return;
   }
+  notReadyTicks = 0;
 
   if (activeReceiver !== conn.receiver) {
     console.log(`[voice] receiver changed — re-attaching`);
@@ -490,13 +505,35 @@ async function reevaluateAndJoin(guild) {
       guildId: guild.id,
       adapterCreator: guild.voiceAdapterCreator,
       selfDeaf: false,
-      selfMute: true,
+      selfMute: false,
+    });
+
+    connection.on("stateChange", (oldS, newS) => {
+      console.log(`[voice] state ${oldS.status} -> ${newS.status}`);
+    });
+    connection.on("error", (err) => {
+      console.error("[voice] connection error:", err?.message);
+    });
+    connection.on(VoiceConnectionStatus.Disconnected, async () => {
+      console.log("[voice] disconnected — attempting reconnect");
+      try {
+        await Promise.race([
+          entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+          entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+        ]);
+      } catch {
+        console.log("[voice] real disconnect — destroying & will rejoin next tick");
+        safeDestroy(connection);
+        currentChannelId = null;
+        activeReceiver = null;
+        subscribed.clear();
+      }
     });
 
     try {
-      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+      await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
     } catch (err) {
-      console.error("[voice] failed to become ready:", err?.message);
+      console.error("[voice] failed to become ready:", err?.message, "current state:", connection.state.status);
       safeDestroy(connection);
       currentChannelId = null;
       return;
