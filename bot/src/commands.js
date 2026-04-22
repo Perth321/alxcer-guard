@@ -49,7 +49,7 @@ export async function handleDebugCommand(interaction, runtime) {
   const snap = runtime.snapshot();
   const cfg = runtime.getConfig();
   const lines = [];
-  lines.push(`**สถานะ:** ${snap.connected ? "🟢 เชื่อมต่อห้อง" : "🔴 ยังไม่เข้าห้อง"}`);
+  lines.push(`**สถานะ:** ${snap.connected ? "🟢 เชื่อมต่อห้อง" : "🔴 ยังไม่เข้าห้อง"} (state: \`${snap.connStatus}\`)`);
   lines.push(`**บอทอยู่ห้อง:** ${snap.channelId ? `<#${snap.channelId}>` : "—"}`);
   lines.push(`**คุณอยู่ห้อง:** ${interaction.member?.voice?.channelId ? `<#${interaction.member.voice.channelId}>` : "ไม่ได้อยู่ใน voice"}`);
   lines.push(

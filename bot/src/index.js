@@ -103,6 +103,8 @@ const runtime = {
   },
   snapshot: () => {
     const now = Date.now();
+    const conn = config.guildId ? getVoiceConnection(config.guildId) : null;
+    const connStatus = conn?.state?.status ?? "none";
     const allVoiceChannels = [];
     if (config.guildId) {
       const guild = client.guilds.cache.get(config.guildId);
@@ -123,6 +125,7 @@ const runtime = {
     }
     return {
       connected: !!currentChannelId,
+      connStatus,
       channelId: currentChannelId,
       cryptoLib,
       lastAnyAudioAge: Math.round((now - lastAnyAudio) / 1000),
@@ -281,24 +284,34 @@ async function checkInactivity(guild) {
   const channel = guild.channels.cache.get(currentChannelId);
   if (!channel) return;
 
-  const conn = getVoiceConnection(guild.id);
-  if (!conn || conn.state.status !== VoiceConnectionStatus.Ready) {
-    return;
-  }
-
   const now = Date.now();
 
   for (const [, member] of channel.members) {
     if (config.ignoreBots && member.user.bot) continue;
     if (!userState.has(member.id)) {
       userState.set(member.id, newUserState(now));
+      console.log(`[track] added ${member.user.tag}`);
     }
   }
   for (const userId of [...userState.keys()]) {
     if (!channel.members.has(userId)) {
       userState.delete(userId);
       subscribed.delete(userId);
+      console.log(`[track] removed ${userId}`);
     }
+  }
+
+  const conn = getVoiceConnection(guild.id);
+  if (!conn || conn.state.status !== VoiceConnectionStatus.Ready) {
+    console.log(
+      `[loop] connection not ready (state=${conn?.state?.status ?? "none"}), skipping mute decisions`,
+    );
+    return;
+  }
+
+  if (activeReceiver !== conn.receiver) {
+    console.log(`[voice] receiver changed — re-attaching`);
+    await attachReceiver(conn, channel);
   }
 
   const humansInChannel = [...channel.members.values()].filter(
