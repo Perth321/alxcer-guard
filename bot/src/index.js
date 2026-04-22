@@ -103,11 +103,30 @@ const runtime = {
   },
   snapshot: () => {
     const now = Date.now();
+    const allVoiceChannels = [];
+    if (config.guildId) {
+      const guild = client.guilds.cache.get(config.guildId);
+      if (guild) {
+        for (const ch of guild.channels.cache.values()) {
+          if (
+            ch.type !== ChannelType.GuildVoice &&
+            ch.type !== ChannelType.GuildStageVoice
+          )
+            continue;
+          const totalCount = ch.members.size;
+          const humanCount = ch.members.filter((m) => !m.user.bot).size;
+          if (totalCount > 0) {
+            allVoiceChannels.push({ id: ch.id, totalCount, humanCount });
+          }
+        }
+      }
+    }
     return {
       connected: !!currentChannelId,
       channelId: currentChannelId,
       cryptoLib,
       lastAnyAudioAge: Math.round((now - lastAnyAudio) / 1000),
+      allVoiceChannels,
       users: [...userState.entries()].map(([id, s]) => ({
         id,
         heardOnce: s.heardOnce,

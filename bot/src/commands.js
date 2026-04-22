@@ -50,24 +50,36 @@ export async function handleDebugCommand(interaction, runtime) {
   const cfg = runtime.getConfig();
   const lines = [];
   lines.push(`**สถานะ:** ${snap.connected ? "🟢 เชื่อมต่อห้อง" : "🔴 ยังไม่เข้าห้อง"}`);
-  lines.push(`**ห้อง:** ${snap.channelId ? `<#${snap.channelId}>` : "—"}`);
+  lines.push(`**บอทอยู่ห้อง:** ${snap.channelId ? `<#${snap.channelId}>` : "—"}`);
+  lines.push(`**คุณอยู่ห้อง:** ${interaction.member?.voice?.channelId ? `<#${interaction.member.voice.channelId}>` : "ไม่ได้อยู่ใน voice"}`);
   lines.push(
     `**Crypto:** ${snap.cryptoLib ?? "ไม่ทราบ"}  |  **เสียงล่าสุด:** ${snap.lastAnyAudioAge}s ที่แล้ว`,
   );
   lines.push(
-    `**Threshold:** เตือน ${cfg.warningSeconds}s / ปิดไมค์ ${cfg.muteSeconds}s`,
+    `**Threshold:** เตือน ${cfg.warningSeconds}s / ปิดไมค์ ${cfg.muteSeconds}s · pinned=${cfg.voiceChannelId || "auto"}`,
   );
   lines.push("");
+  lines.push("**ห้องเสียงทั้งหมดที่บอทเห็น:**");
+  if (snap.allVoiceChannels.length === 0) {
+    lines.push("_ไม่มีห้องเสียงเลย_");
+  } else {
+    for (const c of snap.allVoiceChannels) {
+      const tag = c.id === snap.channelId ? "👈 บอทอยู่นี่" : "";
+      lines.push(`• <#${c.id}> — ${c.humanCount} คน (รวมบอท ${c.totalCount}) ${tag}`);
+    }
+  }
+  lines.push("");
+  lines.push("**คน ที่ track:**");
   if (snap.users.length === 0) {
     lines.push("_ไม่มีคนถูก track อยู่_");
   } else {
     for (const u of snap.users) {
       lines.push(
-        `<@${u.id}> · เคยได้ยิน: ${u.heardOnce ? "✅" : "❌"} · พูดอยู่: ${u.speaking ? "🎙️" : "—"} · เงียบมา ${u.silentFor}s · เตือน: ${u.warned ? "✅" : "—"} · ปิดไมค์: ${u.muted ? "🔇" : "—"}`,
+        `<@${u.id}> · ได้ยิน:${u.heardOnce ? "✅" : "❌"} · พูด:${u.speaking ? "🎙️" : "—"} · เงียบ ${u.silentFor}s · เตือน:${u.warned ? "✅" : "—"} · mute:${u.muted ? "🔇" : "—"}`,
       );
     }
   }
-  await interaction.reply({ content: lines.join("\n"), ephemeral: true });
+  await interaction.reply({ content: lines.join("\n").slice(0, 1900), ephemeral: true });
 }
 
 function fmtChannel(id) {
