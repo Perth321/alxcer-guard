@@ -82,6 +82,7 @@ let joining = false;
 let reevalQueued = false;
 let activeReceiver = null;
 let lastAnyAudio = Date.now();
+let lastSpeakingFlag = 0;
 let lastWatchdogRejoin = 0;
 let receiverHealthLogged = false;
 let notReadyTicks = 0;
@@ -224,10 +225,15 @@ function markHeard(userId, source) {
   s.heardOnce = true;
   s.silentTicks = 0;
   if (s.warned) s.warned = false;
-  lastAnyAudio = Date.now();
-  if (receiverHealthLogged) {
-    console.log("[health] receiver recovered — audio flowing again");
-    receiverHealthLogged = false;
+  // Only real audio packets count as receiver health proof.
+  // Discord "speaking start/end" events fire even when packets aren't flowing,
+  // which used to mask a broken receiver and also wrongly kept the watchdog quiet.
+  if (source === "packet") {
+    lastAnyAudio = Date.now();
+    if (receiverHealthLogged) {
+      console.log("[health] receiver recovered — audio flowing again");
+      receiverHealthLogged = false;
+    }
   }
   if (!wasHeard) {
     console.log(`[voice] first audio confirmed from ${userId} via ${source}`);
@@ -257,6 +263,7 @@ async function attachReceiver(connection, channel) {
   activeReceiver = receiver;
 
   receiver.speaking.on("start", (userId) => {
+    lastSpeakingFlag = Date.now();
     const s = userState.get(userId);
     if (s) {
       s.speaking = true;
@@ -266,6 +273,7 @@ async function attachReceiver(connection, channel) {
   });
 
   receiver.speaking.on("end", (userId) => {
+    lastSpeakingFlag = Date.now();
     const s = userState.get(userId);
     if (s) {
       s.speaking = false;
@@ -277,7 +285,15 @@ async function attachReceiver(connection, channel) {
 }
 
 function isReceiverHealthy() {
-  return (Date.now() - lastAnyAudio) / 1000 < WATCHDOG_SECONDS;
+  // The receiver is "broken" only when Discord told us someone is actively
+  // speaking but no audio packets arrived for a while. A perfectly quiet
+  // room (nobody speaking) is NOT a broken receiver — it's the exact case
+  // we want to mute, so it must not pause the mute logic.
+  const now = Date.now();
+  const sinceSpeakingFlag = (now - lastSpeakingFlag) / 1000;
+  const sinceAudio = (now - lastAnyAudio) / 1000;
+  if (sinceSpeakingFlag > WATCHDOG_SECONDS) return true;
+  return sinceAudio < WATCHDOG_SECONDS;
 }
 
 async function checkInactivity(guild) {
@@ -366,11 +382,9 @@ async function checkInactivity(guild) {
       s.silentTicks = 0;
     }
 
-    if (member.voice.selfMute || member.voice.selfDeaf) {
-      s.lastSpoke = now;
-      s.silentTicks = 0;
-      continue;
-    }
+    // Self-mute / self-deaf used to reset the timer, which let users
+    // bypass the bot by simply muting themselves. Self-mute IS "not using
+    // the mic", so it should count as silence — keep timing them.
 
     if (s.speaking) {
       s.lastSpoke = now;
@@ -379,10 +393,9 @@ async function checkInactivity(guild) {
       continue;
     }
 
-    if (!s.heardOnce) {
-      s.lastSpoke = now;
-      continue;
-    }
+    // Previously: if (!s.heardOnce) reset lastSpoke — meant anyone who
+    // joined and never spoke was timed forever and never muted, which is
+    // the exact behavior we want to prevent. Removed.
 
     const silentFor = (now - s.lastSpoke) / 1000;
     s.silentTicks = silentFor >= config.warningSeconds ? s.silentTicks + 1 : 0;
@@ -412,9 +425,7 @@ async function checkInactivity(guild) {
 
     if (
       !s.muted &&
-      silentFor >= config.muteSeconds &&
-      s.silentTicks >= 2 &&
-      isReceiverHealthy()
+      silentFor >= config.muteSeconds
     ) {
       try {
         await member.voice.setMute(true, "Alxcer Guard: inactive in voice");
