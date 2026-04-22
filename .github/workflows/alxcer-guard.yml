@@ -1,0 +1,48 @@
+name: Alxcer Guard
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Re-run every 6 hours so the bot stays online (GitHub Actions limit is ~6h per job)
+    - cron: "0 */6 * * *"
+  push:
+    branches: [main]
+    paths:
+      - "bot/**"
+      - ".github/workflows/alxcer-guard.yml"
+
+concurrency:
+  group: alxcer-guard
+  cancel-in-progress: true
+
+jobs:
+  run-bot:
+    name: Run Discord bot
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    defaults:
+      run:
+        working-directory: bot
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install voice dependencies (libopus / libsodium)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libopus0 libopus-dev \
+            libsodium23 libsodium-dev \
+            ffmpeg
+
+      - name: Install bot dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run Alxcer Guard
+        env:
+          DISCORD_PERSONAL_ACCESS_TOKEN: ${{ secrets.DISCORD_PERSONAL_ACCESS_TOKEN }}
+        run: node src/index.js
