@@ -21,7 +21,23 @@ import {
   registerCommands,
   handleSettingCommand,
   handleSettingComponent,
+  handleDebugCommand,
 } from "./commands.js";
+
+let cryptoLib = "unknown";
+try {
+  await import("sodium-native");
+  cryptoLib = "sodium-native";
+} catch {
+  try {
+    const sodium = await import("libsodium-wrappers");
+    await sodium.default.ready;
+    cryptoLib = "libsodium-wrappers";
+  } catch {
+    cryptoLib = "none-found";
+  }
+}
+console.log(`[boot] voice crypto library: ${cryptoLib}`);
 
 let config = loadConfig();
 const TOKEN = process.env.DISCORD_PERSONAL_ACCESS_TOKEN;
@@ -66,9 +82,11 @@ let joining = false;
 let reevalQueued = false;
 let activeReceiver = null;
 let lastAnyAudio = Date.now();
+let lastWatchdogRejoin = 0;
 let receiverHealthLogged = false;
 
 const WATCHDOG_SECONDS = 60;
+const WATCHDOG_COOLDOWN_MS = 3 * 60 * 1000;
 
 const runtime = {
   getConfig: () => config,
@@ -82,6 +100,23 @@ const runtime = {
       .fetch(config.guildId)
       .then((g) => reevaluateAndJoin(g))
       .catch((err) => console.error("[rejoin] error", err?.message));
+  },
+  snapshot: () => {
+    const now = Date.now();
+    return {
+      connected: !!currentChannelId,
+      channelId: currentChannelId,
+      cryptoLib,
+      lastAnyAudioAge: Math.round((now - lastAnyAudio) / 1000),
+      users: [...userState.entries()].map(([id, s]) => ({
+        id,
+        heardOnce: s.heardOnce,
+        speaking: s.speaking,
+        silentFor: Math.round((now - s.lastSpoke) / 1000),
+        warned: s.warned,
+        muted: s.muted,
+      })),
+    };
   },
 };
 
@@ -254,15 +289,19 @@ async function checkInactivity(guild) {
   if (humansInChannel.length > 0 && !isReceiverHealthy()) {
     if (!receiverHealthLogged) {
       console.warn(
-        `[health] no audio activity for ${WATCHDOG_SECONDS}s while ${humansInChannel.length} humans present — pausing mutes & rejoining`,
+        `[health] no audio activity for ${WATCHDOG_SECONDS}s while ${humansInChannel.length} humans present — pausing mutes`,
       );
       receiverHealthLogged = true;
     }
-    safeDestroy(conn);
-    currentChannelId = null;
-    activeReceiver = null;
-    subscribed.clear();
-    await reevaluateAndJoin(guild);
+    if (Date.now() - lastWatchdogRejoin > WATCHDOG_COOLDOWN_MS) {
+      console.warn(`[health] attempting receiver rejoin (cooldown elapsed)`);
+      lastWatchdogRejoin = Date.now();
+      safeDestroy(conn);
+      currentChannelId = null;
+      activeReceiver = null;
+      subscribed.clear();
+      await reevaluateAndJoin(guild);
+    }
     return;
   }
 
@@ -520,12 +559,15 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
-    if (
-      interaction.isChatInputCommand() &&
-      interaction.commandName === "setting"
-    ) {
-      await handleSettingCommand(interaction, runtime);
-      return;
+    if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === "setting") {
+        await handleSettingCommand(interaction, runtime);
+        return;
+      }
+      if (interaction.commandName === "debug") {
+        await handleDebugCommand(interaction, runtime);
+        return;
+      }
     }
 
     if (

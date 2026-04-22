@@ -23,22 +23,51 @@ export const SETTING_COMMAND = new SlashCommandBuilder()
   .setDMPermission(false)
   .toJSON();
 
+export const DEBUG_COMMAND = new SlashCommandBuilder()
+  .setName("debug")
+  .setDescription("ดูสถานะการตรวจจับเสียงสด ๆ ของ Alxcer Guard")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
+  .setDMPermission(false)
+  .toJSON();
+
 export async function registerCommands(client) {
   const rest = new REST({ version: "10" }).setToken(client.token);
   const appId = client.application?.id ?? client.user.id;
   const guildId = client.config.guildId;
+  const body = [SETTING_COMMAND, DEBUG_COMMAND];
 
   if (guildId) {
-    await rest.put(Routes.applicationGuildCommands(appId, guildId), {
-      body: [SETTING_COMMAND],
-    });
-    console.log(`[commands] registered /setting on guild ${guildId}`);
+    await rest.put(Routes.applicationGuildCommands(appId, guildId), { body });
+    console.log(`[commands] registered /setting /debug on guild ${guildId}`);
   } else {
-    await rest.put(Routes.applicationCommands(appId), {
-      body: [SETTING_COMMAND],
-    });
-    console.log("[commands] registered /setting globally");
+    await rest.put(Routes.applicationCommands(appId), { body });
+    console.log("[commands] registered /setting /debug globally");
   }
+}
+
+export async function handleDebugCommand(interaction, runtime) {
+  const snap = runtime.snapshot();
+  const cfg = runtime.getConfig();
+  const lines = [];
+  lines.push(`**สถานะ:** ${snap.connected ? "🟢 เชื่อมต่อห้อง" : "🔴 ยังไม่เข้าห้อง"}`);
+  lines.push(`**ห้อง:** ${snap.channelId ? `<#${snap.channelId}>` : "—"}`);
+  lines.push(
+    `**Crypto:** ${snap.cryptoLib ?? "ไม่ทราบ"}  |  **เสียงล่าสุด:** ${snap.lastAnyAudioAge}s ที่แล้ว`,
+  );
+  lines.push(
+    `**Threshold:** เตือน ${cfg.warningSeconds}s / ปิดไมค์ ${cfg.muteSeconds}s`,
+  );
+  lines.push("");
+  if (snap.users.length === 0) {
+    lines.push("_ไม่มีคนถูก track อยู่_");
+  } else {
+    for (const u of snap.users) {
+      lines.push(
+        `<@${u.id}> · เคยได้ยิน: ${u.heardOnce ? "✅" : "❌"} · พูดอยู่: ${u.speaking ? "🎙️" : "—"} · เงียบมา ${u.silentFor}s · เตือน: ${u.warned ? "✅" : "—"} · ปิดไมค์: ${u.muted ? "🔇" : "—"}`,
+      );
+    }
+  }
+  await interaction.reply({ content: lines.join("\n"), ephemeral: true });
 }
 
 function fmtChannel(id) {
