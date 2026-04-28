@@ -142,7 +142,23 @@ async function pump() {
   }
 }
 
-function pcmToWav(pcm, sampleRate = 48000, channels = 2, bitsPerSample = 16) {
+function downmixAndResample(pcm) {
+  const inSamples = pcm.length / 4;
+  const ratio = 48000 / 16000;
+  const outSamples = Math.floor(inSamples / ratio);
+  const out = Buffer.alloc(outSamples * 2);
+  for (let i = 0; i < outSamples; i++) {
+    const srcIdx = Math.floor(i * ratio);
+    const offset = srcIdx * 4;
+    const left = pcm.readInt16LE(offset);
+    const right = pcm.readInt16LE(offset + 2);
+    const mono = Math.max(-32768, Math.min(32767, Math.round((left + right) / 2)));
+    out.writeInt16LE(mono, i * 2);
+  }
+  return out;
+}
+
+function pcmToWav(pcm, sampleRate = 16000, channels = 1, bitsPerSample = 16) {
   const byteRate = (sampleRate * channels * bitsPerSample) / 8;
   const blockAlign = (channels * bitsPerSample) / 8;
   const dataSize = pcm.length;
@@ -164,6 +180,9 @@ function pcmToWav(pcm, sampleRate = 48000, channels = 2, bitsPerSample = 16) {
   return buffer;
 }
 
+let rawLogCount = 0;
+const RAW_LOG_MAX = 5;
+
 async function transcribePcm(pcm) {
   const fn = await tryImport();
   if (!fn) return null;
@@ -172,8 +191,9 @@ async function transcribePcm(pcm) {
     os.tmpdir(),
     `alxcer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`,
   );
+  const monoPcm = downmixAndResample(pcm);
   try {
-    fs.writeFileSync(tmp, pcmToWav(pcm));
+    fs.writeFileSync(tmp, pcmToWav(monoPcm));
   } catch (err) {
     console.error("[transcribe] write wav failed", err?.message);
     return null;
@@ -182,7 +202,7 @@ async function transcribePcm(pcm) {
     const result = await fn(tmp, {
       modelName: MODEL_NAME,
       autoDownloadModelName: MODEL_NAME,
-      removeWavFileAfterTranscription: true,
+      removeWavFileAfterTranscription: false,
       verbose: false,
       whisperOptions: {
         outputInText: true,
@@ -196,11 +216,42 @@ async function transcribePcm(pcm) {
         language: LANGUAGE,
       },
     });
-    const text = parseTranscript(result);
+    let text = parseTranscript(result);
+    if (!text) {
+      const txtPath = `${tmp}.txt`;
+      try {
+        if (fs.existsSync(txtPath)) {
+          const fileText = fs.readFileSync(txtPath, "utf8").trim();
+          if (fileText) {
+            text = parseTranscript(fileText);
+            if (rawLogCount < RAW_LOG_MAX) {
+              console.log(
+                `[transcribe] recovered text from .txt file: "${fileText.slice(0, 100)}"`,
+              );
+            }
+          }
+        }
+      } catch {}
+    }
+    if (rawLogCount < RAW_LOG_MAX) {
+      rawLogCount++;
+      const rawType = typeof result;
+      const rawLen = result?.length ?? 0;
+      const rawSnippet =
+        rawType === "string"
+          ? result.slice(0, 300).replace(/\n/g, "\\n")
+          : JSON.stringify(result).slice(0, 300);
+      console.log(
+        `[transcribe] RAW#${rawLogCount} type=${rawType} len=${rawLen} snippet="${rawSnippet}" → parsed="${text.slice(0, 100)}"`,
+      );
+    }
+    try { fs.unlinkSync(tmp); } catch {}
+    try { fs.unlinkSync(`${tmp}.txt`); } catch {}
     return text;
   } catch (err) {
     console.error("[transcribe] whisper error", err?.message);
     try { fs.unlinkSync(tmp); } catch {}
+    try { fs.unlinkSync(`${tmp}.txt`); } catch {}
     return null;
   }
 }
