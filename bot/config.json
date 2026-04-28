@@ -4,5 +4,8 @@
   "notifyChannelId": "1487341409089486888",
   "warningSeconds": 300,
   "muteSeconds": 600,
-  "ignoreBots": true
+  "ignoreBots": true,
+  "bannedWords": ["หี", "ขอดูหี", "ดูหี"],
+  "firstOffenseMuteSeconds": 60,
+  "repeatOffenseMuteSeconds": 3600
 }
