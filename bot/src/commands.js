@@ -30,18 +30,47 @@ export const DEBUG_COMMAND = new SlashCommandBuilder()
   .setDMPermission(false)
   .toJSON();
 
+export const TRANSCRIBE_COMMAND = new SlashCommandBuilder()
+  .setName("transcribe")
+  .setDescription("ดูบันทึกที่บอทถอดเสียงได้ย้อนหลัง")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
+  .setDMPermission(false)
+  .addUserOption((opt) =>
+    opt
+      .setName("user")
+      .setDescription("ดูเฉพาะคนนี้ (ไม่เลือก = ทุกคน)")
+      .setRequired(false),
+  )
+  .addIntegerOption((opt) =>
+    opt
+      .setName("limit")
+      .setDescription("จำนวนรายการล่าสุด (1-50, ค่าเริ่มต้น 20)")
+      .setMinValue(1)
+      .setMaxValue(50)
+      .setRequired(false),
+  )
+  .addBooleanOption((opt) =>
+    opt
+      .setName("flagged")
+      .setDescription("แสดงเฉพาะรายการที่จับคำต้องห้ามได้")
+      .setRequired(false),
+  )
+  .toJSON();
+
 export async function registerCommands(client) {
   const rest = new REST({ version: "10" }).setToken(client.token);
   const appId = client.application?.id ?? client.user.id;
   const guildId = client.config.guildId;
-  const body = [SETTING_COMMAND, DEBUG_COMMAND];
+  const body = [SETTING_COMMAND, DEBUG_COMMAND, TRANSCRIBE_COMMAND];
 
   if (guildId) {
     await rest.put(Routes.applicationGuildCommands(appId, guildId), { body });
-    console.log(`[commands] registered /setting /debug on guild ${guildId}`);
+    console.log(
+      `[commands] registered /setting /debug /transcribe on guild ${guildId}`,
+    );
   } else {
     await rest.put(Routes.applicationCommands(appId), { body });
-    console.log("[commands] registered /setting /debug globally");
+    console.log("[commands] registered /setting /debug /transcribe globally");
   }
 }
 
@@ -49,11 +78,17 @@ export async function handleDebugCommand(interaction, runtime) {
   const snap = runtime.snapshot();
   const cfg = runtime.getConfig();
   const lines = [];
-  lines.push(`**สถานะ:** ${snap.connected ? "🟢 เชื่อมต่อห้อง" : "🔴 ยังไม่เข้าห้อง"} (state: \`${snap.connStatus}\`)`);
-  lines.push(`**บอทอยู่ห้อง:** ${snap.channelId ? `<#${snap.channelId}>` : "—"}`);
-  lines.push(`**คุณอยู่ห้อง:** ${interaction.member?.voice?.channelId ? `<#${interaction.member.voice.channelId}>` : "ไม่ได้อยู่ใน voice"}`);
   lines.push(
-    `**Crypto:** ${snap.cryptoLib ?? "ไม่ทราบ"}  |  **เสียงล่าสุด:** ${snap.lastAnyAudioAge}s ที่แล้ว`,
+    `**สถานะ:** ${snap.connected ? "🟢 เชื่อมต่อห้อง" : "🔴 ยังไม่เข้าห้อง"} (state: \`${snap.connStatus}\`)`,
+  );
+  lines.push(
+    `**บอทอยู่ห้อง:** ${snap.channelId ? `<#${snap.channelId}>` : "—"}`,
+  );
+  lines.push(
+    `**คุณอยู่ห้อง:** ${interaction.member?.voice?.channelId ? `<#${interaction.member.voice.channelId}>` : "ไม่ได้อยู่ใน voice"}`,
+  );
+  lines.push(
+    `**Crypto:** ${snap.cryptoLib ?? "ไม่ทราบ"}  |  **เสียงล่าสุด:** ${snap.lastAnyAudioAge}s ที่แล้ว  |  **STT:** ${snap.transcription ? "✅ พร้อม" : "❌ ปิด"}`,
   );
   lines.push(
     `**Threshold:** เตือน ${cfg.warningSeconds}s / ปิดไมค์ ${cfg.muteSeconds}s · pinned=${cfg.voiceChannelId || "auto"}`,
@@ -65,7 +100,9 @@ export async function handleDebugCommand(interaction, runtime) {
   } else {
     for (const c of snap.allVoiceChannels) {
       const tag = c.id === snap.channelId ? "👈 บอทอยู่นี่" : "";
-      lines.push(`• <#${c.id}> — ${c.humanCount} คน (รวมบอท ${c.totalCount}) ${tag}`);
+      lines.push(
+        `• <#${c.id}> — ${c.humanCount} คน (รวมบอท ${c.totalCount}) ${tag}`,
+      );
     }
   }
   lines.push("");
@@ -79,7 +116,92 @@ export async function handleDebugCommand(interaction, runtime) {
       );
     }
   }
-  await interaction.reply({ content: lines.join("\n").slice(0, 1900), ephemeral: true });
+  await interaction.reply({
+    content: lines.join("\n").slice(0, 1900),
+    ephemeral: true,
+  });
+}
+
+function formatThaiTime(ts) {
+  const d = new Date(ts + 7 * 3600 * 1000);
+  const h = String(d.getUTCHours()).padStart(2, "0");
+  const m = String(d.getUTCMinutes()).padStart(2, "0");
+  const s = String(d.getUTCSeconds()).padStart(2, "0");
+  return `${h}:${m}:${s}`;
+}
+
+function formatRelative(ts) {
+  const sec = Math.round((Date.now() - ts) / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+  return `${Math.round(sec / 3600)}h ago`;
+}
+
+export async function handleTranscribeCommand(interaction, runtime) {
+  if (!runtime.transcriptionAvailable()) {
+    await interaction.reply({
+      content:
+        "❌ ระบบถอดเสียงยังไม่พร้อมในรอบนี้ (Whisper อาจติดตั้งไม่สำเร็จ) — ดู log บน GitHub Actions",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const targetUser = interaction.options.getUser("user");
+  const limit = interaction.options.getInteger("limit") ?? 20;
+  const flaggedOnly = interaction.options.getBoolean("flagged") ?? false;
+
+  const entries = runtime.getRecentTranscripts({
+    userId: targetUser?.id ?? null,
+    limit,
+    flaggedOnly,
+  });
+  const stats = runtime.getTranscriptStats();
+
+  if (entries.length === 0) {
+    const reason = flaggedOnly
+      ? "ยังไม่มีรายการที่จับคำต้องห้ามได้"
+      : targetUser
+        ? `ยังไม่มีบันทึกเสียงของ <@${targetUser.id}> ในรอบนี้`
+        : "ยังไม่มีบันทึกเสียงในรอบนี้ (บอทเริ่มเก็บใหม่ทุกครั้งที่ workflow รีสตาร์ท)";
+    await interaction.reply({ content: reason, ephemeral: true });
+    return;
+  }
+
+  const sorted = entries.slice().reverse();
+
+  const lines = sorted.map((e) => {
+    const t = formatThaiTime(e.timestamp);
+    const rel = formatRelative(e.timestamp);
+    const flag = e.flagged ? "⚠️ " : "";
+    const dur = e.durationSec ? ` · ${e.durationSec.toFixed(1)}s` : "";
+    const text =
+      e.text.length > 200 ? e.text.slice(0, 197) + "..." : e.text;
+    return `${flag}\`${t}\` (${rel}) <@${e.userId}>${dur}\n> ${text}`;
+  });
+
+  const headerParts = [];
+  if (targetUser) headerParts.push(`ของ <@${targetUser.id}>`);
+  if (flaggedOnly) headerParts.push("⚠️ เฉพาะคำต้องห้าม");
+  const header =
+    headerParts.length > 0
+      ? `บันทึกเสียง${headerParts.join(" · ")} ล่าสุด ${entries.length} รายการ (ใหม่สุดอยู่บน)`
+      : `บันทึกเสียงล่าสุด ${entries.length} รายการ (ใหม่สุดอยู่บน)`;
+
+  let body = lines.join("\n\n");
+  if (body.length > 3700) {
+    body = body.slice(0, 3700) + "\n\n_(เกินขีดจำกัด ตัดส่วนที่เก่ากว่าออก)_";
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(0x6366f1)
+    .setTitle("🎙️ Voice Transcript History")
+    .setDescription(`**${header}**\n\n${body}`)
+    .setFooter({
+      text: `ในความจำรอบนี้: ${stats.totalEntries} รายการ (จับคำต้องห้าม ${stats.flagged}) · เวลา UTC+7`,
+    });
+
+  await interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
 function fmtChannel(id) {
@@ -166,9 +288,7 @@ export async function handleSettingComponent(interaction, runtime) {
   const id = interaction.customId;
   if (!id.startsWith("setting:")) return false;
 
-  if (
-    !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
-  ) {
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
     await interaction.reply({
       content: "ต้องมีสิทธิ์ Manage Server เท่านั้น",
       ephemeral: true,
