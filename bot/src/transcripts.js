@@ -63,8 +63,14 @@ function scheduleRemoteSave() {
   if (!remoteCallback) return;
   dirtySinceRemote = true;
   if (remoteTimer) return;
+  const isFirstSave = lastRemoteCommitAt === 0;
   const sinceLast = Date.now() - lastRemoteCommitAt;
-  const wait = Math.max(REMOTE_DEBOUNCE_MS - sinceLast, 5_000);
+  const wait = isFirstSave
+    ? 3_000
+    : Math.max(REMOTE_DEBOUNCE_MS - sinceLast, 5_000);
+  console.log(
+    `[transcripts] scheduling remote save in ${wait}ms (buffer=${buffer.length}, firstSave=${isFirstSave})`,
+  );
   remoteTimer = setTimeout(async () => {
     remoteTimer = null;
     if (!dirtySinceRemote) return;
@@ -72,8 +78,11 @@ function scheduleRemoteSave() {
     lastRemoteCommitAt = Date.now();
     try {
       await remoteCallback({ version: 1, entries: buffer });
+      console.log(
+        `[transcripts] remote save OK (${buffer.length} entries committed)`,
+      );
     } catch (err) {
-      console.error("[transcripts] remote commit failed", err?.message);
+      console.error("[transcripts] remote commit FAILED:", err?.message);
       dirtySinceRemote = true;
     }
   }, wait);

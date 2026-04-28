@@ -158,10 +158,41 @@ function buildTranscribeView(runtime, dayValue) {
   });
   const stats = runtime.getTranscriptStats();
   const sorted = entries.slice().reverse();
+  const snap = runtime.snapshot ? runtime.snapshot() : null;
 
   let body;
   if (sorted.length === 0) {
-    body = "_ยังไม่มีบันทึกเสียงในช่วงนี้_";
+    const diagLines = ["_ยังไม่มีบันทึกเสียงในช่วงนี้_", "", "**ตรวจสอบ:**"];
+    if (snap) {
+      diagLines.push(
+        `• บอท${snap.connected ? "อยู่ในห้อง " + (snap.channelId ? `<#${snap.channelId}>` : "—") : "❌ ยังไม่เข้าห้องเสียงเลย"}`,
+      );
+      diagLines.push(
+        `• ระบบถอดเสียง: ${snap.transcription ? "✅ ทำงาน" : "❌ ปิดอยู่ (Whisper โหลดไม่ขึ้น)"}`,
+      );
+      diagLines.push(
+        `• เก็บข้อความรวม ${stats.totalEntries} รายการ (ทุกวัน) · เสียงล่าสุดที่ได้ยิน: ${snap.lastAnyAudioAge}s ที่แล้ว`,
+      );
+      const trackedSpeaking = snap.users.filter((u) => u.heardOnce).length;
+      diagLines.push(
+        `• คน track อยู่ ${snap.users.length} คน · เคยได้ยินจริง ${trackedSpeaking} คน`,
+      );
+      if (!snap.connected) {
+        diagLines.push("");
+        diagLines.push(
+          "💡 ลอง: ให้ทุกคนเข้าห้องเสียงก่อน บอทจะเข้าตามอัตโนมัติ",
+        );
+      } else if (trackedSpeaking === 0) {
+        diagLines.push("");
+        diagLines.push(
+          "💡 ใช้ `/debug` ดูสถานะแบบละเอียด — อาจเป็นปัญหา Crypto/permissions",
+        );
+      } else if (!snap.transcription) {
+        diagLines.push("");
+        diagLines.push("💡 Whisper โหลดไม่ขึ้น — ดู log บน GitHub Actions");
+      }
+    }
+    body = diagLines.join("\n");
   } else {
     const lines = sorted.map((e) => {
       const t = formatThaiTime(e.timestamp);

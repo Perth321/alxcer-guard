@@ -434,10 +434,13 @@ function generateBeepPCM() {
   const sampleRate = 48000;
   const channels = 2;
   const segments = [
-    { freq: 880, ms: 220 },
+    { freq: 0, ms: 200 },
+    { freq: 880, ms: 280 },
     { freq: 0, ms: 120 },
-    { freq: 660, ms: 260 },
-    { freq: 0, ms: 120 },
+    { freq: 660, ms: 320 },
+    { freq: 0, ms: 100 },
+    { freq: 1100, ms: 380 },
+    { freq: 0, ms: 400 },
   ];
   const totalSamples = segments.reduce(
     (sum, seg) => sum + Math.floor((sampleRate * seg.ms) / 1000),
@@ -449,12 +452,12 @@ function generateBeepPCM() {
     const samples = Math.floor((sampleRate * seg.ms) / 1000);
     const omega = (2 * Math.PI * seg.freq) / sampleRate;
     let phase = 0;
-    const fade = Math.min(480, Math.floor(samples / 4));
+    const fade = Math.min(960, Math.floor(samples / 5));
     for (let i = 0; i < samples; i++) {
       let val = 0;
       if (seg.freq > 0) {
         const env = Math.min(1, i / fade, (samples - i) / fade);
-        val = Math.sin(phase) * 0.4 * env;
+        val = Math.sin(phase) * 0.7 * env;
         phase += omega;
       }
       const sample = Math.max(-32767, Math.min(32767, Math.round(val * 32767)));
@@ -467,30 +470,43 @@ function generateBeepPCM() {
 }
 
 let cachedBeepPCM = null;
+let beepPlaying = false;
 
 async function playJoinBeep(connection) {
+  if (beepPlaying) {
+    console.log("[beep] already playing — skipping");
+    return;
+  }
+  beepPlaying = true;
+  let subscription = null;
+  let player = null;
   try {
     if (!cachedBeepPCM) cachedBeepPCM = generateBeepPCM();
     const stream = Readable.from([cachedBeepPCM], { objectMode: false });
     const resource = createAudioResource(stream, {
       inputType: StreamType.Raw,
+      silencePaddingFrames: 5,
     });
-    const player = createAudioPlayer({
+    player = createAudioPlayer({
       behaviors: { noSubscriber: NoSubscriberBehavior.Play },
     });
-    const subscription = connection.subscribe(player);
+    subscription = connection.subscribe(player);
     if (!subscription) {
       console.warn("[beep] connection.subscribe returned null");
       return;
     }
     player.play(resource);
-    console.log("[beep] playing join signal");
+    console.log(
+      `[beep] playing join signal (3-tone, ${cachedBeepPCM.length} bytes PCM)`,
+    );
     await new Promise((resolve) => {
       const timeout = setTimeout(() => {
-        player.stop();
+        console.warn("[beep] timed out after 5s");
+        try { player.stop(); } catch {}
         resolve();
-      }, 4000);
+      }, 5000);
       player.on(AudioPlayerStatus.Idle, () => {
+        console.log("[beep] finished");
         clearTimeout(timeout);
         resolve();
       });
@@ -500,11 +516,13 @@ async function playJoinBeep(connection) {
         resolve();
       });
     });
-    try {
-      subscription.unsubscribe();
-    } catch {}
   } catch (err) {
-    console.error("[beep] play failed:", err?.message);
+    console.error("[beep] play failed:", err?.message, err?.stack);
+  } finally {
+    if (subscription) {
+      try { subscription.unsubscribe(); } catch {}
+    }
+    beepPlaying = false;
   }
 }
 
@@ -746,6 +764,9 @@ async function reevaluateAndJoin(guild) {
         syncUserState(target);
         if (activeReceiver !== existing.receiver) {
           await attachReceiver(existing, target);
+          playJoinBeep(existing).catch((err) =>
+            console.error("[beep] reattach beep failed:", err?.message),
+          );
         }
         return;
       }
