@@ -89,3 +89,14 @@ export async function commitOffenses(offensesObject, message = "chore: update of
     message,
   );
 }
+
+export async function commitTranscripts(
+  transcriptsObject,
+  message = "chore: persist voice transcript history",
+) {
+  await commitFile(
+    "bot/transcripts.json",
+    JSON.stringify(transcriptsObject) + "\n",
+    message,
+  );
+}
