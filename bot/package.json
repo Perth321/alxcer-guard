@@ -16,5 +16,8 @@
     "libsodium-wrappers": "^0.7.15",
     "opusscript": "^0.0.8",
     "prism-media": "^1.3.5"
+  },
+  "optionalDependencies": {
+    "nodejs-whisper": "^0.2.9"
   }
 }
