@@ -41,6 +41,7 @@ export const TRANSCRIBE_COMMAND = new SlashCommandBuilder()
 export const PRANK_COMMAND_DEFS = [
   { name: "rung", emoji: "🔔", desc: "เล่นเสียงกริ่งในห้องเสียง (เฉพาะแอดมิน)" },
   { name: "jinny", emoji: "🧞", desc: "เล่นเสียงของ Jinny ในห้องเสียง (เฉพาะแอดมิน)" },
+  { name: "jan", emoji: "🎵", desc: "เล่นเสียงของ Jan ในห้องเสียง (เฉพาะแอดมิน)" },
 ];
 
 export const PRANK_COMMANDS = PRANK_COMMAND_DEFS.map((p) =>

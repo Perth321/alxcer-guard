@@ -33,6 +33,7 @@ const GREETING_PATH = path.join(__dirname, "..", "assets", "greeting.mp3");
 const PRANK_SOUNDS = {
   rung: path.join(__dirname, "..", "assets", "rung.mp3"),
   jinny: path.join(__dirname, "..", "assets", "jinny.mp3"),
+  jan: path.join(__dirname, "..", "assets", "jan.mp3"),
 };
 import { loadConfig } from "./config.js";
 import {
