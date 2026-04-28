@@ -23,7 +23,13 @@ import {
   handleSettingCommand,
   handleSettingComponent,
   handleDebugCommand,
+  handleTranscribeCommand,
 } from "./commands.js";
+import {
+  addTranscript,
+  getRecent as getRecentTranscripts,
+  getStats as getTranscriptStats,
+} from "./transcripts.js";
 import {
   loadOffenses,
   writeLocal as writeOffensesLocal,
@@ -141,6 +147,9 @@ const runtime = {
       .then((g) => reevaluateAndJoin(g))
       .catch((err) => console.error("[rejoin] error", err?.message));
   },
+  transcriptionAvailable: () => transcriptionAvailable,
+  getRecentTranscripts: (opts) => getRecentTranscripts(opts),
+  getTranscriptStats: () => getTranscriptStats(),
   snapshot: () => {
     const now = Date.now();
     const conn = config.guildId ? getVoiceConnection(config.guildId) : null;
@@ -324,7 +333,30 @@ async function handleVoiceTranscript(text, meta) {
   console.log(
     `[transcribe] user=${meta.userId} dur=${meta.durationSec?.toFixed(1)}s text="${trimmed.slice(0, 200)}"`,
   );
+
   const word = findBannedWord(trimmed);
+
+  let username = "";
+  try {
+    if (config.guildId) {
+      const guild = client.guilds.cache.get(config.guildId);
+      if (guild) {
+        const member = guild.members.cache.get(meta.userId);
+        if (member) username = member.user.username;
+      }
+    }
+  } catch {}
+
+  addTranscript({
+    userId: meta.userId,
+    username,
+    text: trimmed,
+    durationSec: meta.durationSec,
+    source: "voice",
+    flagged: !!word,
+    flaggedWord: word || null,
+  });
+
   if (!word) return;
   if (!config.guildId) return;
   try {
@@ -992,6 +1024,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.commandName === "debug") {
         await handleDebugCommand(interaction, runtime);
+        return;
+      }
+      if (interaction.commandName === "transcribe") {
+        await handleTranscribeCommand(interaction, runtime);
         return;
       }
     }
