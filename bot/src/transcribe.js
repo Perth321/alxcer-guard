@@ -113,22 +113,28 @@ async function pump() {
     `[transcribe] START user=${job.meta.userId} dur=${job.meta.durationSec?.toFixed(1)}s waited=${waitMs}ms (queue=${queue.length}, active=${active})`,
   );
   try {
-    const text = await transcribePcm(job.pcm);
+    const rawText = await transcribePcm(job.pcm);
     const elapsed = Date.now() - t0;
     totalProcessed++;
-    if (text && text.trim().length > 0) {
+    const trimmed = (rawText || "").trim();
+    const hallucinated = trimmed && isHallucinatedPlaceholder(trimmed);
+    const finalText = hallucinated ? "" : rawText;
+    if (finalText && finalText.trim().length > 0) {
       lastTextAt = Date.now();
       console.log(
-        `[transcribe] OK user=${job.meta.userId} took=${elapsed}ms text="${text.slice(0, 80)}"`,
+        `[transcribe] OK user=${job.meta.userId} took=${elapsed}ms text="${finalText.slice(0, 80)}"`,
       );
     } else {
       totalEmpty++;
+      const reason = hallucinated
+        ? `hallucination filtered: "${trimmed.slice(0, 60)}"`
+        : "silence or non-speech";
       console.log(
-        `[transcribe] EMPTY user=${job.meta.userId} took=${elapsed}ms (silence or non-speech)`,
+        `[transcribe] EMPTY user=${job.meta.userId} took=${elapsed}ms (${reason})`,
       );
     }
     try {
-      job.callback?.(text, job.meta);
+      job.callback?.(finalText, job.meta);
     } catch (cbErr) {
       console.error("[transcribe] callback error", cbErr?.message);
     }
@@ -271,4 +277,68 @@ function parseTranscript(raw) {
     .filter(Boolean)
     .join(" ")
     .trim();
+}
+
+// Whisper.cpp on small/base models hallucinates these placeholders when fed
+// silence, breath, ambient noise, or short non-speech clips. Filter them out
+// so they don't pollute transcripts.json.
+const HALLUCINATION_PHRASES = [
+  "เสียงดนตรี",
+  "เสียงเพลง",
+  "ดนตรี",
+  "เพลง",
+  "เสียงปรบมือ",
+  "เสียงหัวเราะ",
+  "เสียงนกร้อง",
+  "เสียงกริ่ง",
+  "เสียงระฆัง",
+  "เสียงไอ",
+  "เสียงพัดลม",
+  "ขอบคุณที่รับชม",
+  "ขอบคุณครับ",
+  "ขอบคุณค่ะ",
+  "music",
+  "Music",
+  "MUSIC",
+  "applause",
+  "Applause",
+  "laughter",
+  "Laughter",
+  "BLANK_AUDIO",
+  "blank_audio",
+  "silence",
+  "Silence",
+  "Thanks for watching",
+  "Thank you for watching",
+  "Thanks for watching!",
+  "Thank you",
+  "Thank you.",
+  "Thanks",
+  "you",
+  "You",
+  "You.",
+  "Bye.",
+  "Bye!",
+];
+
+function isHallucinatedPlaceholder(text) {
+  if (!text) return false;
+  // strip surrounding brackets/parens/punctuation/whitespace
+  const stripped = text
+    .trim()
+    .replace(/^[\s\[\(\{<♪♫\*\-_=]+/, "")
+    .replace(/[\s\]\)\}>♪♫\*\-_=\.\!\?,…]+$/, "")
+    .trim();
+  if (!stripped) return true; // pure punctuation/symbols
+  if (/^[♪♫\*\-_=…\.\!\?, ]+$/.test(stripped)) return true;
+  for (const phrase of HALLUCINATION_PHRASES) {
+    if (stripped === phrase) return true;
+    // also catch repeated forms like "you you you" or "ดนตรี ดนตรี"
+    const re = new RegExp(
+      `^(?:${phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s,\\.]*)+$`,
+      "i",
+    );
+    if (re.test(stripped)) return true;
+  }
+  return false;
 }
