@@ -38,20 +38,53 @@ export const TRANSCRIBE_COMMAND = new SlashCommandBuilder()
   .setDMPermission(false)
   .toJSON();
 
+export const RUNG_COMMAND = new SlashCommandBuilder()
+  .setName("rung")
+  .setDescription("🔔 เล่นเสียงแกล้งในห้องเสียง (เฉพาะแอดมิน)")
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator.toString())
+  .setDMPermission(false)
+  .toJSON();
+
 export async function registerCommands(client) {
   const rest = new REST({ version: "10" }).setToken(client.token);
   const appId = client.application?.id ?? client.user.id;
   const guildId = client.config.guildId;
-  const body = [SETTING_COMMAND, DEBUG_COMMAND, TRANSCRIBE_COMMAND];
+  const body = [SETTING_COMMAND, DEBUG_COMMAND, TRANSCRIBE_COMMAND, RUNG_COMMAND];
 
   if (guildId) {
     await rest.put(Routes.applicationGuildCommands(appId, guildId), { body });
     console.log(
-      `[commands] registered /setting /debug /transcribe on guild ${guildId}`,
+      `[commands] registered /setting /debug /transcribe /rung on guild ${guildId}`,
     );
   } else {
     await rest.put(Routes.applicationCommands(appId), { body });
-    console.log("[commands] registered /setting /debug /transcribe globally");
+    console.log("[commands] registered /setting /debug /transcribe /rung globally");
+  }
+}
+
+export async function handleRungCommand(interaction, runtime) {
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({
+      content: "❌ ต้องมีสิทธิ์ **Administrator** เท่านั้นถึงจะใช้คำสั่งนี้ได้",
+      ephemeral: true,
+    });
+    return;
+  }
+  await interaction.deferReply({ ephemeral: true });
+  try {
+    const result = await runtime.playPrankSound("rung");
+    if (result.ok) {
+      await interaction.editReply({
+        content: `🔔 เล่นเสียงแกล้งในห้อง <#${result.channelId}> แล้ว!`,
+      });
+    } else {
+      await interaction.editReply({ content: `⚠️ เล่นไม่ได้: ${result.reason}` });
+    }
+  } catch (err) {
+    console.error("[rung] error", err?.message);
+    await interaction.editReply({
+      content: `❌ ผิดพลาด: ${err?.message ?? "unknown"}`,
+    });
   }
 }
 

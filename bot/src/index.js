@@ -30,6 +30,9 @@ import prism from "prism-media";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const GREETING_PATH = path.join(__dirname, "..", "assets", "greeting.mp3");
+const PRANK_SOUNDS = {
+  rung: path.join(__dirname, "..", "assets", "rung.mp3"),
+};
 import { loadConfig } from "./config.js";
 import {
   registerCommands,
@@ -38,6 +41,7 @@ import {
   handleDebugCommand,
   handleTranscribeCommand,
   handleTranscribeComponent,
+  handleRungCommand,
 } from "./commands.js";
 import {
   addTranscript,
@@ -186,6 +190,7 @@ const runtime = {
   getRecentTranscripts: (opts) => getRecentTranscripts(opts),
   getTranscriptStats: () => getTranscriptStats(),
   getCursingStats: (opts) => getCursingStats(opts),
+  playPrankSound: (name) => playPrankSound(name),
   snapshot: () => {
     const now = Date.now();
     const conn = config.guildId ? getVoiceConnection(config.guildId) : null;
@@ -484,22 +489,22 @@ function generateBeepPCM() {
 
 let cachedBeepPCM = null;
 let beepPlaying = false;
-let greetingPlaying = false;
+const playingFiles = new Set();
 
-async function playGreeting(connection) {
-  if (greetingPlaying) {
-    console.log("[greet] already playing — skipping");
+async function playSoundFile(connection, filePath, label = "sound", timeoutMs = 30000) {
+  if (playingFiles.has(filePath)) {
+    console.log(`[${label}] already playing this file — skipping`);
     return false;
   }
-  if (!fs.existsSync(GREETING_PATH)) {
-    console.warn(`[greet] file not found at ${GREETING_PATH} — falling back to beep`);
+  if (!fs.existsSync(filePath)) {
+    console.warn(`[${label}] file not found at ${filePath}`);
     return false;
   }
-  greetingPlaying = true;
+  playingFiles.add(filePath);
   let subscription = null;
   let player = null;
   try {
-    const resource = createAudioResource(GREETING_PATH, {
+    const resource = createAudioResource(filePath, {
       inputType: StreamType.Arbitrary,
       silencePaddingFrames: 5,
     });
@@ -508,44 +513,71 @@ async function playGreeting(connection) {
     });
     subscription = connection.subscribe(player);
     if (!subscription) {
-      console.warn("[greet] connection.subscribe returned null");
+      console.warn(`[${label}] connection.subscribe returned null`);
       return false;
     }
     player.play(resource);
-    console.log(`[greet] playing greeting from ${GREETING_PATH}`);
+    console.log(`[${label}] playing ${filePath}`);
     await new Promise((resolve) => {
       const timeout = setTimeout(() => {
-        console.warn("[greet] timed out after 20s");
+        console.warn(`[${label}] timed out after ${timeoutMs}ms`);
         try { player.stop(); } catch {}
         resolve();
-      }, 20000);
+      }, timeoutMs);
       player.on(AudioPlayerStatus.Idle, () => {
-        console.log("[greet] finished");
+        console.log(`[${label}] finished`);
         clearTimeout(timeout);
         resolve();
       });
       player.on("error", (err) => {
-        console.error("[greet] player error:", err?.message);
+        console.error(`[${label}] player error:`, err?.message);
         clearTimeout(timeout);
         resolve();
       });
     });
     return true;
   } catch (err) {
-    console.error("[greet] play failed:", err?.message, err?.stack);
+    console.error(`[${label}] play failed:`, err?.message, err?.stack);
     return false;
   } finally {
     if (subscription) {
       try { subscription.unsubscribe(); } catch {}
     }
-    greetingPlaying = false;
+    playingFiles.delete(filePath);
   }
+}
+
+async function playGreeting(connection) {
+  return await playSoundFile(connection, GREETING_PATH, "greet", 20000);
 }
 
 async function playJoinSignal(connection) {
   const greeted = await playGreeting(connection);
   if (greeted) return;
   await playJoinBeep(connection);
+}
+
+async function playPrankSound(name) {
+  const filePath = PRANK_SOUNDS[name];
+  if (!filePath) {
+    return { ok: false, reason: `ไม่รู้จักเสียง "${name}"` };
+  }
+  if (!fs.existsSync(filePath)) {
+    return { ok: false, reason: `ไม่พบไฟล์เสียง "${name}.mp3" ใน assets` };
+  }
+  if (!config.guildId) {
+    return { ok: false, reason: "บอทยังไม่ได้ผูกกับเซิร์ฟเวอร์" };
+  }
+  const conn = getVoiceConnection(config.guildId);
+  if (!conn || conn.state?.status === VoiceConnectionStatus.Destroyed) {
+    return { ok: false, reason: "บอทยังไม่ได้อยู่ในห้องเสียง — รอให้มีคนเข้าห้องก่อน" };
+  }
+  const channelId = conn.joinConfig?.channelId ?? null;
+  const ok = await playSoundFile(conn, filePath, `prank:${name}`, 30000);
+  if (!ok) {
+    return { ok: false, reason: "เล่นเสียงไม่สำเร็จ — ดู log บน GitHub Actions" };
+  }
+  return { ok: true, channelId };
 }
 
 async function playJoinBeep(connection) {
@@ -1239,6 +1271,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.commandName === "transcribe") {
         await handleTranscribeCommand(interaction, runtime);
+        return;
+      }
+      if (interaction.commandName === "rung") {
+        await handleRungCommand(interaction, runtime);
         return;
       }
     }
