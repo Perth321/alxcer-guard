@@ -16,6 +16,7 @@ import {
   getVoiceConnection,
   entersState,
 } from "@discordjs/voice";
+import prism from "prism-media";
 import { loadConfig } from "./config.js";
 import {
   registerCommands,
@@ -28,6 +29,11 @@ import {
   writeLocal as writeOffensesLocal,
 } from "./offenses.js";
 import { canPersistRemotely, commitOffenses } from "./github.js";
+import {
+  isAvailable as isTranscriberAvailable,
+  enqueueTranscription,
+  importError as transcriberImportError,
+} from "./transcribe.js";
 
 let cryptoLib = "unknown";
 try {
@@ -43,6 +49,15 @@ try {
   }
 }
 console.log(`[boot] voice crypto library: ${cryptoLib}`);
+
+const transcriptionAvailable = await isTranscriberAvailable();
+if (!transcriptionAvailable) {
+  console.warn(
+    `[boot] voice transcription DISABLED — chat-only word ban will still work. Reason: ${transcriberImportError() || "unknown"}`,
+  );
+} else {
+  console.log("[boot] voice transcription ENABLED");
+}
 
 let config = loadConfig();
 const TOKEN = process.env.DISCORD_PERSONAL_ACCESS_TOKEN;
@@ -84,9 +99,11 @@ const client = new Client({
 
 const userState = new Map();
 const subscribed = new Set();
+const audioBuffers = new Map();
 
 let currentChannelId = null;
 let pollHandle = null;
+let audioFlushHandle = null;
 let joining = false;
 let reevalQueued = false;
 let activeReceiver = null;
@@ -99,6 +116,13 @@ let notReadyTicks = 0;
 
 const WATCHDOG_SECONDS = 60;
 const WATCHDOG_COOLDOWN_MS = 3 * 60 * 1000;
+
+const PCM_SAMPLE_RATE = 48000;
+const PCM_CHANNELS = 2;
+const PCM_BYTES_PER_SECOND = PCM_SAMPLE_RATE * PCM_CHANNELS * 2;
+const MIN_UTTERANCE_SEC = 0.6;
+const MAX_UTTERANCE_SEC = 12;
+const IDLE_FLUSH_MS = 1500;
 
 const offenses = loadOffenses();
 const wordBanTimers = new Map();
@@ -144,6 +168,7 @@ const runtime = {
       connStatus,
       channelId: currentChannelId,
       cryptoLib,
+      transcription: transcriptionAvailable,
       lastAnyAudioAge: Math.round((now - lastAnyAudio) / 1000),
       allVoiceChannels,
       users: [...userState.entries()].map(([id, s]) => ({
@@ -255,6 +280,61 @@ function markHeard(userId, source) {
   }
 }
 
+function appendPcm(userId, pcm) {
+  let buf = audioBuffers.get(userId);
+  if (!buf) {
+    buf = { chunks: [], totalBytes: 0, lastAppendAt: 0 };
+    audioBuffers.set(userId, buf);
+  }
+  buf.chunks.push(pcm);
+  buf.totalBytes += pcm.length;
+  buf.lastAppendAt = Date.now();
+  const maxBytes = PCM_BYTES_PER_SECOND * MAX_UTTERANCE_SEC;
+  if (buf.totalBytes >= maxBytes) {
+    flushUserAudio(userId, "max-length");
+  }
+}
+
+function flushUserAudio(userId, reason) {
+  const buf = audioBuffers.get(userId);
+  if (!buf || buf.chunks.length === 0) return;
+  const pcm = Buffer.concat(buf.chunks);
+  buf.chunks = [];
+  buf.totalBytes = 0;
+  const durationSec = pcm.length / PCM_BYTES_PER_SECOND;
+  if (durationSec < MIN_UTTERANCE_SEC) return;
+  if (!transcriptionAvailable) return;
+  if (!config.guildId) return;
+  const enqueued = enqueueTranscription(
+    pcm,
+    handleVoiceTranscript,
+    { userId, durationSec, reason },
+  );
+  if (enqueued) {
+    console.log(
+      `[transcribe] queued user=${userId} dur=${durationSec.toFixed(1)}s reason=${reason}`,
+    );
+  }
+}
+
+async function handleVoiceTranscript(text, meta) {
+  if (!text) return;
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  console.log(
+    `[transcribe] user=${meta.userId} dur=${meta.durationSec?.toFixed(1)}s text="${trimmed.slice(0, 200)}"`,
+  );
+  const word = findBannedWord(trimmed);
+  if (!word) return;
+  if (!config.guildId) return;
+  try {
+    const guild = await client.guilds.fetch(config.guildId);
+    await applyWordBan(guild, meta.userId, word, "voice", trimmed);
+  } catch (err) {
+    console.error("[transcribe] wordban dispatch failed", err?.message);
+  }
+}
+
 function subscribeUser(receiver, userId) {
   if (subscribed.has(userId)) return;
   if (!userState.has(userId)) return;
@@ -264,7 +344,28 @@ function subscribeUser(receiver, userId) {
     });
     subscribed.add(userId);
     sub.on("data", () => markHeard(userId, "packet"));
-    const cleanup = () => subscribed.delete(userId);
+
+    if (transcriptionAvailable) {
+      const decoder = new prism.opus.Decoder({
+        rate: PCM_SAMPLE_RATE,
+        channels: PCM_CHANNELS,
+        frameSize: 960,
+      });
+      sub.pipe(decoder);
+      decoder.on("data", (pcm) => appendPcm(userId, pcm));
+      decoder.on("error", (err) =>
+        console.error("[opus] decode error", err?.message),
+      );
+    }
+
+    const cleanup = () => {
+      subscribed.delete(userId);
+      const buf = audioBuffers.get(userId);
+      if (buf) {
+        buf.chunks = [];
+        buf.totalBytes = 0;
+      }
+    };
     sub.on("error", cleanup);
     sub.on("end", cleanup);
     sub.on("close", cleanup);
@@ -277,6 +378,7 @@ async function attachReceiver(connection, channel) {
   const receiver = connection.receiver;
   activeReceiver = receiver;
   subscribed.clear();
+  audioBuffers.clear();
   receiverProven = false;
 
   receiver.speaking.on("start", (userId) => {
@@ -296,6 +398,7 @@ async function attachReceiver(connection, channel) {
       s.speaking = false;
       markHeard(userId, "end");
     }
+    flushUserAudio(userId, "speaking-end");
   });
 
   for (const userId of userState.keys()) {
@@ -329,6 +432,7 @@ async function checkInactivity(guild) {
     if (!channel.members.has(userId)) {
       userState.delete(userId);
       subscribed.delete(userId);
+      audioBuffers.delete(userId);
       console.log(`[track] removed ${userId}`);
     }
   }
@@ -380,8 +484,6 @@ async function checkInactivity(guild) {
     const member = channel.members.get(userId);
     if (!member) continue;
 
-    // Skip word-ban victims — they should stay muted until the timer runs out,
-    // and silence-tracking would re-mute them anyway.
     if (wordBanTimers.has(userId)) {
       s.muted = true;
       continue;
@@ -495,6 +597,7 @@ async function reevaluateAndJoin(guild) {
         currentChannelId = null;
         userState.clear();
         subscribed.clear();
+        audioBuffers.clear();
         activeReceiver = null;
       }
       return;
@@ -549,6 +652,7 @@ async function reevaluateAndJoin(guild) {
         currentChannelId = null;
         activeReceiver = null;
         subscribed.clear();
+        audioBuffers.clear();
       }
     });
 
@@ -680,6 +784,95 @@ function formatDuration(seconds) {
   return `${seconds} วินาที`;
 }
 
+async function applyWordBan(guild, userId, word, source, transcript) {
+  const prev = offenses.users[userId] ?? {
+    count: 0,
+    lastOffenseAt: 0,
+    muteUntil: 0,
+    lastWord: "",
+  };
+
+  const newCount = (prev.count || 0) + 1;
+  const isFirst = newCount <= 1;
+  const muteSec = isFirst
+    ? config.firstOffenseMuteSeconds
+    : config.repeatOffenseMuteSeconds;
+
+  offenses.users[userId] = {
+    count: newCount,
+    lastOffenseAt: Date.now(),
+    muteUntil: Date.now() + muteSec * 1000,
+    lastWord: word,
+    lastSource: source,
+  };
+  persistOffenses();
+
+  console.log(
+    `[wordban] user=${userId} word="${word}" source=${source} count=${newCount} mute=${muteSec}s`,
+  );
+
+  let muteApplied = false;
+  let muteError = null;
+  const member = await guild.members.fetch(userId).catch(() => null);
+
+  if (member && member.voice.channel) {
+    try {
+      await member.voice.setMute(
+        true,
+        `Alxcer Guard: banned word "${word}" via ${source} (#${newCount})`,
+      );
+      muteApplied = true;
+      scheduleWordBanUnmute(guild, userId, muteSec * 1000);
+      const s = userState.get(userId);
+      if (s) {
+        s.muted = true;
+        s.warned = true;
+        s.lastSpoke = Date.now();
+      }
+    } catch (err) {
+      muteError = err?.message;
+      console.error("[wordban] setMute failed", err?.message);
+    }
+  } else {
+    scheduleWordBanUnmute(guild, userId, muteSec * 1000);
+  }
+
+  const sourceLabel = source === "voice" ? "พูดในห้องเสียง" : "พิมพ์ในแชท";
+  const durationLabel = formatDuration(muteSec);
+  const title = isFirst
+    ? `⚠️ คำเตือน — ${sourceLabel}`
+    : `🚫 ทำผิดซ้ำ — ${sourceLabel}`;
+  const color = isFirst ? 0xfacc15 : 0xef4444;
+  const lines = [`<@${userId}> ใช้คำต้องห้าม \`${word}\``, ""];
+  if (muteApplied) {
+    lines.push(`ปิดไมค์ไว้ **${durationLabel}**`);
+  } else if (muteError) {
+    lines.push(`ตั้งใจปิดไมค์แต่ทำไม่ได้: \`${muteError}\``);
+  } else {
+    lines.push(
+      `ตอนนี้ยังไม่อยู่ในห้องเสียง — เมื่อเข้ามาจะถูกปิดไมค์ทันที (อีก **${durationLabel}**)`,
+    );
+  }
+  if (source === "voice" && transcript) {
+    const snippet = transcript.length > 120 ? transcript.slice(0, 117) + "..." : transcript;
+    lines.push("");
+    lines.push(`> ที่บอทได้ยิน: _${snippet}_`);
+  }
+  lines.push("");
+  lines.push(
+    isFirst
+      ? `*ครั้งแรก: ปิดไมค์ ${formatDuration(config.firstOffenseMuteSeconds)} — ครั้งต่อไป: ${formatDuration(config.repeatOffenseMuteSeconds)}*`
+      : `*ทำผิดครั้งที่ ${newCount} — โดนเต็มอัตราโทษ ${formatDuration(config.repeatOffenseMuteSeconds)}*`,
+  );
+
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle(title)
+    .setDescription(lines.join("\n"));
+
+  await announce(guild, { content: `<@${userId}>`, embeds: [embed] });
+}
+
 client.once(Events.ClientReady, async (c) => {
   console.log(`[ready] logged in as ${c.user.tag}`);
 
@@ -706,6 +899,16 @@ client.once(Events.ClientReady, async (c) => {
         console.error("[loop] error", err?.message);
       }
     }, 5_000);
+
+    audioFlushHandle = setInterval(() => {
+      if (!transcriptionAvailable) return;
+      const now = Date.now();
+      for (const [uid, buf] of audioBuffers) {
+        if (buf.totalBytes > 0 && now - buf.lastAppendAt > IDLE_FLUSH_MS) {
+          flushUserAudio(uid, "idle");
+        }
+      }
+    }, 1_000);
 
     setInterval(() => {
       if (!currentChannelId) return;
@@ -743,8 +946,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  // If a word-banned user joins voice for the first time after the offense,
-  // apply the server mute so the punishment isn't bypassed by being offline.
   if (userId && wordBanTimers.has(userId)) {
     const wasInVoice = !!oldState.channelId;
     const nowInVoice = !!newState.channelId;
@@ -774,102 +975,9 @@ client.on(Events.MessageCreate, async (msg) => {
     if (!config.guildId || msg.guild.id !== config.guildId) return;
     if (msg.author?.bot) return;
     if (!msg.content) return;
-
     const word = findBannedWord(msg.content);
     if (!word) return;
-
-    const userId = msg.author.id;
-    const prev = offenses.users[userId] ?? {
-      count: 0,
-      lastOffenseAt: 0,
-      muteUntil: 0,
-      lastWord: "",
-    };
-
-    const newCount = (prev.count || 0) + 1;
-    const isFirst = newCount <= 1;
-    const muteSec = isFirst
-      ? config.firstOffenseMuteSeconds
-      : config.repeatOffenseMuteSeconds;
-
-    const rec = {
-      count: newCount,
-      lastOffenseAt: Date.now(),
-      muteUntil: Date.now() + muteSec * 1000,
-      lastWord: word,
-    };
-    offenses.users[userId] = rec;
-    persistOffenses();
-
-    console.log(
-      `[wordban] ${msg.author.tag} said "${word}" (offense #${newCount}) → mute ${muteSec}s`,
-    );
-
-    let muteApplied = false;
-    let muteError = null;
-    const member = await msg.guild.members
-      .fetch(userId)
-      .catch(() => null);
-
-    if (member && member.voice.channel) {
-      try {
-        await member.voice.setMute(
-          true,
-          `Alxcer Guard: banned word "${word}" (offense #${newCount})`,
-        );
-        muteApplied = true;
-        scheduleWordBanUnmute(msg.guild, userId, muteSec * 1000);
-        const s = userState.get(userId);
-        if (s) {
-          s.muted = true;
-          s.warned = true;
-          s.lastSpoke = Date.now();
-        }
-      } catch (err) {
-        muteError = err?.message;
-        console.error("[wordban] setMute failed", err?.message);
-      }
-    } else {
-      // User isn't in voice yet — schedule the timer anyway so when they
-      // join, the VoiceStateUpdate handler will re-apply the mute and the
-      // timer will still expire on schedule.
-      scheduleWordBanUnmute(msg.guild, userId, muteSec * 1000);
-    }
-
-    const durationLabel = formatDuration(muteSec);
-    const title = isFirst ? "⚠️ คำเตือน" : "🚫 ทำผิดซ้ำ";
-    const color = isFirst ? 0xfacc15 : 0xef4444;
-    const lines = [
-      `<@${userId}> พิมพ์คำต้องห้าม \`${word}\``,
-      "",
-    ];
-    if (muteApplied) {
-      lines.push(`ปิดไมค์ไว้ **${durationLabel}**`);
-    } else if (muteError) {
-      lines.push(`ตั้งใจปิดไมค์แต่ทำไม่ได้: \`${muteError}\``);
-    } else {
-      lines.push(
-        `ตอนนี้ยังไม่อยู่ในห้องเสียง — เมื่อเข้ามาจะถูกปิดไมค์ทันที (อีก **${durationLabel}**)`,
-      );
-    }
-    lines.push("");
-    lines.push(
-      isFirst
-        ? `*ครั้งแรก: ปิดไมค์ ${formatDuration(config.firstOffenseMuteSeconds)} — ครั้งต่อไป: ${formatDuration(config.repeatOffenseMuteSeconds)}*`
-        : `*ทำผิดครั้งที่ ${newCount} แล้ว — โดนเต็มอัตราโทษ ${formatDuration(config.repeatOffenseMuteSeconds)}*`,
-    );
-
-    const embed = new EmbedBuilder()
-      .setColor(color)
-      .setTitle(title)
-      .setDescription(lines.join("\n"));
-
-    try {
-      await msg.reply({ embeds: [embed], allowedMentions: { repliedUser: true } });
-    } catch (err) {
-      console.error("[wordban] reply failed", err?.message);
-      await announce(msg.guild, { content: `<@${userId}>`, embeds: [embed] });
-    }
+    await applyWordBan(msg.guild, msg.author.id, word, "chat");
   } catch (err) {
     console.error("[message] handler error", err?.message);
   }
@@ -909,8 +1017,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
         return;
       }
-      // If the user is currently word-banned, don't let them bypass it via
-      // the silence-mute unmute button.
       if (wordBanTimers.has(targetUserId)) {
         const rec = offenses.users[targetUserId];
         const remaining = rec?.muteUntil
@@ -960,6 +1066,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 function shutdown(signal) {
   console.log(`[shutdown] received ${signal}`);
   if (pollHandle) clearInterval(pollHandle);
+  if (audioFlushHandle) clearInterval(audioFlushHandle);
   for (const handle of wordBanTimers.values()) clearTimeout(handle);
   wordBanTimers.clear();
   for (const guildId of client.guilds.cache.keys()) {
