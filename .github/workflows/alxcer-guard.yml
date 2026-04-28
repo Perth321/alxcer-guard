@@ -33,14 +33,20 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
+
+      - name: Install ffmpeg (required by nodejs-whisper)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -n 1
 
       - name: Cache bot dependencies (incl. whisper.cpp build)
         id: cache-deps
         uses: actions/cache@v4
         with:
           path: bot/node_modules
-          key: bot-deps-${{ runner.os }}-node20-${{ hashFiles('bot/package.json') }}-v2
+          key: bot-deps-${{ runner.os }}-node22-${{ hashFiles('bot/package.json') }}-v3
 
       - name: Cache Whisper model
         uses: actions/cache@v4
