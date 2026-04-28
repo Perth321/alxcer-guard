@@ -22,7 +22,14 @@ import {
   AudioPlayerStatus,
 } from "@discordjs/voice";
 import { Readable } from "node:stream";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import prism from "prism-media";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const GREETING_PATH = path.join(__dirname, "..", "assets", "greeting.mp3");
 import { loadConfig } from "./config.js";
 import {
   registerCommands,
@@ -477,6 +484,69 @@ function generateBeepPCM() {
 
 let cachedBeepPCM = null;
 let beepPlaying = false;
+let greetingPlaying = false;
+
+async function playGreeting(connection) {
+  if (greetingPlaying) {
+    console.log("[greet] already playing — skipping");
+    return false;
+  }
+  if (!fs.existsSync(GREETING_PATH)) {
+    console.warn(`[greet] file not found at ${GREETING_PATH} — falling back to beep`);
+    return false;
+  }
+  greetingPlaying = true;
+  let subscription = null;
+  let player = null;
+  try {
+    const resource = createAudioResource(GREETING_PATH, {
+      inputType: StreamType.Arbitrary,
+      silencePaddingFrames: 5,
+    });
+    player = createAudioPlayer({
+      behaviors: { noSubscriber: NoSubscriberBehavior.Play },
+    });
+    subscription = connection.subscribe(player);
+    if (!subscription) {
+      console.warn("[greet] connection.subscribe returned null");
+      return false;
+    }
+    player.play(resource);
+    console.log(`[greet] playing greeting from ${GREETING_PATH}`);
+    await new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        console.warn("[greet] timed out after 20s");
+        try { player.stop(); } catch {}
+        resolve();
+      }, 20000);
+      player.on(AudioPlayerStatus.Idle, () => {
+        console.log("[greet] finished");
+        clearTimeout(timeout);
+        resolve();
+      });
+      player.on("error", (err) => {
+        console.error("[greet] player error:", err?.message);
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+    return true;
+  } catch (err) {
+    console.error("[greet] play failed:", err?.message, err?.stack);
+    return false;
+  } finally {
+    if (subscription) {
+      try { subscription.unsubscribe(); } catch {}
+    }
+    greetingPlaying = false;
+  }
+}
+
+async function playJoinSignal(connection) {
+  const greeted = await playGreeting(connection);
+  if (greeted) return;
+  await playJoinBeep(connection);
+}
 
 async function playJoinBeep(connection) {
   if (beepPlaying) {
@@ -770,8 +840,8 @@ async function reevaluateAndJoin(guild) {
         syncUserState(target);
         if (activeReceiver !== existing.receiver) {
           await attachReceiver(existing, target);
-          playJoinBeep(existing).catch((err) =>
-            console.error("[beep] reattach beep failed:", err?.message),
+          playJoinSignal(existing).catch((err) =>
+            console.error("[greet] reattach greeting failed:", err?.message),
           );
         }
         return;
@@ -839,8 +909,8 @@ async function reevaluateAndJoin(guild) {
     await attachReceiver(connection, target);
     console.log(`[voice] monitoring #${target.name}`);
 
-    playJoinBeep(connection).catch((err) =>
-      console.error("[beep] join beep failed:", err?.message),
+    playJoinSignal(connection).catch((err) =>
+      console.error("[greet] join greeting failed:", err?.message),
     );
   } finally {
     joining = false;
