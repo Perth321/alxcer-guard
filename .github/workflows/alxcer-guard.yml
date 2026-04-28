@@ -7,7 +7,9 @@ on:
   push:
     branches: [main]
     paths:
-      - "bot/**"
+      - "bot/src/**"
+      - "bot/package.json"
+      - "bot/config.json"
       - ".github/workflows/alxcer-guard.yml"
 
 concurrency:
@@ -33,6 +35,19 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Cache bot dependencies (incl. whisper.cpp build)
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: bot/node_modules
+          key: bot-deps-${{ runner.os }}-node20-${{ hashFiles('bot/package.json') }}-v2
+
+      - name: Cache Whisper model
+        uses: actions/cache@v4
+        with:
+          path: bot/node_modules/nodejs-whisper/cpp/whisper.cpp/models
+          key: whisper-small-v1
+
       - name: Install bot dependencies
         run: npm install --no-audit --no-fund
 
@@ -42,4 +57,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
+          WHISPER_MODEL: small
+          WHISPER_LANGUAGE: th
         run: node src/index.js
