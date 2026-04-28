@@ -198,7 +198,7 @@ export async function handleTranscribeCommand(interaction, runtime) {
     .setTitle("🎙️ Voice Transcript History")
     .setDescription(`**${header}**\n\n${body}`)
     .setFooter({
-      text: `ในความจำรอบนี้: ${stats.totalEntries} รายการ (จับคำต้องห้าม ${stats.flagged}) · เวลา UTC+7`,
+      text: footerText(stats),
     });
 
   await interaction.reply({ embeds: [embed], ephemeral: true });
@@ -206,6 +206,19 @@ export async function handleTranscribeCommand(interaction, runtime) {
 
 function fmtChannel(id) {
   return id ? `<#${id}>` : "_ยังไม่ได้ตั้งค่า_";
+}
+
+function footerText(stats) {
+  const parts = [
+    `เก็บไว้ ${stats.totalEntries} รายการ`,
+    `จับคำต้องห้าม ${stats.flagged}`,
+  ];
+  if (stats.oldest) {
+    const days = (Date.now() - stats.oldest) / (24 * 3600 * 1000);
+    parts.push(`เก่าสุด ${days < 1 ? `${Math.round(days * 24)} ชม.` : `${days.toFixed(1)} วัน`} ที่แล้ว`);
+  }
+  parts.push(`เก็บอัตโนมัติ ${stats.retentionDays || 7} วัน · UTC+7`);
+  return parts.join(" · ");
 }
 
 export function buildSettingsView(config) {
