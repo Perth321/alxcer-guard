@@ -66,7 +66,7 @@ function scheduleRemoteSave() {
   const isFirstSave = lastRemoteCommitAt === 0;
   const sinceLast = Date.now() - lastRemoteCommitAt;
   const wait = isFirstSave
-    ? 3_000
+    ? 1_000
     : Math.max(REMOTE_DEBOUNCE_MS - sinceLast, 5_000);
   console.log(
     `[transcripts] scheduling remote save in ${wait}ms (buffer=${buffer.length}, firstSave=${isFirstSave})`,

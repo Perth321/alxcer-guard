@@ -2,13 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const MODEL_NAME = process.env.WHISPER_MODEL || "small";
+const MODEL_NAME = process.env.WHISPER_MODEL || "base";
 const LANGUAGE = process.env.WHISPER_LANGUAGE || "th";
 
 let nodewhisper = null;
 let importChecked = false;
 let modelReadyPromise = null;
+let modelReadyAt = 0;
 let lastImportError = null;
+let totalProcessed = 0;
+let totalEmpty = 0;
+let totalErrors = 0;
+let lastTextAt = 0;
+let lastError = "";
 
 async function tryImport() {
   if (importChecked) return nodewhisper;
@@ -36,17 +42,64 @@ export function importError() {
 
 const queue = [];
 let active = 0;
-const MAX_CONCURRENT = 1;
-const MAX_QUEUE = 4;
+const MAX_CONCURRENT = 2;
+const MAX_QUEUE = 16;
 
 export function enqueueTranscription(pcmBuffer, callback, meta = {}) {
   if (queue.length >= MAX_QUEUE) {
-    console.warn(`[transcribe] queue full (${queue.length}/${MAX_QUEUE}) — dropping ${meta.userId || ""}`);
+    console.warn(`[transcribe] queue FULL (${queue.length}/${MAX_QUEUE}) — dropping ${meta.userId || ""}`);
     return false;
   }
-  queue.push({ pcm: pcmBuffer, callback, meta });
+  queue.push({ pcm: pcmBuffer, callback, meta, queuedAt: Date.now() });
   pump();
   return true;
+}
+
+export function getStatus() {
+  return {
+    modelName: MODEL_NAME,
+    language: LANGUAGE,
+    modelReady: modelReadyAt > 0,
+    modelReadyAt,
+    queued: queue.length,
+    active,
+    maxConcurrent: MAX_CONCURRENT,
+    maxQueue: MAX_QUEUE,
+    totalProcessed,
+    totalEmpty,
+    totalErrors,
+    lastTextAt,
+    lastError,
+    importError: lastImportError,
+  };
+}
+
+export async function prepareModel() {
+  const fn = await tryImport();
+  if (!fn) {
+    console.warn("[transcribe] cannot prepare model — import failed");
+    return false;
+  }
+  if (modelReadyAt > 0) return true;
+  console.log(
+    `[transcribe] PRE-WARMING model "${MODEL_NAME}" (downloads if needed, ~30-90s for base, ~3min for small)...`,
+  );
+  const startedAt = Date.now();
+  const silentPcm = Buffer.alloc(48000 * 2 * 2 * 1, 0);
+  try {
+    await transcribePcm(silentPcm);
+    modelReadyAt = Date.now();
+    console.log(
+      `[transcribe] ✓ MODEL READY "${MODEL_NAME}" (warmup took ${((modelReadyAt - startedAt) / 1000).toFixed(1)}s)`,
+    );
+    return true;
+  } catch (err) {
+    lastError = err?.message || String(err);
+    console.error(
+      `[transcribe] ✗ model warmup FAILED: ${lastError}`,
+    );
+    return false;
+  }
 }
 
 async function pump() {
@@ -54,15 +107,35 @@ async function pump() {
   const job = queue.shift();
   if (!job) return;
   active++;
+  const t0 = Date.now();
+  const waitMs = t0 - job.queuedAt;
+  console.log(
+    `[transcribe] START user=${job.meta.userId} dur=${job.meta.durationSec?.toFixed(1)}s waited=${waitMs}ms (queue=${queue.length}, active=${active})`,
+  );
   try {
     const text = await transcribePcm(job.pcm);
+    const elapsed = Date.now() - t0;
+    totalProcessed++;
+    if (text && text.trim().length > 0) {
+      lastTextAt = Date.now();
+      console.log(
+        `[transcribe] OK user=${job.meta.userId} took=${elapsed}ms text="${text.slice(0, 80)}"`,
+      );
+    } else {
+      totalEmpty++;
+      console.log(
+        `[transcribe] EMPTY user=${job.meta.userId} took=${elapsed}ms (silence or non-speech)`,
+      );
+    }
     try {
       job.callback?.(text, job.meta);
     } catch (cbErr) {
       console.error("[transcribe] callback error", cbErr?.message);
     }
   } catch (err) {
-    console.error("[transcribe] job error", err?.message);
+    totalErrors++;
+    lastError = err?.message || String(err);
+    console.error("[transcribe] job error", lastError);
   } finally {
     active--;
     setImmediate(pump);
@@ -94,13 +167,6 @@ function pcmToWav(pcm, sampleRate = 48000, channels = 2, bitsPerSample = 16) {
 async function transcribePcm(pcm) {
   const fn = await tryImport();
   if (!fn) return null;
-  if (!modelReadyPromise) {
-    modelReadyPromise = (async () => {
-      console.log(`[transcribe] preparing model "${MODEL_NAME}" (first call may download ~466MB)`);
-      return true;
-    })();
-  }
-  await modelReadyPromise;
 
   const tmp = path.join(
     os.tmpdir(),

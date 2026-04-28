@@ -55,6 +55,8 @@ import {
   isAvailable as isTranscriberAvailable,
   enqueueTranscription,
   importError as transcriberImportError,
+  prepareModel as prepareTranscriberModel,
+  getStatus as getTranscribeStatus,
 } from "./transcribe.js";
 
 let cryptoLib = "unknown";
@@ -79,6 +81,9 @@ if (!transcriptionAvailable) {
   );
 } else {
   console.log("[boot] voice transcription ENABLED");
+  prepareTranscriberModel().catch((err) =>
+    console.error("[boot] model prewarm failed:", err?.message),
+  );
 }
 
 let config = loadConfig();
@@ -143,7 +148,7 @@ const PCM_SAMPLE_RATE = 48000;
 const PCM_CHANNELS = 2;
 const PCM_BYTES_PER_SECOND = PCM_SAMPLE_RATE * PCM_CHANNELS * 2;
 const MIN_UTTERANCE_SEC = 0.6;
-const MAX_UTTERANCE_SEC = 12;
+const MAX_UTTERANCE_SEC = 5;
 const IDLE_FLUSH_MS = 1500;
 
 const offenses = loadOffenses();
@@ -202,6 +207,7 @@ const runtime = {
       channelId: currentChannelId,
       cryptoLib,
       transcription: transcriptionAvailable,
+      transcribeStatus: getTranscribeStatus(),
       lastAnyAudioAge: Math.round((now - lastAnyAudio) / 1000),
       allVoiceChannels,
       users: [...userState.entries()].map(([id, s]) => ({

@@ -164,32 +164,53 @@ function buildTranscribeView(runtime, dayValue) {
   if (sorted.length === 0) {
     const diagLines = ["_ยังไม่มีบันทึกเสียงในช่วงนี้_", "", "**ตรวจสอบ:**"];
     if (snap) {
+      const ts = snap.transcribeStatus || {};
       diagLines.push(
         `• บอท${snap.connected ? "อยู่ในห้อง " + (snap.channelId ? `<#${snap.channelId}>` : "—") : "❌ ยังไม่เข้าห้องเสียงเลย"}`,
       );
+      const modelLabel = ts.modelReady
+        ? `✅ พร้อม (${ts.modelName})`
+        : ts.importError
+          ? `❌ โหลด Whisper ไม่ขึ้น: ${ts.importError}`
+          : `⏳ กำลังโหลด model "${ts.modelName}" (~30-90 วิ ครั้งแรก)`;
+      diagLines.push(`• Whisper: ${modelLabel}`);
       diagLines.push(
-        `• ระบบถอดเสียง: ${snap.transcription ? "✅ ทำงาน" : "❌ ปิดอยู่ (Whisper โหลดไม่ขึ้น)"}`,
-      );
-      diagLines.push(
-        `• เก็บข้อความรวม ${stats.totalEntries} รายการ (ทุกวัน) · เสียงล่าสุดที่ได้ยิน: ${snap.lastAnyAudioAge}s ที่แล้ว`,
+        `• เสียงล่าสุดที่ได้ยิน: ${snap.lastAnyAudioAge}s ที่แล้ว · เก็บข้อความ ${stats.totalEntries} รายการ`,
       );
       const trackedSpeaking = snap.users.filter((u) => u.heardOnce).length;
       diagLines.push(
         `• คน track อยู่ ${snap.users.length} คน · เคยได้ยินจริง ${trackedSpeaking} คน`,
       );
+      const lastTextAgo = ts.lastTextAt
+        ? `${Math.round((Date.now() - ts.lastTextAt) / 1000)}s ที่แล้ว`
+        : "ยังไม่เคยถอดสำเร็จ";
+      diagLines.push(
+        `• Whisper queue: ${ts.queued ?? 0}/${ts.maxQueue ?? "?"} · กำลังถอด ${ts.active ?? 0} งาน · เคยถอด ${ts.totalProcessed ?? 0} (ว่าง ${ts.totalEmpty ?? 0}, error ${ts.totalErrors ?? 0}) · ข้อความล่าสุด: ${lastTextAgo}`,
+      );
+      if (ts.lastError) {
+        diagLines.push(`• Error ล่าสุด: \`${ts.lastError.slice(0, 120)}\``);
+      }
+      diagLines.push("");
       if (!snap.connected) {
-        diagLines.push("");
         diagLines.push(
-          "💡 ลอง: ให้ทุกคนเข้าห้องเสียงก่อน บอทจะเข้าตามอัตโนมัติ",
+          "💡 ให้ใครสักคนเข้าห้องเสียงก่อน บอทจะเข้าตามอัตโนมัติ",
+        );
+      } else if (!ts.modelReady && !ts.importError) {
+        diagLines.push(
+          "💡 รอ ~1 นาที ให้ Whisper โหลด model แล้วลองพูดอีกครั้ง",
+        );
+      } else if (ts.totalProcessed === 0 && trackedSpeaking > 0) {
+        diagLines.push(
+          "💡 บอทได้ยินเสียงแต่ยังไม่ได้ส่งให้ Whisper — รอ ~5 วินาที (chunk เต็ม) แล้วลองใหม่",
+        );
+      } else if (ts.totalProcessed > 0 && ts.totalEmpty === ts.totalProcessed) {
+        diagLines.push(
+          "💡 Whisper ถอดได้แต่ออกมาว่าง — อาจเป็นปัญหา language หรือเสียงเบาเกินไป",
         );
       } else if (trackedSpeaking === 0) {
-        diagLines.push("");
         diagLines.push(
-          "💡 ใช้ `/debug` ดูสถานะแบบละเอียด — อาจเป็นปัญหา Crypto/permissions",
+          "💡 อาจเป็นปัญหา Crypto/permissions — ดู log บน GitHub Actions",
         );
-      } else if (!snap.transcription) {
-        diagLines.push("");
-        diagLines.push("💡 Whisper โหลดไม่ขึ้น — ดู log บน GitHub Actions");
       }
     }
     body = diagLines.join("\n");
