@@ -14,6 +14,9 @@ const DEFAULTS = {
   warningSeconds: 180,
   muteSeconds: 300,
   ignoreBots: true,
+  bannedWords: ["หี", "ขอดูหี", "ดูหี"],
+  firstOffenseMuteSeconds: 60,
+  repeatOffenseMuteSeconds: 3600,
 };
 
 export function loadConfig() {
@@ -37,6 +40,9 @@ export function normalize(cfg) {
     warningSeconds: clampInt(cfg.warningSeconds, 5, 3600, 180),
     muteSeconds: clampInt(cfg.muteSeconds, 10, 3600, 300),
     ignoreBots: cfg.ignoreBots !== false,
+    bannedWords: normalizeWords(cfg.bannedWords),
+    firstOffenseMuteSeconds: clampInt(cfg.firstOffenseMuteSeconds, 5, 86400, 60),
+    repeatOffenseMuteSeconds: clampInt(cfg.repeatOffenseMuteSeconds, 5, 86400, 3600),
   };
 }
 
@@ -44,6 +50,22 @@ function clampInt(value, min, max, fallback) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+function normalizeWords(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const w of value) {
+    if (typeof w !== "string") continue;
+    const trimmed = w.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
 }
 
 export function writeLocal(cfg) {
