@@ -15,7 +15,13 @@ import {
   VoiceConnectionStatus,
   getVoiceConnection,
   entersState,
+  createAudioPlayer,
+  createAudioResource,
+  StreamType,
+  NoSubscriberBehavior,
+  AudioPlayerStatus,
 } from "@discordjs/voice";
+import { Readable } from "node:stream";
 import prism from "prism-media";
 import { loadConfig } from "./config.js";
 import {
@@ -24,6 +30,7 @@ import {
   handleSettingComponent,
   handleDebugCommand,
   handleTranscribeCommand,
+  handleTranscribeComponent,
 } from "./commands.js";
 import {
   addTranscript,
@@ -423,6 +430,84 @@ function subscribeUser(receiver, userId) {
   }
 }
 
+function generateBeepPCM() {
+  const sampleRate = 48000;
+  const channels = 2;
+  const segments = [
+    { freq: 880, ms: 220 },
+    { freq: 0, ms: 120 },
+    { freq: 660, ms: 260 },
+    { freq: 0, ms: 120 },
+  ];
+  const totalSamples = segments.reduce(
+    (sum, seg) => sum + Math.floor((sampleRate * seg.ms) / 1000),
+    0,
+  );
+  const buf = Buffer.alloc(totalSamples * channels * 2);
+  let offset = 0;
+  for (const seg of segments) {
+    const samples = Math.floor((sampleRate * seg.ms) / 1000);
+    const omega = (2 * Math.PI * seg.freq) / sampleRate;
+    let phase = 0;
+    const fade = Math.min(480, Math.floor(samples / 4));
+    for (let i = 0; i < samples; i++) {
+      let val = 0;
+      if (seg.freq > 0) {
+        const env = Math.min(1, i / fade, (samples - i) / fade);
+        val = Math.sin(phase) * 0.4 * env;
+        phase += omega;
+      }
+      const sample = Math.max(-32767, Math.min(32767, Math.round(val * 32767)));
+      buf.writeInt16LE(sample, offset);
+      buf.writeInt16LE(sample, offset + 2);
+      offset += 4;
+    }
+  }
+  return buf;
+}
+
+let cachedBeepPCM = null;
+
+async function playJoinBeep(connection) {
+  try {
+    if (!cachedBeepPCM) cachedBeepPCM = generateBeepPCM();
+    const stream = Readable.from([cachedBeepPCM], { objectMode: false });
+    const resource = createAudioResource(stream, {
+      inputType: StreamType.Raw,
+    });
+    const player = createAudioPlayer({
+      behaviors: { noSubscriber: NoSubscriberBehavior.Play },
+    });
+    const subscription = connection.subscribe(player);
+    if (!subscription) {
+      console.warn("[beep] connection.subscribe returned null");
+      return;
+    }
+    player.play(resource);
+    console.log("[beep] playing join signal");
+    await new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        player.stop();
+        resolve();
+      }, 4000);
+      player.on(AudioPlayerStatus.Idle, () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      player.on("error", (err) => {
+        console.error("[beep] player error:", err?.message);
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+    try {
+      subscription.unsubscribe();
+    } catch {}
+  } catch (err) {
+    console.error("[beep] play failed:", err?.message);
+  }
+}
+
 async function attachReceiver(connection, channel) {
   const receiver = connection.receiver;
   activeReceiver = receiver;
@@ -726,6 +811,10 @@ async function reevaluateAndJoin(guild) {
     receiverHealthLogged = false;
     await attachReceiver(connection, target);
     console.log(`[voice] monitoring #${target.name}`);
+
+    playJoinBeep(connection).catch((err) =>
+      console.error("[beep] join beep failed:", err?.message),
+    );
   } finally {
     joining = false;
     if (reevalQueued) {
@@ -1062,6 +1151,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       interaction.isAnySelectMenu?.() ||
       interaction.isModalSubmit()
     ) {
+      const handledTranscribe = await handleTranscribeComponent(
+        interaction,
+        runtime,
+      );
+      if (handledTranscribe) return;
       const handled = await handleSettingComponent(interaction, runtime);
       if (handled) return;
     }
