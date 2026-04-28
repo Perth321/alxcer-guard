@@ -23,6 +23,11 @@ import {
   handleSettingComponent,
   handleDebugCommand,
 } from "./commands.js";
+import {
+  loadOffenses,
+  writeLocal as writeOffensesLocal,
+} from "./offenses.js";
+import { canPersistRemotely, commitOffenses } from "./github.js";
 
 let cryptoLib = "unknown";
 try {
@@ -60,6 +65,9 @@ console.log("[boot] Alxcer Guard starting", {
   voiceChannelId: config.voiceChannelId || "(auto)",
   warningSeconds: config.warningSeconds,
   muteSeconds: config.muteSeconds,
+  bannedWords: config.bannedWords,
+  firstOffenseMuteSeconds: config.firstOffenseMuteSeconds,
+  repeatOffenseMuteSeconds: config.repeatOffenseMuteSeconds,
 });
 
 const client = new Client({
@@ -68,6 +76,7 @@ const client = new Client({
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
   ],
   partials: [Partials.Channel],
@@ -90,6 +99,10 @@ let notReadyTicks = 0;
 
 const WATCHDOG_SECONDS = 60;
 const WATCHDOG_COOLDOWN_MS = 3 * 60 * 1000;
+
+const offenses = loadOffenses();
+const wordBanTimers = new Map();
+let offensesPersistTimer = null;
 
 const runtime = {
   getConfig: () => config,
@@ -226,9 +239,6 @@ function markHeard(userId, source) {
   s.heardOnce = true;
   s.silentTicks = 0;
   if (s.warned) s.warned = false;
-  // Only real audio packets count as receiver health proof.
-  // Discord "speaking start/end" events fire even when packets aren't flowing,
-  // which used to mask a broken receiver and also wrongly kept the watchdog quiet.
   if (source === "packet") {
     lastAnyAudio = Date.now();
     if (!receiverProven) {
@@ -267,7 +277,6 @@ async function attachReceiver(connection, channel) {
   const receiver = connection.receiver;
   activeReceiver = receiver;
   subscribed.clear();
-  // Fresh receiver = no proof yet that it works. Will be set true on first packet.
   receiverProven = false;
 
   receiver.speaking.on("start", (userId) => {
@@ -289,9 +298,6 @@ async function attachReceiver(connection, channel) {
     }
   });
 
-  // Subscribe to every currently-tracked user up front so the very first
-  // audio packet they emit lands in `markHeard` (and proves the receiver
-  // is healthy) without waiting for a speaking-start event.
   for (const userId of userState.keys()) {
     subscribeUser(receiver, userId);
   }
@@ -300,14 +306,7 @@ async function attachReceiver(connection, channel) {
 }
 
 function isReceiverHealthy() {
-  // Once we've decoded even ONE real audio packet on the current connection,
-  // we KNOW: encryption works, UDP works, opus decoding works. Any subsequent
-  // silence is real silence (people just aren't talking) — exactly what we
-  // want to mute on. So treat the receiver as healthy permanently after the
-  // first proven packet, until the connection is destroyed/reattached.
   if (receiverProven) return true;
-  // Before the first packet, fall back to the recency window so a brand-new
-  // connection that immediately receives audio is also treated as healthy.
   const sinceAudio = (Date.now() - lastAnyAudio) / 1000;
   return sinceAudio < WATCHDOG_SECONDS;
 }
@@ -348,11 +347,6 @@ async function checkInactivity(guild) {
     (m) => !(config.ignoreBots && m.user.bot),
   );
 
-  // Critical safeguard: only run mute decisions when we actually have proof
-  // the voice receiver works (a real audio packet within WATCHDOG_SECONDS).
-  // Without this, a runner that can't open inbound UDP would mute every
-  // single user in the channel even if they ARE speaking — because the bot
-  // simply can't hear them.
   if (humansInChannel.length > 0 && !isReceiverHealthy()) {
     if (!receiverHealthLogged) {
       console.warn(
@@ -386,6 +380,13 @@ async function checkInactivity(guild) {
     const member = channel.members.get(userId);
     if (!member) continue;
 
+    // Skip word-ban victims — they should stay muted until the timer runs out,
+    // and silence-tracking would re-mute them anyway.
+    if (wordBanTimers.has(userId)) {
+      s.muted = true;
+      continue;
+    }
+
     if (member.voice.serverMute) {
       s.muted = true;
       continue;
@@ -396,20 +397,12 @@ async function checkInactivity(guild) {
       s.silentTicks = 0;
     }
 
-    // Self-mute / self-deaf used to reset the timer, which let users
-    // bypass the bot by simply muting themselves. Self-mute IS "not using
-    // the mic", so it should count as silence — keep timing them.
-
     if (s.speaking) {
       s.lastSpoke = now;
       s.silentTicks = 0;
       if (s.warned) s.warned = false;
       continue;
     }
-
-    // Previously: if (!s.heardOnce) reset lastSpoke — meant anyone who
-    // joined and never spoke was timed forever and never muted, which is
-    // the exact behavior we want to prevent. Removed.
 
     const silentFor = (now - s.lastSpoke) / 1000;
     s.silentTicks = silentFor >= config.warningSeconds ? s.silentTicks + 1 : 0;
@@ -513,10 +506,6 @@ async function reevaluateAndJoin(guild) {
         existing &&
         existing.state.status !== VoiceConnectionStatus.Destroyed
       ) {
-        // Already in the right channel — just make sure the user list is
-        // populated. Previously we returned here without syncing, which left
-        // userState empty after any earlier clear (e.g. transient cache miss
-        // in pickBestVoiceChannel).
         syncUserState(target);
         if (activeReceiver !== existing.receiver) {
           await attachReceiver(existing, target);
@@ -597,6 +586,100 @@ async function reevaluateAndJoin(guild) {
   }
 }
 
+function persistOffenses() {
+  try {
+    writeOffensesLocal(offenses);
+  } catch (err) {
+    console.error("[offenses] local write failed", err?.message);
+  }
+  if (!canPersistRemotely()) return;
+  if (offensesPersistTimer) clearTimeout(offensesPersistTimer);
+  offensesPersistTimer = setTimeout(async () => {
+    offensesPersistTimer = null;
+    try {
+      await commitOffenses(offenses);
+      console.log("[offenses] committed to repo");
+    } catch (err) {
+      console.error("[offenses] remote commit failed", err?.message);
+    }
+  }, 5_000);
+}
+
+function findBannedWord(text) {
+  if (!text || !Array.isArray(config.bannedWords)) return null;
+  const lower = text.toLowerCase();
+  for (const word of config.bannedWords) {
+    if (!word) continue;
+    if (lower.includes(word.toLowerCase())) return word;
+  }
+  return null;
+}
+
+function scheduleWordBanUnmute(guild, userId, durationMs) {
+  const existing = wordBanTimers.get(userId);
+  if (existing) clearTimeout(existing);
+  const handle = setTimeout(async () => {
+    wordBanTimers.delete(userId);
+    try {
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (member && member.voice.channel && member.voice.serverMute) {
+        await member.voice.setMute(false, "Alxcer Guard: word-ban expired");
+        console.log(`[wordban] unmuted ${member.user.tag} after timer`);
+      }
+    } catch (err) {
+      console.error("[wordban] auto-unmute failed", err?.message);
+    }
+    const rec = offenses.users[userId];
+    if (rec) {
+      rec.muteUntil = 0;
+      persistOffenses();
+    }
+    const s = userState.get(userId);
+    if (s) {
+      s.muted = false;
+      s.warned = false;
+      s.lastSpoke = Date.now();
+      s.silentTicks = 0;
+    }
+  }, Math.max(1_000, durationMs));
+  wordBanTimers.set(userId, handle);
+}
+
+async function restorePendingWordBans(guild) {
+  const now = Date.now();
+  for (const [userId, rec] of Object.entries(offenses.users)) {
+    if (!rec || !rec.muteUntil || rec.muteUntil <= now) continue;
+    const remaining = rec.muteUntil - now;
+    try {
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) continue;
+      if (member.voice.channel) {
+        try {
+          await member.voice.setMute(true, "Alxcer Guard: pending word-ban");
+        } catch {}
+      }
+      scheduleWordBanUnmute(guild, userId, remaining);
+      console.log(
+        `[wordban] restored mute for ${member.user.tag}, ~${Math.round(remaining / 1000)}s left`,
+      );
+    } catch (err) {
+      console.error("[wordban] restore failed", err?.message);
+    }
+  }
+}
+
+function formatDuration(seconds) {
+  if (seconds >= 3600) {
+    const h = Math.round(seconds / 3600);
+    return `${h} ชั่วโมง`;
+  }
+  if (seconds >= 60) {
+    const m = Math.round(seconds / 60);
+    return `${m} นาที`;
+  }
+  return `${seconds} วินาที`;
+}
+
 client.once(Events.ClientReady, async (c) => {
   console.log(`[ready] logged in as ${c.user.tag}`);
 
@@ -612,6 +695,7 @@ client.once(Events.ClientReady, async (c) => {
     const guild = await client.guilds.fetch(config.guildId);
     await guild.members.fetch().catch(() => {});
     await reevaluateAndJoin(guild);
+    await restorePendingWordBans(guild);
 
     pollHandle = setInterval(async () => {
       try {
@@ -649,7 +733,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   if (userId && userState.has(userId)) {
     const wasSelfMuted = oldState.selfMute || oldState.serverMute;
     const isSelfMuted = newState.selfMute || newState.serverMute;
-    if (wasSelfMuted && !isSelfMuted) {
+    if (wasSelfMuted && !isSelfMuted && !wordBanTimers.has(userId)) {
       const s = userState.get(userId);
       s.lastSpoke = Date.now();
       s.warned = false;
@@ -659,10 +743,135 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
+  // If a word-banned user joins voice for the first time after the offense,
+  // apply the server mute so the punishment isn't bypassed by being offline.
+  if (userId && wordBanTimers.has(userId)) {
+    const wasInVoice = !!oldState.channelId;
+    const nowInVoice = !!newState.channelId;
+    if (!wasInVoice && nowInVoice) {
+      try {
+        const member = newState.member;
+        if (member && !member.voice.serverMute) {
+          await member.voice.setMute(true, "Alxcer Guard: word-ban active");
+          console.log(`[wordban] applied mute on join for ${member.user.tag}`);
+        }
+      } catch (err) {
+        console.error("[wordban] join-mute failed", err?.message);
+      }
+    }
+  }
+
   try {
     await reevaluateAndJoin(newState.guild);
   } catch (err) {
     console.error("[voiceUpdate] error", err?.message);
+  }
+});
+
+client.on(Events.MessageCreate, async (msg) => {
+  try {
+    if (!msg.guild) return;
+    if (!config.guildId || msg.guild.id !== config.guildId) return;
+    if (msg.author?.bot) return;
+    if (!msg.content) return;
+
+    const word = findBannedWord(msg.content);
+    if (!word) return;
+
+    const userId = msg.author.id;
+    const prev = offenses.users[userId] ?? {
+      count: 0,
+      lastOffenseAt: 0,
+      muteUntil: 0,
+      lastWord: "",
+    };
+
+    const newCount = (prev.count || 0) + 1;
+    const isFirst = newCount <= 1;
+    const muteSec = isFirst
+      ? config.firstOffenseMuteSeconds
+      : config.repeatOffenseMuteSeconds;
+
+    const rec = {
+      count: newCount,
+      lastOffenseAt: Date.now(),
+      muteUntil: Date.now() + muteSec * 1000,
+      lastWord: word,
+    };
+    offenses.users[userId] = rec;
+    persistOffenses();
+
+    console.log(
+      `[wordban] ${msg.author.tag} said "${word}" (offense #${newCount}) → mute ${muteSec}s`,
+    );
+
+    let muteApplied = false;
+    let muteError = null;
+    const member = await msg.guild.members
+      .fetch(userId)
+      .catch(() => null);
+
+    if (member && member.voice.channel) {
+      try {
+        await member.voice.setMute(
+          true,
+          `Alxcer Guard: banned word "${word}" (offense #${newCount})`,
+        );
+        muteApplied = true;
+        scheduleWordBanUnmute(msg.guild, userId, muteSec * 1000);
+        const s = userState.get(userId);
+        if (s) {
+          s.muted = true;
+          s.warned = true;
+          s.lastSpoke = Date.now();
+        }
+      } catch (err) {
+        muteError = err?.message;
+        console.error("[wordban] setMute failed", err?.message);
+      }
+    } else {
+      // User isn't in voice yet — schedule the timer anyway so when they
+      // join, the VoiceStateUpdate handler will re-apply the mute and the
+      // timer will still expire on schedule.
+      scheduleWordBanUnmute(msg.guild, userId, muteSec * 1000);
+    }
+
+    const durationLabel = formatDuration(muteSec);
+    const title = isFirst ? "⚠️ คำเตือน" : "🚫 ทำผิดซ้ำ";
+    const color = isFirst ? 0xfacc15 : 0xef4444;
+    const lines = [
+      `<@${userId}> พิมพ์คำต้องห้าม \`${word}\``,
+      "",
+    ];
+    if (muteApplied) {
+      lines.push(`ปิดไมค์ไว้ **${durationLabel}**`);
+    } else if (muteError) {
+      lines.push(`ตั้งใจปิดไมค์แต่ทำไม่ได้: \`${muteError}\``);
+    } else {
+      lines.push(
+        `ตอนนี้ยังไม่อยู่ในห้องเสียง — เมื่อเข้ามาจะถูกปิดไมค์ทันที (อีก **${durationLabel}**)`,
+      );
+    }
+    lines.push("");
+    lines.push(
+      isFirst
+        ? `*ครั้งแรก: ปิดไมค์ ${formatDuration(config.firstOffenseMuteSeconds)} — ครั้งต่อไป: ${formatDuration(config.repeatOffenseMuteSeconds)}*`
+        : `*ทำผิดครั้งที่ ${newCount} แล้ว — โดนเต็มอัตราโทษ ${formatDuration(config.repeatOffenseMuteSeconds)}*`,
+    );
+
+    const embed = new EmbedBuilder()
+      .setColor(color)
+      .setTitle(title)
+      .setDescription(lines.join("\n"));
+
+    try {
+      await msg.reply({ embeds: [embed], allowedMentions: { repliedUser: true } });
+    } catch (err) {
+      console.error("[wordban] reply failed", err?.message);
+      await announce(msg.guild, { content: `<@${userId}>`, embeds: [embed] });
+    }
+  } catch (err) {
+    console.error("[message] handler error", err?.message);
   }
 });
 
@@ -696,6 +905,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.user.id !== targetUserId) {
         await interaction.reply({
           content: "ปุ่มนี้สำหรับเจ้าของไมค์เท่านั้นครับ",
+          ephemeral: true,
+        });
+        return;
+      }
+      // If the user is currently word-banned, don't let them bypass it via
+      // the silence-mute unmute button.
+      if (wordBanTimers.has(targetUserId)) {
+        const rec = offenses.users[targetUserId];
+        const remaining = rec?.muteUntil
+          ? Math.max(0, Math.round((rec.muteUntil - Date.now()) / 1000))
+          : 0;
+        await interaction.reply({
+          content: `คุณถูกปิดไมค์เนื่องจากใช้คำต้องห้าม — รออีก ${formatDuration(remaining)}`,
           ephemeral: true,
         });
         return;
@@ -738,6 +960,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 function shutdown(signal) {
   console.log(`[shutdown] received ${signal}`);
   if (pollHandle) clearInterval(pollHandle);
+  for (const handle of wordBanTimers.values()) clearTimeout(handle);
+  wordBanTimers.clear();
   for (const guildId of client.guilds.cache.keys()) {
     const conn = getVoiceConnection(guildId);
     if (conn) conn.destroy();
