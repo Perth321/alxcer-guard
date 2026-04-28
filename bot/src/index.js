@@ -29,12 +29,20 @@ import {
   addTranscript,
   getRecent as getRecentTranscripts,
   getStats as getTranscriptStats,
+  loadFromDisk as loadTranscriptsFromDisk,
+  setRemotePersist as setTranscriptRemotePersist,
+  pruneNow as pruneTranscripts,
+  flushNow as flushTranscripts,
 } from "./transcripts.js";
 import {
   loadOffenses,
   writeLocal as writeOffensesLocal,
 } from "./offenses.js";
-import { canPersistRemotely, commitOffenses } from "./github.js";
+import {
+  canPersistRemotely,
+  commitOffenses,
+  commitTranscripts,
+} from "./github.js";
 import {
   isAvailable as isTranscriberAvailable,
   enqueueTranscription,
@@ -131,6 +139,13 @@ const MAX_UTTERANCE_SEC = 12;
 const IDLE_FLUSH_MS = 1500;
 
 const offenses = loadOffenses();
+loadTranscriptsFromDisk();
+if (canPersistRemotely()) {
+  setTranscriptRemotePersist((data) => commitTranscripts(data));
+  console.log("[boot] transcripts will be persisted to repo (7-day retention, auto-prune)");
+} else {
+  console.log("[boot] transcripts kept in-memory only (no GITHUB_TOKEN to persist)");
+}
 const wordBanTimers = new Map();
 let offensesPersistTimer = null;
 
@@ -943,6 +958,14 @@ client.once(Events.ClientReady, async (c) => {
     }, 1_000);
 
     setInterval(() => {
+      try {
+        pruneTranscripts();
+      } catch (err) {
+        console.error("[transcripts] prune error", err?.message);
+      }
+    }, 60 * 60 * 1000);
+
+    setInterval(() => {
       if (!currentChannelId) return;
       const lines = [];
       for (const [uid, s] of userState) {
@@ -1099,12 +1122,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-function shutdown(signal) {
+async function shutdown(signal) {
   console.log(`[shutdown] received ${signal}`);
   if (pollHandle) clearInterval(pollHandle);
   if (audioFlushHandle) clearInterval(audioFlushHandle);
   for (const handle of wordBanTimers.values()) clearTimeout(handle);
   wordBanTimers.clear();
+  try {
+    await flushTranscripts();
+    console.log("[shutdown] transcripts flushed");
+  } catch (err) {
+    console.error("[shutdown] transcript flush failed", err?.message);
+  }
   for (const guildId of client.guilds.cache.keys()) {
     const conn = getVoiceConnection(guildId);
     if (conn) conn.destroy();
