@@ -32,6 +32,7 @@ const __dirname = path.dirname(__filename);
 const GREETING_PATH = path.join(__dirname, "..", "assets", "greeting.mp3");
 const PRANK_SOUNDS = {
   rung: path.join(__dirname, "..", "assets", "rung.mp3"),
+  jinny: path.join(__dirname, "..", "assets", "jinny.mp3"),
 };
 import { loadConfig } from "./config.js";
 import {
@@ -41,7 +42,8 @@ import {
   handleDebugCommand,
   handleTranscribeCommand,
   handleTranscribeComponent,
-  handleRungCommand,
+  handlePrankSound,
+  isPrankCommand,
 } from "./commands.js";
 import {
   addTranscript,
@@ -1273,8 +1275,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await handleTranscribeCommand(interaction, runtime);
         return;
       }
-      if (interaction.commandName === "rung") {
-        await handleRungCommand(interaction, runtime);
+      if (isPrankCommand(interaction.commandName)) {
+        await handlePrankSound(interaction, runtime, interaction.commandName);
         return;
       }
     }

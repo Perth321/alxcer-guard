@@ -38,31 +38,43 @@ export const TRANSCRIBE_COMMAND = new SlashCommandBuilder()
   .setDMPermission(false)
   .toJSON();
 
-export const RUNG_COMMAND = new SlashCommandBuilder()
-  .setName("rung")
-  .setDescription("🔔 เล่นเสียงแกล้งในห้องเสียง (เฉพาะแอดมิน)")
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator.toString())
-  .setDMPermission(false)
-  .toJSON();
+export const PRANK_COMMAND_DEFS = [
+  { name: "rung", emoji: "🔔", desc: "เล่นเสียงกริ่งในห้องเสียง (เฉพาะแอดมิน)" },
+  { name: "jinny", emoji: "🧞", desc: "เล่นเสียงของ Jinny ในห้องเสียง (เฉพาะแอดมิน)" },
+];
+
+export const PRANK_COMMANDS = PRANK_COMMAND_DEFS.map((p) =>
+  new SlashCommandBuilder()
+    .setName(p.name)
+    .setDescription(`${p.emoji} ${p.desc}`)
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator.toString())
+    .setDMPermission(false)
+    .toJSON(),
+);
 
 export async function registerCommands(client) {
   const rest = new REST({ version: "10" }).setToken(client.token);
   const appId = client.application?.id ?? client.user.id;
   const guildId = client.config.guildId;
-  const body = [SETTING_COMMAND, DEBUG_COMMAND, TRANSCRIBE_COMMAND, RUNG_COMMAND];
+  const body = [SETTING_COMMAND, DEBUG_COMMAND, TRANSCRIBE_COMMAND, ...PRANK_COMMANDS];
+  const list = ["setting", "debug", "transcribe", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
+    .map((n) => "/" + n)
+    .join(" ");
 
   if (guildId) {
     await rest.put(Routes.applicationGuildCommands(appId, guildId), { body });
-    console.log(
-      `[commands] registered /setting /debug /transcribe /rung on guild ${guildId}`,
-    );
+    console.log(`[commands] registered ${list} on guild ${guildId}`);
   } else {
     await rest.put(Routes.applicationCommands(appId), { body });
-    console.log("[commands] registered /setting /debug /transcribe /rung globally");
+    console.log(`[commands] registered ${list} globally`);
   }
 }
 
-export async function handleRungCommand(interaction, runtime) {
+export function isPrankCommand(name) {
+  return PRANK_COMMAND_DEFS.some((p) => p.name === name);
+}
+
+export async function handlePrankSound(interaction, runtime, soundName) {
   if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
     await interaction.reply({
       content: "❌ ต้องมีสิทธิ์ **Administrator** เท่านั้นถึงจะใช้คำสั่งนี้ได้",
@@ -72,16 +84,18 @@ export async function handleRungCommand(interaction, runtime) {
   }
   await interaction.deferReply({ ephemeral: true });
   try {
-    const result = await runtime.playPrankSound("rung");
+    const result = await runtime.playPrankSound(soundName);
     if (result.ok) {
+      const def = PRANK_COMMAND_DEFS.find((p) => p.name === soundName);
+      const emoji = def?.emoji ?? "🔊";
       await interaction.editReply({
-        content: `🔔 เล่นเสียงแกล้งในห้อง <#${result.channelId}> แล้ว!`,
+        content: `${emoji} เล่นเสียง \`/${soundName}\` ในห้อง <#${result.channelId}> แล้ว!`,
       });
     } else {
       await interaction.editReply({ content: `⚠️ เล่นไม่ได้: ${result.reason}` });
     }
   } catch (err) {
-    console.error("[rung] error", err?.message);
+    console.error(`[prank:${soundName}] error`, err?.message);
     await interaction.editReply({
       content: `❌ ผิดพลาด: ${err?.message ?? "unknown"}`,
     });
