@@ -99,16 +99,83 @@ export function addTranscript(entry) {
   scheduleRemoteSave();
 }
 
+function withinRange(ts, fromMs, toMs) {
+  if (fromMs != null && ts < fromMs) return false;
+  if (toMs != null && ts >= toMs) return false;
+  return true;
+}
+
 export function getRecent({
   userId = null,
   limit = 20,
   flaggedOnly = false,
+  fromMs = null,
+  toMs = null,
 } = {}) {
   let result = buffer;
+  if (fromMs != null || toMs != null) {
+    result = result.filter((e) => withinRange(e.timestamp, fromMs, toMs));
+  }
   if (flaggedOnly) result = result.filter((e) => e.flagged);
   if (userId) result = result.filter((e) => e.userId === userId);
   if (result.length <= limit) return result.slice();
   return result.slice(-limit);
+}
+
+export function getCursingStats({ fromMs = null, toMs = null } = {}) {
+  const perUser = new Map();
+  let totalFlagged = 0;
+  let totalUtterances = 0;
+  let earliest = null;
+  let latest = null;
+
+  for (const e of buffer) {
+    if (!withinRange(e.timestamp, fromMs, toMs)) continue;
+    totalUtterances++;
+    if (earliest == null || e.timestamp < earliest) earliest = e.timestamp;
+    if (latest == null || e.timestamp > latest) latest = e.timestamp;
+
+    if (!perUser.has(e.userId)) {
+      perUser.set(e.userId, {
+        userId: e.userId,
+        username: e.username || "",
+        totalUtterances: 0,
+        flaggedCount: 0,
+        words: {},
+        lastFlaggedAt: null,
+      });
+    }
+    const rec = perUser.get(e.userId);
+    rec.totalUtterances++;
+    if (e.username && !rec.username) rec.username = e.username;
+
+    if (e.flagged) {
+      totalFlagged++;
+      rec.flaggedCount++;
+      if (e.flaggedWord) {
+        rec.words[e.flaggedWord] = (rec.words[e.flaggedWord] || 0) + 1;
+      }
+      if (rec.lastFlaggedAt == null || e.timestamp > rec.lastFlaggedAt) {
+        rec.lastFlaggedAt = e.timestamp;
+      }
+    }
+  }
+
+  const users = [...perUser.values()].sort((a, b) => {
+    if (b.flaggedCount !== a.flaggedCount) return b.flaggedCount - a.flaggedCount;
+    return b.totalUtterances - a.totalUtterances;
+  });
+
+  return {
+    users,
+    totals: {
+      utterances: totalUtterances,
+      flagged: totalFlagged,
+      uniqueSpeakers: perUser.size,
+      earliest,
+      latest,
+    },
+  };
 }
 
 export function getStats() {

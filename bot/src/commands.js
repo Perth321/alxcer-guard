@@ -32,9 +32,21 @@ export const DEBUG_COMMAND = new SlashCommandBuilder()
 
 export const TRANSCRIBE_COMMAND = new SlashCommandBuilder()
   .setName("transcribe")
-  .setDescription("ดูบันทึกที่บอทถอดเสียงได้ย้อนหลัง")
+  .setDescription("ดูบันทึกเสียงย้อนหลัง 7 วัน — ไม่ใส่อะไรเลย = เห็นทุกคนทุกข้อความ")
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
   .setDMPermission(false)
+  .addBooleanOption((opt) =>
+    opt
+      .setName("stats")
+      .setDescription("แสดงสรุปนับคำหยาบของทุกคน (อันดับ + จำนวนครั้ง)")
+      .setRequired(false),
+  )
+  .addStringOption((opt) =>
+    opt
+      .setName("date")
+      .setDescription("เลือกวัน: today / yesterday / YYYY-MM-DD (เวลาไทย) — ไม่เลือก = 7 วันย้อนหลัง")
+      .setRequired(false),
+  )
   .addUserOption((opt) =>
     opt
       .setName("user")
@@ -122,19 +134,81 @@ export async function handleDebugCommand(interaction, runtime) {
   });
 }
 
+const TZ_OFFSET_MS = 7 * 3600 * 1000;
+
 function formatThaiTime(ts) {
-  const d = new Date(ts + 7 * 3600 * 1000);
+  const d = new Date(ts + TZ_OFFSET_MS);
   const h = String(d.getUTCHours()).padStart(2, "0");
   const m = String(d.getUTCMinutes()).padStart(2, "0");
   const s = String(d.getUTCSeconds()).padStart(2, "0");
   return `${h}:${m}:${s}`;
 }
 
+function formatThaiDate(ts) {
+  const d = new Date(ts + TZ_OFFSET_MS);
+  const y = d.getUTCFullYear();
+  const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const da = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${mo}-${da}`;
+}
+
 function formatRelative(ts) {
   const sec = Math.round((Date.now() - ts) / 1000);
   if (sec < 60) return `${sec}s ago`;
   if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
-  return `${Math.round(sec / 3600)}h ago`;
+  if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
+  return `${Math.round(sec / 86400)}d ago`;
+}
+
+// Resolve a user-supplied date keyword/string to a Thailand-local date range.
+// Returns { fromMs, toMs, label } or { error } if unparsable.
+// Thailand local-day boundaries are computed as UTC + 7h.
+function resolveDateRange(input) {
+  if (!input) return { fromMs: null, toMs: null, label: "7 วันย้อนหลัง" };
+  const raw = String(input).trim().toLowerCase();
+  const nowThai = new Date(Date.now() + TZ_OFFSET_MS);
+  const todayY = nowThai.getUTCFullYear();
+  const todayM = nowThai.getUTCMonth();
+  const todayD = nowThai.getUTCDate();
+
+  function rangeForThaiDate(y, m, d) {
+    // Midnight Thailand time = (UTC midnight of that date) - 7h
+    const startUtc = Date.UTC(y, m, d) - TZ_OFFSET_MS;
+    const endUtc = startUtc + 24 * 3600 * 1000;
+    const label = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    return { fromMs: startUtc, toMs: endUtc, label };
+  }
+
+  if (raw === "all" || raw === "ทั้งหมด") {
+    return { fromMs: null, toMs: null, label: "ทั้งหมด (7 วันย้อนหลัง)" };
+  }
+  if (raw === "today" || raw === "วันนี้") {
+    const r = rangeForThaiDate(todayY, todayM, todayD);
+    return { ...r, label: `วันนี้ (${r.label})` };
+  }
+  if (raw === "yesterday" || raw === "เมื่อวาน") {
+    const yest = new Date(Date.UTC(todayY, todayM, todayD - 1));
+    const r = rangeForThaiDate(
+      yest.getUTCFullYear(),
+      yest.getUTCMonth(),
+      yest.getUTCDate(),
+    );
+    return { ...r, label: `เมื่อวาน (${r.label})` };
+  }
+  const m = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) {
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const d = Number(m[3]);
+    if (mo < 0 || mo > 11 || d < 1 || d > 31) {
+      return { error: "รูปแบบวันที่ไม่ถูกต้อง ใช้ YYYY-MM-DD เช่น 2026-04-28" };
+    }
+    return rangeForThaiDate(y, mo, d);
+  }
+  return {
+    error:
+      "ไม่เข้าใจค่า date — ใช้ `today`, `yesterday`, `all` หรือ `YYYY-MM-DD` (เช่น 2026-04-28)",
+  };
 }
 
 export async function handleTranscribeCommand(interaction, runtime) {
@@ -150,21 +224,94 @@ export async function handleTranscribeCommand(interaction, runtime) {
   const targetUser = interaction.options.getUser("user");
   const limit = interaction.options.getInteger("limit") ?? 20;
   const flaggedOnly = interaction.options.getBoolean("flagged") ?? false;
+  const statsMode = interaction.options.getBoolean("stats") ?? false;
+  const dateInput = interaction.options.getString("date");
+
+  const range = resolveDateRange(dateInput);
+  if (range.error) {
+    await interaction.reply({ content: `❌ ${range.error}`, ephemeral: true });
+    return;
+  }
+
+  const stats = runtime.getTranscriptStats();
+
+  if (statsMode) {
+    const summary = runtime.getCursingStats({
+      fromMs: range.fromMs,
+      toMs: range.toMs,
+    });
+
+    const headerLines = [
+      `**ช่วงเวลา:** ${range.label}`,
+      `**รวม:** ${summary.totals.utterances} ข้อความ · พูด ${summary.totals.uniqueSpeakers} คน · จับคำต้องห้าม ${summary.totals.flagged} ครั้ง`,
+    ];
+
+    if (summary.users.length === 0) {
+      const embed = new EmbedBuilder()
+        .setColor(0x6366f1)
+        .setTitle("📊 สรุปการพูดในห้องเสียง")
+        .setDescription(
+          headerLines.join("\n") +
+            "\n\n_ยังไม่มีข้อมูลในช่วงเวลาที่เลือก_",
+        )
+        .setFooter({ text: footerText(stats) });
+      await interaction.reply({ embeds: [embed], ephemeral: true });
+      return;
+    }
+
+    // Filter to people who actually said something flagged when we have any flagged at all,
+    // otherwise show top speakers.
+    const showOnlyFlagged = summary.totals.flagged > 0;
+    const ranked = showOnlyFlagged
+      ? summary.users.filter((u) => u.flaggedCount > 0)
+      : summary.users;
+    const topN = ranked.slice(0, 15);
+
+    const rows = topN.map((u, i) => {
+      const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}.`;
+      const wordList = Object.entries(u.words)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([w, c]) => `\`${w}\`×${c}`)
+        .join(" ");
+      const last = u.lastFlaggedAt
+        ? ` · ล่าสุด ${formatRelative(u.lastFlaggedAt)}`
+        : "";
+      const wordPart = wordList ? `\n   ↳ ${wordList}${last}` : "";
+      return `${medal} <@${u.userId}> — **${u.flaggedCount}** ครั้ง _(พูดทั้งหมด ${u.totalUtterances})_${wordPart}`;
+    });
+
+    const titleSuffix = showOnlyFlagged ? "อันดับคนพูดคำต้องห้าม" : "คนพูดเยอะที่สุด";
+
+    const embed = new EmbedBuilder()
+      .setColor(showOnlyFlagged ? 0xef4444 : 0x6366f1)
+      .setTitle(`📊 ${titleSuffix}`)
+      .setDescription(
+        headerLines.join("\n") + "\n\n" + rows.join("\n\n").slice(0, 3800),
+      )
+      .setFooter({ text: footerText(stats) });
+
+    await interaction.reply({ embeds: [embed], ephemeral: true });
+    return;
+  }
 
   const entries = runtime.getRecentTranscripts({
     userId: targetUser?.id ?? null,
     limit,
     flaggedOnly,
+    fromMs: range.fromMs,
+    toMs: range.toMs,
   });
-  const stats = runtime.getTranscriptStats();
 
   if (entries.length === 0) {
-    const reason = flaggedOnly
-      ? "ยังไม่มีรายการที่จับคำต้องห้ามได้"
-      : targetUser
-        ? `ยังไม่มีบันทึกเสียงของ <@${targetUser.id}> ในรอบนี้`
-        : "ยังไม่มีบันทึกเสียงในรอบนี้ (บอทเริ่มเก็บใหม่ทุกครั้งที่ workflow รีสตาร์ท)";
-    await interaction.reply({ content: reason, ephemeral: true });
+    const reasons = [];
+    if (flaggedOnly) reasons.push("ที่จับคำต้องห้ามได้");
+    if (targetUser) reasons.push(`ของ <@${targetUser.id}>`);
+    const reasonText = reasons.length > 0 ? reasons.join(" ") : "";
+    await interaction.reply({
+      content: `ยังไม่มีบันทึกเสียง${reasonText ? " " + reasonText : ""}ในช่วง **${range.label}**`,
+      ephemeral: true,
+    });
     return;
   }
 
@@ -172,21 +319,18 @@ export async function handleTranscribeCommand(interaction, runtime) {
 
   const lines = sorted.map((e) => {
     const t = formatThaiTime(e.timestamp);
+    const d = formatThaiDate(e.timestamp);
     const rel = formatRelative(e.timestamp);
     const flag = e.flagged ? "⚠️ " : "";
     const dur = e.durationSec ? ` · ${e.durationSec.toFixed(1)}s` : "";
-    const text =
-      e.text.length > 200 ? e.text.slice(0, 197) + "..." : e.text;
-    return `${flag}\`${t}\` (${rel}) <@${e.userId}>${dur}\n> ${text}`;
+    const text = e.text.length > 200 ? e.text.slice(0, 197) + "..." : e.text;
+    return `${flag}\`${d} ${t}\` (${rel}) <@${e.userId}>${dur}\n> ${text}`;
   });
 
-  const headerParts = [];
+  const headerParts = [`📅 ${range.label}`];
   if (targetUser) headerParts.push(`ของ <@${targetUser.id}>`);
   if (flaggedOnly) headerParts.push("⚠️ เฉพาะคำต้องห้าม");
-  const header =
-    headerParts.length > 0
-      ? `บันทึกเสียง${headerParts.join(" · ")} ล่าสุด ${entries.length} รายการ (ใหม่สุดอยู่บน)`
-      : `บันทึกเสียงล่าสุด ${entries.length} รายการ (ใหม่สุดอยู่บน)`;
+  const header = `บันทึกเสียง · ${headerParts.join(" · ")} — ล่าสุด ${entries.length} รายการ (ใหม่สุดอยู่บน)`;
 
   let body = lines.join("\n\n");
   if (body.length > 3700) {
@@ -217,7 +361,7 @@ function footerText(stats) {
     const days = (Date.now() - stats.oldest) / (24 * 3600 * 1000);
     parts.push(`เก่าสุด ${days < 1 ? `${Math.round(days * 24)} ชม.` : `${days.toFixed(1)} วัน`} ที่แล้ว`);
   }
-  parts.push(`เก็บอัตโนมัติ ${stats.retentionDays || 7} วัน · UTC+7`);
+  parts.push(`ลบอัตโนมัติเมื่อครบ ${stats.retentionDays || 7} วัน · UTC+7`);
   return parts.join(" · ");
 }
 

@@ -29,6 +29,7 @@ import {
   addTranscript,
   getRecent as getRecentTranscripts,
   getStats as getTranscriptStats,
+  getCursingStats,
   loadFromDisk as loadTranscriptsFromDisk,
   setRemotePersist as setTranscriptRemotePersist,
   pruneNow as pruneTranscripts,
@@ -165,6 +166,7 @@ const runtime = {
   transcriptionAvailable: () => transcriptionAvailable,
   getRecentTranscripts: (opts) => getRecentTranscripts(opts),
   getTranscriptStats: () => getTranscriptStats(),
+  getCursingStats: (opts) => getCursingStats(opts),
   snapshot: () => {
     const now = Date.now();
     const conn = config.guildId ? getVoiceConnection(config.guildId) : null;
