@@ -83,41 +83,58 @@ import {
 import { generateReply, shouldEngage, aiAvailable } from "./ai.js";
 import { isAdmin, runAgent } from "./agent.js";
 
+// Force-load every crypto candidate eagerly so @discordjs/voice's lazy loader
+// can pick whichever one is actually available, AND we can see in the boot log
+// exactly which ones loaded vs failed (instead of silent-failing).
 let cryptoLib = "unknown";
-const cryptoErrors = [];
-try {
-  await import("sodium-native");
-  cryptoLib = "sodium-native";
-} catch (e1) {
-  cryptoErrors.push(`sodium-native: ${e1?.message?.slice(0, 100)}`);
+const cryptoTried = [];
+async function tryCrypto(name, validate) {
   try {
-    // @stablelib/xchacha20poly1305 is the supported pure-JS AEAD lib for
-    // @discordjs/voice ≥0.18 (Discord switched to AEAD-only encryption in late 2024).
-    // libsodium-wrappers@0.7.15 is broken on Node 22 ESM (missing internal .mjs file),
-    // so we no longer rely on it.
-    const stable = await import("@stablelib/xchacha20poly1305");
-    if (!stable.XChaCha20Poly1305) throw new Error("XChaCha20Poly1305 export missing");
-    cryptoLib = "@stablelib/xchacha20poly1305";
-  } catch (e2) {
-    cryptoErrors.push(`@stablelib/xchacha20poly1305: ${e2?.message?.slice(0, 100)}`);
-    try {
-      const sodium = await import("libsodium-wrappers");
-      const mod = sodium.default ?? sodium;
-      if (!mod?.ready) throw new Error("libsodium-wrappers .ready missing");
-      await mod.ready;
-      cryptoLib = "libsodium-wrappers";
-    } catch (e3) {
-      cryptoErrors.push(`libsodium-wrappers: ${e3?.message?.slice(0, 100)}`);
-      cryptoLib = "none-found";
-    }
+    const mod = await import(name);
+    if (validate) await validate(mod);
+    cryptoTried.push(`✓ ${name}`);
+    return true;
+  } catch (err) {
+    cryptoTried.push(`✗ ${name}: ${err?.message?.slice(0, 90)}`);
+    return false;
   }
 }
+if (await tryCrypto("sodium-native")) cryptoLib = "sodium-native";
+else if (
+  await tryCrypto("@stablelib/xchacha20poly1305", async (m) => {
+    if (!m.XChaCha20Poly1305) throw new Error("XChaCha20Poly1305 export missing");
+    // smoke-test actual encrypt/decrypt to ensure WASM/JS path works
+    const c = new m.XChaCha20Poly1305(new Uint8Array(32));
+    const ct = c.seal(new Uint8Array(24), new Uint8Array([1, 2, 3]));
+    if (!ct || ct.length < 3) throw new Error("seal returned invalid output");
+  })
+) cryptoLib = "@stablelib/xchacha20poly1305";
+else if (await tryCrypto("@noble/ciphers/chacha")) cryptoLib = "@noble/ciphers";
+else if (
+  await tryCrypto("libsodium-wrappers", async (m) => {
+    const sodium = m.default ?? m;
+    if (!sodium?.ready) throw new Error(".ready missing");
+    await sodium.ready;
+  })
+) cryptoLib = "libsodium-wrappers";
+else cryptoLib = "none-found";
+console.log(`[boot] crypto candidates:\n  ${cryptoTried.join("\n  ")}`);
+console.log(`[boot] selected voice crypto library: ${cryptoLib}`);
+
+// Print @discordjs/voice's own dependency report — the source of truth for
+// what it actually picked (opus encoder, encryption lib, ffmpeg, DAVE).
+try {
+  const { generateDependencyReport } = await import("@discordjs/voice");
+  console.log("[boot] @discordjs/voice dependency report:\n" + generateDependencyReport());
+} catch (err) {
+  console.error("[boot] could not load @discordjs/voice for report:", err?.message);
+}
+
 if (cryptoLib === "none-found") {
   console.error(
-    `[boot] FATAL voice crypto failure — voice playback (/rung /jinny /jan, greeting) and voice receiving will NOT work. Tried:\n  ${cryptoErrors.join("\n  ")}`,
+    "[boot] FATAL voice crypto failure — voice playback (/rung /jinny /jan, greeting) and voice receiving will NOT work.",
   );
 }
-console.log(`[boot] voice crypto library: ${cryptoLib}`);
 
 const transcriptionAvailable = await isTranscriberAvailable();
 if (!transcriptionAvailable) {
@@ -534,6 +551,27 @@ async function playSoundFile(connection, filePath, label = "sound", timeoutMs = 
     console.warn(`[${label}] file not found at ${filePath}`);
     return false;
   }
+  // Diagnostics: surface file size + connection state before attempting playback
+  try {
+    const st = fs.statSync(filePath);
+    console.log(
+      `[${label}] file=${path.basename(filePath)} size=${st.size}B connState=${connection.state.status}`,
+    );
+  } catch {}
+  if (connection.state.status !== VoiceConnectionStatus.Ready) {
+    console.warn(
+      `[${label}] connection not Ready (state=${connection.state.status}) — waiting up to 10s`,
+    );
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
+      console.log(`[${label}] connection now Ready`);
+    } catch {
+      console.error(
+        `[${label}] connection still not Ready (state=${connection.state.status}) — playback would be silent, aborting`,
+      );
+      return false;
+    }
+  }
   playingFiles.add(filePath);
   let subscription = null;
   let player = null;
@@ -545,26 +583,48 @@ async function playSoundFile(connection, filePath, label = "sound", timeoutMs = 
     player = createAudioPlayer({
       behaviors: { noSubscriber: NoSubscriberBehavior.Play },
     });
+    // Verbose audio events to diagnose silent-but-green-ring symptom
+    player.on("stateChange", (oldS, newS) => {
+      console.log(
+        `[${label}] player ${oldS.status} -> ${newS.status}` +
+          (newS.resource ? ` (started=${newS.resource.started}, ended=${newS.resource.ended})` : ""),
+      );
+    });
+    player.on("debug", (msg) => {
+      // prism-media + opus encoder diagnostics
+      if (msg && (msg.includes("error") || msg.includes("ffmpeg") || msg.includes("opus"))) {
+        console.log(`[${label}] player debug: ${msg.slice(0, 300)}`);
+      }
+    });
     subscription = connection.subscribe(player);
     if (!subscription) {
       console.warn(`[${label}] connection.subscribe returned null`);
       return false;
     }
     player.play(resource);
-    console.log(`[${label}] playing ${filePath}`);
+    console.log(`[${label}] play() called for ${path.basename(filePath)}`);
     await new Promise((resolve) => {
       const timeout = setTimeout(() => {
-        console.warn(`[${label}] timed out after ${timeoutMs}ms`);
+        console.warn(
+          `[${label}] timed out after ${timeoutMs}ms (player=${player.state.status}, packetsRead=${resource?.playStream?.readableLength ?? "?"})`,
+        );
         try { player.stop(); } catch {}
         resolve();
       }, timeoutMs);
       player.on(AudioPlayerStatus.Idle, () => {
-        console.log(`[${label}] finished`);
+        const dur = resource?.playbackDuration ?? 0;
+        console.log(`[${label}] finished, playbackDuration=${dur}ms`);
+        if (dur < 100) {
+          console.warn(
+            `[${label}] WARNING: playbackDuration <100ms — audio likely never reached Discord. ` +
+              `Check ffmpeg/opus pipeline in dependency report above.`,
+          );
+        }
         clearTimeout(timeout);
         resolve();
       });
       player.on("error", (err) => {
-        console.error(`[${label}] player error:`, err?.message);
+        console.error(`[${label}] player error:`, err?.message, err?.stack?.split("\n")[1]?.trim());
         clearTimeout(timeout);
         resolve();
       });
