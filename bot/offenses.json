@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 5,
-        "lastAt": 1777470252272,
+        "count": 6,
+        "lastAt": 1777472992518,
         "history": [
           {
             "at": 1777441316268,
@@ -54,6 +54,15 @@
             "excerpt": "ไม่ได้กินค้าบ",
             "action": "timeout_failed",
             "source": "ai"
+          },
+          {
+            "at": 1777472992518,
+            "severity": 7,
+            "matched": "สัส",
+            "reason": "ใช้คำต้องห้าม: \"สัส\"",
+            "excerpt": "สัส",
+            "action": "timeout_failed",
+            "source": "local"
           }
         ]
       }
