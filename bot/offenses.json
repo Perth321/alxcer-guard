@@ -7,9 +7,19 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 0,
-        "lastAt": 0,
-        "history": []
+        "count": 1,
+        "lastAt": 1777483111839,
+        "history": [
+          {
+            "at": 1777483111839,
+            "severity": 7,
+            "matched": "สัส",
+            "reason": "ใช้คำต้องห้าม: \"สัส\"",
+            "excerpt": "กวนตีนไอสัส",
+            "action": "timeout_failed",
+            "source": "local"
+          }
+        ]
       },
       "times": 0
     },
