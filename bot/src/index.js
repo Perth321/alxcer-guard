@@ -1486,7 +1486,20 @@ async function handleAgentOrChatReply(msg, triggerReason) {
     .slice(-8)
     .map((m) => ({ role: "user", content: `${m.author}: ${m.content}` }));
 
-  const cleanContent = (msg.content || "").replace(/<@!?\d+>/g, "").trim() || "(empty mention)";
+  // Strip mention markup, but keep a list of mentioned users so the agent can
+  // act on them directly (e.g. "ปิดไมค์ @Alex" works even after we strip "<@id>").
+  const rawText = msg.content || "";
+  const mentionedUsers = [...msg.mentions.users.values()]
+    .filter((u) => u.id !== client.user.id) // ignore the bot's own mention
+    .map((u) => {
+      const m = guild.members.cache.get(u.id);
+      return { id: u.id, name: m?.displayName || u.username };
+    });
+  let cleanText = rawText.replace(/<@!?\d+>/g, "").trim();
+  if (!cleanText) cleanText = "(empty mention)";
+  const userPrompt = mentionedUsers.length
+    ? `${cleanText}\n\n[mentioned users in this message]: ${mentionedUsers.map((m) => `${m.name} (id: ${m.id})`).join(", ")}`
+    : cleanText;
 
   await channel.sendTyping().catch(() => {});
 
@@ -1496,7 +1509,7 @@ async function handleAgentOrChatReply(msg, triggerReason) {
     attemptedAgent = true;
     try {
       const result = await runAgent({
-        userPrompt: cleanContent,
+        userPrompt,
         ctx: {
           guild,
           channel,

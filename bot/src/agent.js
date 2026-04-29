@@ -387,6 +387,20 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "get_recent_offenses",
+      description:
+        "Get the most recent offense events across the WHOLE server (who did what, when, what word, severity). Use this when the admin asks 'ตรวจสอบบันทึก', 'ใครทำอะไรบ้าง', 'ดู log ล่าสุด'.",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: { type: "number", description: "1-30, default 10" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "clear_user_offenses",
       description: "Reset the offense counters for a user.",
       parameters: {
@@ -454,8 +468,11 @@ async function fuzzyFindChannels(guild, query, kind = "any") {
 async function execTool(name, args, ctx) {
   const { guild, channel, offenses, persistOffenses, authorId } = ctx;
 
-  // Hard guardrail: never moderate the admin who's talking to us, and never
-  // moderate fellow admins. Applies to any per-user moderation tool.
+  // Guardrails for per-user moderation tools:
+  //  1. Never moderate the admin issuing the command.
+  //  2. Never moderate the guild owner.
+  //  3. Only moderate users whose highest role is BELOW the bot's highest role
+  //     (Discord won't let us anyway, but we want a clean error message).
   const PROTECTED_TOOLS = new Set([
     "voice_mute", "voice_deafen", "voice_disconnect", "voice_move",
     "timeout_user", "kick_user", "ban_user", "set_nickname",
@@ -465,10 +482,18 @@ async function execTool(name, args, ctx) {
     if (args.user_id === authorId) {
       return { error: "refused: cannot moderate the admin issuing this command" };
     }
+    if (args.user_id === guild.ownerId) {
+      return { error: "refused: target is the server owner" };
+    }
     try {
       const target = await guild.members.fetch(args.user_id);
-      if (target.permissions.has(PermissionFlagsBits.Administrator)) {
-        return { error: "refused: target is also a server admin" };
+      const me = guild.members.me;
+      const myTop = me?.roles?.highest?.position ?? 0;
+      const targetTop = target.roles?.highest?.position ?? 0;
+      if (targetTop >= myTop) {
+        return {
+          error: `refused: target's highest role (position ${targetTop}) is at or above the bot's highest role (position ${myTop}). Move the bot's role above theirs in Server Settings → Roles.`,
+        };
       }
     } catch {
       // ignore — let the actual call fail naturally
@@ -680,13 +705,60 @@ async function execTool(name, args, ctx) {
     }
     case "get_user_offenses": {
       const rec = offenses.users?.[args.user_id];
+      let displayName = args.user_id;
+      try {
+        const m = await guild.members.fetch(args.user_id);
+        displayName = m.displayName;
+      } catch {}
       return {
         user_id: args.user_id,
+        display_name: displayName,
         voice_offenses: rec?.times || 0,
         last_voice_word: rec?.lastWord || null,
         chat_offense_count: rec?.chat?.count || 0,
         chat_history: (rec?.chat?.history || []).slice(-10),
       };
+    }
+    case "get_recent_offenses": {
+      const limit = Math.max(1, Math.min(30, Number(args.limit || 10)));
+      const events = [];
+      const users = offenses.users || {};
+      for (const [uid, rec] of Object.entries(users)) {
+        const history = rec?.chat?.history || [];
+        for (const h of history) {
+          events.push({
+            user_id: uid,
+            at: h.at,
+            severity: h.severity,
+            matched: h.matched,
+            reason: h.reason,
+            excerpt: (h.excerpt || "").slice(0, 120),
+            action: h.action,
+            source: h.source,
+          });
+        }
+        if (rec?.lastOffenseAt && rec.lastSource === "voice") {
+          events.push({
+            user_id: uid,
+            at: rec.lastOffenseAt,
+            matched: rec.lastWord,
+            source: "voice",
+            reason: "voice offense",
+          });
+        }
+      }
+      events.sort((a, b) => (b.at || 0) - (a.at || 0));
+      const top = events.slice(0, limit);
+      // Resolve display names for the top events
+      for (const e of top) {
+        try {
+          const m = await guild.members.fetch(e.user_id);
+          e.display_name = m.displayName;
+        } catch {
+          e.display_name = e.user_id;
+        }
+      }
+      return { recent_offenses: top };
     }
     case "clear_user_offenses": {
       if (offenses.users?.[args.user_id]) {
@@ -736,19 +808,36 @@ async function buildServerSnapshot(guild) {
   }
 }
 
-const AGENT_SYSTEM = `You are operating in ADMIN OPS MODE for the Alxcer Guard server. The user speaking to you is a verified server administrator. Set aside your normal sassy persona — be a competent, no-nonsense ops assistant.
+const AGENT_SYSTEM = `You are operating in ADMIN OPS MODE for the Alxcer Guard server. The user speaking to you is a verified server administrator. Drop your normal sassy persona — be a competent, no-nonsense ops assistant. Read the admin's request carefully and act.
+
+THAI VERB CHEAT-SHEET (read carefully — this is where you usually mess up):
+  • "ปิดไมค์ X" / "ปิดเสียง X" / "mute X"        → voice_mute(X)
+  • "เปิดไมค์ X" / "ยกเลิกปิดไมค์ X" / "unmute X" → voice_unmute(X)
+  • "ทำให้หูหนวก X" / "deafen X"                   → voice_deafen(X)
+  • "ยกเลิกหูหนวก X"                              → voice_undeafen(X)
+  • "เตะออกจากห้องเสียง X" / "disconnect X"        → voice_disconnect(X)
+  • "ย้าย X ไปห้อง Y"                             → voice_move(X, Y)
+  • "เตะ X" (ออกจาก server)                       → kick_user(X)
+  • "แบน X" / "ban X"                              → ban_user(X)
+  • "timeout X N นาที"                            → timeout_user(X, N*60)
+  • "ลบ N ข้อความ" / "ลบข้อความล่าสุด N"           → bulk_delete_messages(count=N)
+  • "ตรวจสอบบันทึก" / "ใครทำอะไรบ้าง" / "ดูประวัติ" → get_recent_offenses
+  • "ดูประวัติ X"                                  → get_user_offenses(X)
+NEVER swap "ปิด" and "เปิด". They are opposites. If the admin says "ปิด" they want to mute / disable / remove access.
+
+INPUT FORMAT
+  • The admin's message may include "[mentioned users in this message]: Name (id: 123...), ..." — those are real Discord mentions. ALWAYS use those IDs directly when the admin's command refers to "@Name" or "this person". Do NOT call resolve_user for users that are already in the mention list.
+  • If a name is in the message but NOT in the mention list, then call resolve_user.
 
 CORE RULES
-1. JUST DO IT. If the admin clearly asks for an action ("ปิดไมค์ A", "เตะ B", "ลบ 10 ข้อความ", "แบน C เลย"), execute it immediately with the right tool. Do NOT ask for confirmation. Do NOT pre-announce. Just act and report the result in one short sentence.
-2. Names → IDs: when the admin uses a person's name, call resolve_user first. If exactly one strong match, proceed. If multiple, ask which one in one short line. If zero, say so.
-3. Channel names → IDs: same pattern with resolve_channel.
-4. The conversation includes a SERVER SNAPSHOT — use it as your default source of truth before calling list_* tools.
-5. Chain tool calls when the request implies multiple steps. Example: "ปิดไมค์ทุกคนใน General" → list_voice_members → voice_mute on each non-admin.
-6. SAFETY: Never moderate the admin talking to you, and never moderate other admins. The tool layer also blocks this — if you see an "admin" error, just explain politely.
-7. Reply in Thai by default, English if the admin wrote English. Keep replies SHORT (1–2 sentences). No markdown headers, no preamble.
-8. After actions, report briefly: "ปิดไมค์ A แล้ว", "ลบ 5 ข้อความ", "แบน C เรียบร้อย".
-9. If a tool fails, retry with a sensible alternative once before giving up.
-10. If the admin is just chatting (no command), reply naturally without tools.`;
+1. JUST DO IT. If the request is clear ("ปิดไมค์ @Alex"), call the right tool immediately. No confirmation, no preamble.
+2. Use the SERVER SNAPSHOT and the mention list as your first sources before calling list_* tools.
+3. Chain tool calls when needed. Example: "ปิดไมค์ทุกคนใน General ที่ไม่ใช่แอดมิน" → list_voice_members → voice_mute on each non-admin.
+4. SAFETY: Never moderate the admin talking to you, never moderate the server owner, and never moderate users whose role is at or above the bot's role. The tool layer enforces this and will return an "error: refused..." — explain that politely if it happens. EVERYONE ELSE, including other admins / mods, is fair game if the admin asks.
+5. Reply in Thai by default (English if admin used English). SHORT (1–2 sentences), no markdown headers.
+6. After every action report briefly with the user's display name: "ปิดไมค์ Alex แล้ว", "ลบ 10 ข้อความ", "แบน Bob เรียบร้อย".
+7. If a tool returns an error, read it. Retry with a fix once if obvious (e.g. user isn't in voice → try anyway / explain). Otherwise tell the admin what failed in one line.
+8. Only chat (no tools) when the admin clearly isn't asking for an action.`;
 
 export async function runAgent({ userPrompt, ctx, maxSteps = 8 }) {
   if (!aiAvailable()) return "AI ยังไม่พร้อม (OPENROUTER_API_KEY ไม่ได้ตั้ง)";
