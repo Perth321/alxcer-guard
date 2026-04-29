@@ -56,8 +56,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 2,
-        "lastAt": 1777442457140,
+        "count": 3,
+        "lastAt": 1777446345749,
         "history": [
           {
             "at": 1777442447808,
@@ -76,6 +76,15 @@
             "excerpt": "ควย",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1777446345749,
+            "severity": 7,
+            "matched": "ตี๊",
+            "reason": "ใช้คำหยาบคาย",
+            "excerpt": "เปลี่ยนชื่อ <@603182413660684321> เปลี่ยนเป็น กูตี๊",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
