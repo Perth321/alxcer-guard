@@ -1,57 +1,21 @@
 {
   "users": {
     "603182413660684321": {
-      "count": 6,
-      "lastOffenseAt": 1777441315567,
-      "muteUntil": 0,
+      "count": 7,
+      "lastOffenseAt": 1777453254304,
+      "muteUntil": 1777456854304,
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 5,
-        "lastAt": 1777453055722,
+        "count": 1,
+        "lastAt": 1777453255285,
         "history": [
           {
-            "at": 1777441316268,
+            "at": 1777453255285,
             "severity": 7,
             "matched": "หี",
             "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "Alxcer guard ตอบกูอีเหี้ย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777441503964,
-            "severity": 7,
-            "matched": "แจนไก้",
-            "reason": "ใช้คำหยาบคาย",
-            "excerpt": "!th แจนไก้ยินไหม",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1777442456461,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777442555844,
-            "severity": 7,
-            "matched": "เย็ด",
-            "reason": "ใช้คำต้องห้าม: \"เย็ด\"",
-            "excerpt": "ไออ้วนเย็ดแม่",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777453055722,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
+            "excerpt": "พิมพ์เหี้ยไรนิ6655566555",
             "action": "timeout_failed",
             "source": "local"
           }
