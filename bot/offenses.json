@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 2,
-        "lastAt": 1777453337615,
+        "count": 3,
+        "lastAt": 1777453436000,
         "history": [
           {
             "at": 1777453255285,
@@ -27,6 +27,15 @@
             "excerpt": "ไอสัสใครเข้านายมึงวะการ์ด กูงง",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1777453436000,
+            "severity": 7,
+            "matched": "เสือก",
+            "reason": "ใช้คำหยาบคาย",
+            "excerpt": "อันนี้เสือก กุไม่ได้เรียกมึง5665555",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
