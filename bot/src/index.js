@@ -84,17 +84,38 @@ import { generateReply, shouldEngage, aiAvailable } from "./ai.js";
 import { isAdmin, runAgent } from "./agent.js";
 
 let cryptoLib = "unknown";
+const cryptoErrors = [];
 try {
   await import("sodium-native");
   cryptoLib = "sodium-native";
-} catch {
+} catch (e1) {
+  cryptoErrors.push(`sodium-native: ${e1?.message?.slice(0, 100)}`);
   try {
-    const sodium = await import("libsodium-wrappers");
-    await sodium.default.ready;
-    cryptoLib = "libsodium-wrappers";
-  } catch {
-    cryptoLib = "none-found";
+    // @stablelib/xchacha20poly1305 is the supported pure-JS AEAD lib for
+    // @discordjs/voice ≥0.18 (Discord switched to AEAD-only encryption in late 2024).
+    // libsodium-wrappers@0.7.15 is broken on Node 22 ESM (missing internal .mjs file),
+    // so we no longer rely on it.
+    const stable = await import("@stablelib/xchacha20poly1305");
+    if (!stable.XChaCha20Poly1305) throw new Error("XChaCha20Poly1305 export missing");
+    cryptoLib = "@stablelib/xchacha20poly1305";
+  } catch (e2) {
+    cryptoErrors.push(`@stablelib/xchacha20poly1305: ${e2?.message?.slice(0, 100)}`);
+    try {
+      const sodium = await import("libsodium-wrappers");
+      const mod = sodium.default ?? sodium;
+      if (!mod?.ready) throw new Error("libsodium-wrappers .ready missing");
+      await mod.ready;
+      cryptoLib = "libsodium-wrappers";
+    } catch (e3) {
+      cryptoErrors.push(`libsodium-wrappers: ${e3?.message?.slice(0, 100)}`);
+      cryptoLib = "none-found";
+    }
   }
+}
+if (cryptoLib === "none-found") {
+  console.error(
+    `[boot] FATAL voice crypto failure — voice playback (/rung /jinny /jan, greeting) and voice receiving will NOT work. Tried:\n  ${cryptoErrors.join("\n  ")}`,
+  );
 }
 console.log(`[boot] voice crypto library: ${cryptoLib}`);
 
