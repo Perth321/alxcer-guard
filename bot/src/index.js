@@ -1501,6 +1501,7 @@ async function handleAgentOrChatReply(msg, triggerReason) {
           guild,
           channel,
           authorTag: author.tag,
+          authorId: author.id,
           offenses,
           persistOffenses: async () => persistOffenses(),
         },
