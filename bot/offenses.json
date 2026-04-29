@@ -1,21 +1,21 @@
 {
   "users": {
     "603182413660684321": {
-      "count": 5,
-      "lastOffenseAt": 1777441251287,
-      "muteUntil": 1777444851287,
+      "count": 6,
+      "lastOffenseAt": 1777441315567,
+      "muteUntil": 1777444915567,
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
         "count": 1,
-        "lastAt": 1777441252237,
+        "lastAt": 1777441316268,
         "history": [
           {
-            "at": 1777441252237,
+            "at": 1777441316268,
             "severity": 7,
             "matched": "หี",
             "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "หี",
+            "excerpt": "Alxcer guard ตอบกูอีเหี้ย",
             "action": "timeout_failed",
             "source": "local"
           }
