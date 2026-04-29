@@ -106,8 +106,8 @@
     },
     "264669488035659778": {
       "chat": {
-        "count": 2,
-        "lastAt": 1777446001778,
+        "count": 3,
+        "lastAt": 1777446182156,
         "history": [
           {
             "at": 1777445962425,
@@ -125,6 +125,15 @@
             "reason": "ใช้คำหยาบ",
             "excerpt": "โดนแน่",
             "action": "timeout_300s",
+            "source": "ai"
+          },
+          {
+            "at": 1777446182156,
+            "severity": 4,
+            "matched": "มึง",
+            "reason": "ใช้คำหยาบคาย",
+            "excerpt": "มึงอย่าทำงานมั่ว",
+            "action": "timeout_1800s",
             "source": "ai"
           }
         ]
