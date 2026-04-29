@@ -113,17 +113,17 @@
       }
     },
     "1489640817089052682": {
-      "count": 1,
-      "lastOffenseAt": 1777480016874,
-      "muteUntil": 1777480076874,
+      "count": 2,
+      "lastOffenseAt": 1777480023107,
+      "muteUntil": 1777483623107,
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
         "count": 1,
-        "lastAt": 1777480017690,
+        "lastAt": 1777480024728,
         "history": [
           {
-            "at": 1777480017690,
+            "at": 1777480024728,
             "severity": 7,
             "matched": "หี",
             "reason": "ใช้คำต้องห้าม: \"หี\"",
