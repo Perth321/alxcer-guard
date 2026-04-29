@@ -1,39 +1,57 @@
 {
   "users": {
     "603182413660684321": {
-      "count": 7,
-      "lastOffenseAt": 1777453254304,
+      "count": 6,
+      "lastOffenseAt": 1777441315567,
       "muteUntil": 0,
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 3,
-        "lastAt": 1777453436000,
+        "count": 5,
+        "lastAt": 1777470252272,
         "history": [
           {
-            "at": 1777453255285,
+            "at": 1777441316268,
             "severity": 7,
             "matched": "หี",
             "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "พิมพ์เหี้ยไรนิ6655566555",
+            "excerpt": "Alxcer guard ตอบกูอีเหี้ย",
             "action": "timeout_failed",
             "source": "local"
           },
           {
-            "at": 1777453337615,
+            "at": 1777441503964,
             "severity": 7,
-            "matched": "สัส",
-            "reason": "ใช้คำต้องห้าม: \"สัส\"",
-            "excerpt": "ไอสัสใครเข้านายมึงวะการ์ด กูงง",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777453436000,
-            "severity": 7,
-            "matched": "เสือก",
+            "matched": "แจนไก้",
             "reason": "ใช้คำหยาบคาย",
-            "excerpt": "อันนี้เสือก กุไม่ได้เรียกมึง5665555",
+            "excerpt": "!th แจนไก้ยินไหม",
+            "action": "timeout_failed",
+            "source": "ai"
+          },
+          {
+            "at": 1777442456461,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควย",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1777442555844,
+            "severity": 7,
+            "matched": "เย็ด",
+            "reason": "ใช้คำต้องห้าม: \"เย็ด\"",
+            "excerpt": "ไออ้วนเย็ดแม่",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1777470252271,
+            "severity": 7,
+            "matched": "ค้าบ",
+            "reason": "ใช้คำหยาบคาย",
+            "excerpt": "ไม่ได้กินค้าบ",
             "action": "timeout_failed",
             "source": "ai"
           }
@@ -85,22 +103,7 @@
       "lastOffenseAt": 1777384379910,
       "muteUntil": 0,
       "lastWord": "หี",
-      "lastSource": "chat",
-      "chat": {
-        "count": 1,
-        "lastAt": 1777453823730,
-        "history": [
-          {
-            "at": 1777453823730,
-            "severity": 7,
-            "matched": "ยงะ",
-            "reason": "ใช้คำหยาบ",
-            "excerpt": "เปิดลำโพงยงะ",
-            "action": "timeout_failed",
-            "source": "ai"
-          }
-        ]
-      }
+      "lastSource": "chat"
     },
     "1491387879648264347": {
       "chat": {
