@@ -8,6 +8,7 @@ import {
   EmbedBuilder,
   ChannelType,
   Events,
+  PermissionFlagsBits,
 } from "discord.js";
 import {
   joinVoiceChannel,
@@ -1260,6 +1261,11 @@ client.once(Events.ClientReady, async (c) => {
     await guild.members.fetch().catch(() => {});
     await reevaluateAndJoin(guild);
     await restorePendingWordBans(guild);
+    // Pre-load recent chat into the in-memory buffer so the agent has real
+    // context on its very first interaction after a 6h restart.
+    seedRecentFromGuild(guild).catch((err) =>
+      console.warn("[ready] seed failed:", err?.message)
+    );
 
     pollHandle = setInterval(async () => {
       try {
@@ -1353,7 +1359,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 // multi-turn admin commands, and stays "in the conversation" rather than
 // snapshotting one isolated message.
 const recentByChannel = new Map(); // channelId -> [{author, authorId, content, at, isBot}]
-const RECENT_LIMIT = 60;
+const RECENT_LIMIT = 120;
 function pushRecent(channelId, entry) {
   if (!recentByChannel.has(channelId)) recentByChannel.set(channelId, []);
   const arr = recentByChannel.get(channelId);
@@ -1362,6 +1368,38 @@ function pushRecent(channelId, entry) {
 }
 function getRecent(channelId) {
   return recentByChannel.get(channelId) || [];
+}
+
+// On startup, fetch the last ~50 messages from every text channel the bot
+// can read so the agent has real context immediately, rather than waking up
+// every 6h with empty memory.
+async function seedRecentFromGuild(guild) {
+  let totalSeeded = 0;
+  for (const [, channel] of guild.channels.cache) {
+    if (!channel || channel.type !== ChannelType.GuildText) continue;
+    const me = guild.members.me;
+    if (!me) continue;
+    const perms = channel.permissionsFor(me);
+    if (!perms?.has(PermissionFlagsBits.ViewChannel) || !perms.has(PermissionFlagsBits.ReadMessageHistory)) continue;
+    try {
+      const fetched = await channel.messages.fetch({ limit: 50 });
+      const sorted = [...fetched.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+      for (const m of sorted) {
+        if (!m.content) continue;
+        pushRecent(channel.id, {
+          author: m.author?.username || "unknown",
+          authorId: m.author?.id || "",
+          content: m.content.slice(0, 500),
+          at: m.createdTimestamp,
+          isBot: !!m.author?.bot && m.author?.id === client.user?.id,
+        });
+        totalSeeded++;
+      }
+    } catch (err) {
+      // Silently skip channels we can't read
+    }
+  }
+  console.log(`[ready] seeded recent buffer with ${totalSeeded} messages across text channels`);
 }
 
 // Spontaneous engagement throttle: at most once per ~75s per channel.
@@ -1488,7 +1526,7 @@ async function handleAgentOrChatReply(msg, triggerReason) {
   // thread instead of replying in a vacuum.
   const recent = getRecent(channel.id);
   const ctxLines = recent
-    .slice(-25)
+    .slice(-40)
     .map((m) => ({
       role: m.isBot ? "assistant" : "user",
       content: m.isBot ? m.content : `${m.author}: ${m.content}`,
@@ -1525,9 +1563,9 @@ async function handleAgentOrChatReply(msg, triggerReason) {
           authorId: author.id,
           offenses,
           persistOffenses: async () => persistOffenses(),
-          // Pass the last 30 messages so the agent has real conversation
+          // Pass the last 50 messages so the agent has rich conversation
           // memory — references like "ทำอีกที", "คนเดิม", "ห้องเดิม" work.
-          chatHistory: recent.slice(-30).map((m) => ({
+          chatHistory: recent.slice(-50).map((m) => ({
             author: m.author,
             authorId: m.authorId,
             content: m.content,
@@ -1591,7 +1629,7 @@ async function maybeSpontaneousChime(msg) {
   try {
     await msg.channel.sendTyping().catch(() => {});
     const reply = await generateReply({
-      history: recent.slice(-15).map((m) => ({
+      history: recent.slice(-25).map((m) => ({
         role: m.isBot ? "assistant" : "user",
         content: m.isBot ? m.content : `${m.author}: ${m.content}`,
       })),
