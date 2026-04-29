@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 3,
-        "lastAt": 1777442456461,
+        "count": 4,
+        "lastAt": 1777442555844,
         "history": [
           {
             "at": 1777441316268,
@@ -34,6 +34,15 @@
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
             "excerpt": "ควย",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1777442555844,
+            "severity": 7,
+            "matched": "เย็ด",
+            "reason": "ใช้คำต้องห้าม: \"เย็ด\"",
+            "excerpt": "ไออ้วนเย็ดแม่",
             "action": "timeout_failed",
             "source": "local"
           }
