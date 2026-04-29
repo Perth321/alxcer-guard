@@ -7,92 +7,11 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 9,
-        "lastAt": 1777473432006,
-        "history": [
-          {
-            "at": 1777441316268,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "Alxcer guard ตอบกูอีเหี้ย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777441503964,
-            "severity": 7,
-            "matched": "แจนไก้",
-            "reason": "ใช้คำหยาบคาย",
-            "excerpt": "!th แจนไก้ยินไหม",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1777442456461,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777442555844,
-            "severity": 7,
-            "matched": "เย็ด",
-            "reason": "ใช้คำต้องห้าม: \"เย็ด\"",
-            "excerpt": "ไออ้วนเย็ดแม่",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777470252271,
-            "severity": 7,
-            "matched": "ค้าบ",
-            "reason": "ใช้คำหยาบคาย",
-            "excerpt": "ไม่ได้กินค้าบ",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1777472992518,
-            "severity": 7,
-            "matched": "สัส",
-            "reason": "ใช้คำต้องห้าม: \"สัส\"",
-            "excerpt": "สัส",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777473329951,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777473378965,
-            "severity": 7,
-            "matched": "อี",
-            "reason": "ใช้คำหยาบคาย",
-            "excerpt": "อี here หนิ",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1777473432006,
-            "severity": 7,
-            "matched": "เหรี้ย",
-            "reason": "ใช้คำหยาบคาย",
-            "excerpt": "กุคนสร้างนะไอ เหรี้ย",
-            "action": "timeout_failed",
-            "source": "ai"
-          }
-        ]
-      }
+        "count": 0,
+        "lastAt": 0,
+        "history": []
+      },
+      "times": 0
     },
     "946756535936233542": {
       "count": 2,
