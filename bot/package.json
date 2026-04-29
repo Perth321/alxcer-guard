@@ -1,6 +1,6 @@
 {
   "name": "alxcer-guard-bot",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "private": true,
   "type": "module",
   "description": "Alxcer Guard - Discord voice + chat AI guard bot. Runs on GitHub Actions.",

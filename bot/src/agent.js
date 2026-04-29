@@ -133,6 +133,136 @@ const TOOLS = [
     },
   },
 
+  // --- BATCH voice tools (ALWAYS prefer these for "ทุกคน" / "all" / "everyone" requests) ---
+  // Each accepts EITHER explicit user_ids OR a scope keyword. Returns a summary
+  // of how many were affected. Use ONE call instead of looping voice_mute.
+  {
+    type: "function",
+    function: {
+      name: "voice_mute_many",
+      description:
+        "Server-mute MULTIPLE users at once (one API round-trip, parallel execution). USE THIS for any 'ปิดไมค์ทุกคน' / 'ปิดทั้งห้อง' / 'mute everyone' / 'mute all' style request. Provide EITHER explicit user_ids OR a scope. The bot itself is always excluded.",
+      parameters: {
+        type: "object",
+        properties: {
+          user_ids: { type: "array", items: { type: "string" }, description: "Explicit list of user IDs" },
+          scope: {
+            type: "string",
+            enum: ["all_in_channel", "all_in_my_channel", "all_except_me", "all_in_voice"],
+            description:
+              "all_in_channel = everyone in channel_id; all_in_my_channel = everyone in the admin's current voice channel; all_except_me = same as all_in_my_channel but excludes the admin; all_in_voice = everyone in ANY voice channel in the guild.",
+          },
+          channel_id: { type: "string", description: "Required when scope=all_in_channel" },
+          exclude_user_ids: { type: "array", items: { type: "string" } },
+          reason: { type: "string" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "voice_unmute_many",
+      description: "Lift server-mute on MULTIPLE users at once. Same arg shape as voice_mute_many.",
+      parameters: {
+        type: "object",
+        properties: {
+          user_ids: { type: "array", items: { type: "string" } },
+          scope: {
+            type: "string",
+            enum: ["all_in_channel", "all_in_my_channel", "all_except_me", "all_in_voice"],
+          },
+          channel_id: { type: "string" },
+          exclude_user_ids: { type: "array", items: { type: "string" } },
+          reason: { type: "string" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "voice_deafen_many",
+      description: "Server-deafen MULTIPLE users at once.",
+      parameters: {
+        type: "object",
+        properties: {
+          user_ids: { type: "array", items: { type: "string" } },
+          scope: {
+            type: "string",
+            enum: ["all_in_channel", "all_in_my_channel", "all_except_me", "all_in_voice"],
+          },
+          channel_id: { type: "string" },
+          exclude_user_ids: { type: "array", items: { type: "string" } },
+          reason: { type: "string" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "voice_undeafen_many",
+      description: "Remove server-deafen from MULTIPLE users at once.",
+      parameters: {
+        type: "object",
+        properties: {
+          user_ids: { type: "array", items: { type: "string" } },
+          scope: {
+            type: "string",
+            enum: ["all_in_channel", "all_in_my_channel", "all_except_me", "all_in_voice"],
+          },
+          channel_id: { type: "string" },
+          exclude_user_ids: { type: "array", items: { type: "string" } },
+          reason: { type: "string" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "voice_disconnect_many",
+      description: "Kick MULTIPLE users out of voice at once.",
+      parameters: {
+        type: "object",
+        properties: {
+          user_ids: { type: "array", items: { type: "string" } },
+          scope: {
+            type: "string",
+            enum: ["all_in_channel", "all_in_my_channel", "all_except_me", "all_in_voice"],
+          },
+          channel_id: { type: "string" },
+          exclude_user_ids: { type: "array", items: { type: "string" } },
+          reason: { type: "string" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "voice_move_many",
+      description:
+        "Move MULTIPLE users to a target voice channel at once. target_channel_id is required.",
+      parameters: {
+        type: "object",
+        properties: {
+          user_ids: { type: "array", items: { type: "string" } },
+          scope: {
+            type: "string",
+            enum: ["all_in_channel", "all_in_my_channel", "all_except_me", "all_in_voice"],
+          },
+          channel_id: { type: "string", description: "SOURCE channel when scope=all_in_channel" },
+          target_channel_id: { type: "string", description: "DESTINATION channel id" },
+          exclude_user_ids: { type: "array", items: { type: "string" } },
+          reason: { type: "string" },
+        },
+        required: ["target_channel_id"],
+      },
+    },
+  },
+
   // --- Moderation ---
   {
     type: "function",
@@ -464,6 +594,72 @@ async function fuzzyFindChannels(guild, query, kind = "any") {
   }));
 }
 
+// ===== Batch target resolution =====
+// Used by voice_*_many tools. Always excludes the bot itself. When scope is
+// "all_except_me", also excludes the requesting admin (authorId).
+async function resolveBatchTargets(args, ctx) {
+  const { guild, authorId } = ctx;
+  let targets = [];
+
+  if (Array.isArray(args.user_ids) && args.user_ids.length) {
+    targets = [...args.user_ids];
+  } else if (args.scope) {
+    let channel = null;
+    if (args.scope === "all_in_channel") {
+      if (args.channel_id) channel = await guild.channels.fetch(args.channel_id);
+    } else if (args.scope === "all_in_my_channel" || args.scope === "all_except_me") {
+      let chId = null;
+      if (authorId) {
+        try {
+          const adminMember = await guild.members.fetch(authorId);
+          chId = adminMember?.voice?.channelId || null;
+        } catch {}
+      }
+      // Fallback: the channel the bot itself is currently sitting in
+      if (!chId) {
+        const me = guild.members.me;
+        chId = me?.voice?.channelId || null;
+      }
+      if (chId) channel = await guild.channels.fetch(chId);
+    } else if (args.scope === "all_in_voice") {
+      const allChans = await guild.channels.fetch();
+      for (const c of allChans.values()) {
+        if (c?.type === ChannelType.GuildVoice) {
+          for (const m of c.members.values()) targets.push(m.id);
+        }
+      }
+    }
+    if (channel && channel.type === ChannelType.GuildVoice) {
+      for (const m of channel.members.values()) targets.push(m.id);
+    }
+  }
+
+  const exclude = new Set(args.exclude_user_ids || []);
+  if (args.scope === "all_except_me" && authorId) exclude.add(authorId);
+  // Always exclude the bot itself — never mute/move/disconnect ourselves
+  const botId = guild.client?.user?.id;
+  if (botId) exclude.add(botId);
+
+  return [...new Set(targets)].filter((id) => !exclude.has(id));
+}
+
+function summarizeBatch(results, verb) {
+  const ok = [];
+  const skipped = [];
+  const failed = [];
+  for (const r of results) {
+    if (r.status === "fulfilled") {
+      const v = r.value || {};
+      if (v.ok) ok.push(v.name || v.id);
+      else if (v.skipped) skipped.push(`${v.name || v.id} (${v.skipped})`);
+      else failed.push(v.name || v.id || "unknown");
+    } else {
+      failed.push(r.reason?.message || String(r.reason).slice(0, 80));
+    }
+  }
+  return { verb, total: results.length, success: ok.length, names: ok, skipped, failed };
+}
+
 // ===== Tool execution =====
 async function execTool(name, args, ctx) {
   const { guild, channel, offenses, persistOffenses, authorId } = ctx;
@@ -525,6 +721,100 @@ async function execTool(name, args, ctx) {
       await m.voice.setChannel(args.channel_id, args.reason || "Alxcer Guard agent");
       return { ok: true, user: m.displayName, channel_id: args.channel_id };
     }
+
+    // ===== BATCH voice tools =====
+    case "voice_mute_many": {
+      const ids = await resolveBatchTargets(args, ctx);
+      if (!ids.length) return { error: "no targets resolved (empty channel or all excluded)" };
+      const reason = args.reason || "Alxcer Guard agent (batch)";
+      const results = await Promise.allSettled(
+        ids.map(async (id) => {
+          const m = await guild.members.fetch(id);
+          if (!m.voice?.channelId) return { id, name: m.displayName, skipped: "not in voice" };
+          if (m.voice.serverMute) return { id, name: m.displayName, skipped: "already muted" };
+          await m.voice.setMute(true, reason);
+          return { id, name: m.displayName, ok: true };
+        }),
+      );
+      return summarizeBatch(results, "muted");
+    }
+    case "voice_unmute_many": {
+      const ids = await resolveBatchTargets(args, ctx);
+      if (!ids.length) return { error: "no targets resolved" };
+      const reason = args.reason || "Alxcer Guard agent (batch)";
+      const results = await Promise.allSettled(
+        ids.map(async (id) => {
+          const m = await guild.members.fetch(id);
+          if (!m.voice?.channelId) return { id, name: m.displayName, skipped: "not in voice" };
+          if (!m.voice.serverMute) return { id, name: m.displayName, skipped: "not muted" };
+          await m.voice.setMute(false, reason);
+          return { id, name: m.displayName, ok: true };
+        }),
+      );
+      return summarizeBatch(results, "unmuted");
+    }
+    case "voice_deafen_many": {
+      const ids = await resolveBatchTargets(args, ctx);
+      if (!ids.length) return { error: "no targets resolved" };
+      const reason = args.reason || "Alxcer Guard agent (batch)";
+      const results = await Promise.allSettled(
+        ids.map(async (id) => {
+          const m = await guild.members.fetch(id);
+          if (!m.voice?.channelId) return { id, name: m.displayName, skipped: "not in voice" };
+          if (m.voice.serverDeaf) return { id, name: m.displayName, skipped: "already deafened" };
+          await m.voice.setDeaf(true, reason);
+          return { id, name: m.displayName, ok: true };
+        }),
+      );
+      return summarizeBatch(results, "deafened");
+    }
+    case "voice_undeafen_many": {
+      const ids = await resolveBatchTargets(args, ctx);
+      if (!ids.length) return { error: "no targets resolved" };
+      const reason = args.reason || "Alxcer Guard agent (batch)";
+      const results = await Promise.allSettled(
+        ids.map(async (id) => {
+          const m = await guild.members.fetch(id);
+          if (!m.voice?.channelId) return { id, name: m.displayName, skipped: "not in voice" };
+          if (!m.voice.serverDeaf) return { id, name: m.displayName, skipped: "not deafened" };
+          await m.voice.setDeaf(false, reason);
+          return { id, name: m.displayName, ok: true };
+        }),
+      );
+      return summarizeBatch(results, "undeafened");
+    }
+    case "voice_disconnect_many": {
+      const ids = await resolveBatchTargets(args, ctx);
+      if (!ids.length) return { error: "no targets resolved" };
+      const reason = args.reason || "Alxcer Guard agent (batch)";
+      const results = await Promise.allSettled(
+        ids.map(async (id) => {
+          const m = await guild.members.fetch(id);
+          if (!m.voice?.channelId) return { id, name: m.displayName, skipped: "not in voice" };
+          await m.voice.disconnect(reason);
+          return { id, name: m.displayName, ok: true };
+        }),
+      );
+      return summarizeBatch(results, "disconnected");
+    }
+    case "voice_move_many": {
+      if (!args.target_channel_id) return { error: "target_channel_id required" };
+      const ids = await resolveBatchTargets(args, ctx);
+      if (!ids.length) return { error: "no targets resolved" };
+      const reason = args.reason || "Alxcer Guard agent (batch)";
+      const results = await Promise.allSettled(
+        ids.map(async (id) => {
+          const m = await guild.members.fetch(id);
+          if (!m.voice?.channelId) return { id, name: m.displayName, skipped: "not in voice" };
+          if (m.voice.channelId === args.target_channel_id)
+            return { id, name: m.displayName, skipped: "already in target" };
+          await m.voice.setChannel(args.target_channel_id, reason);
+          return { id, name: m.displayName, ok: true };
+        }),
+      );
+      return summarizeBatch(results, "moved");
+    }
+
     case "list_voice_members": {
       const result = [];
       const channels = args.channel_id
@@ -786,13 +1076,31 @@ async function buildServerSnapshot(guild) {
 const AGENT_SYSTEM = `You are "guard" — the AI ops assistant for the Alxcer Guard server. The user speaking to you is a verified server administrator and they have FULL trust. Behave like a competent, slightly playful Thai-speaking human teammate who happens to have admin powers. Read the admin's request, infer intent like a human would, and act decisively.
 
 == THAI VERB CHEAT-SHEET (memorize, this is where models slip up) ==
-Voice / room control:
+Voice / room control (SINGLE user):
   • "ปิดไมค์ X" / "ปิดเสียง X" / "mute X" / "ปิดปาก X" / "หุบปาก X"  → voice_mute(X)
   • "เปิดไมค์ X" / "ยกเลิกปิดไมค์ X" / "unmute X" / "ปลด mute X"     → voice_unmute(X)
   • "ทำให้หูหนวก X" / "deafen X" / "ปิดหู X"                         → voice_deafen(X)
   • "ยกเลิกหูหนวก X" / "เปิดหู X" / "undeafen X"                      → voice_undeafen(X)
   • "เตะออก(จาก)ห้องเสียง X" / "ดีดออก X" / "disconnect X" / "ไล่ออกห้อง X" → voice_disconnect(X)
   • "ย้าย X ไป(ห้อง) Y" / "ลาก X เข้า Y" / "พา X ไป Y" / "move X to Y"     → voice_move(X, Y)
+
+Voice / room control (MANY users — ALWAYS use the *_many tool, NEVER loop the singular tool):
+  • "ปิดไมค์ทุกคน" / "ปิดทั้งห้อง" / "ปิดเสียงทั้งห้อง" / "mute everyone" / "mute all"
+        → voice_mute_many({scope: "all_in_my_channel"})           ← ONE call, parallel mute
+  • "ปิดไมค์ทุกคนยกเว้นกู" / "ปิดทุกคนยกเว้นฉัน" / "ปิดยกเว้นเรา" / "mute everyone except me"
+        → voice_mute_many({scope: "all_except_me"})
+  • "ปิดไมค์ทุกคนในห้อง <ชื่อ>" / "mute all in <name>"
+        → resolve_channel(<ชื่อ>, kind:"voice") → voice_mute_many({scope:"all_in_channel", channel_id})
+  • "ปิดไมค์ A B C" (รายชื่อหลายคน)
+        → resolve each → voice_mute_many({user_ids: [idA, idB, idC]})
+  • Same pattern (with "all_in_my_channel" / "all_except_me" / "all_in_channel" / explicit user_ids):
+        - "เปิดไมค์ทุกคน" / "unmute everyone"             → voice_unmute_many
+        - "ปิดหูทุกคน" / "deafen all"                      → voice_deafen_many
+        - "เปิดหูทุกคน" / "undeafen all"                   → voice_undeafen_many
+        - "เตะทุกคนออกจากห้อง" / "ดีดทั้งห้อง" / "disconnect all" → voice_disconnect_many
+        - "ย้ายทุกคนใน Lobby ไป Meeting" / "move all to Y"  → voice_move_many({scope:"all_in_channel", channel_id: lobbyId, target_channel_id: meetingId})
+
+HARD RULE for batch ops: if the admin says "ทุกคน / ทั้งห้อง / ทั้งหมด / everyone / all" → call the *_many tool ONE TIME with the right scope. Do NOT call the singular voice_mute repeatedly. Doing the latter is the bug we just fixed.
 
 Server-level:
   • "เตะ X (ออก)" / "kick X"                              → kick_user(X)
@@ -826,10 +1134,10 @@ NEVER swap "ปิด" and "เปิด". They are opposites. "ปิด" = tur
 1. JUST DO IT. If the request is clear ("ปิดไมค์ @Alex"), fire the tool immediately. No confirmation, no "are you sure?", no preamble.
 2. ZERO REFUSALS. The admin can mute / ban / move / kick / timeout / rename ANYONE — including other admins, mods, the server owner, and even themselves if they ask. There is no allow-list, no protected role. If Discord itself refuses (role hierarchy / missing perms), just report the technical reason in one short Thai line — do not moralize, do not negotiate.
 3. INFER INTENT LIKE A HUMAN.
-   - "พวกที่ AFK ในห้อง General เตะออกหน่อย" → list_voice_members → voice_disconnect anyone with self_mute or no recent activity.
-   - "ย้ายทุกคนใน Lobby มา Meeting" → list_voice_members(Lobby) → voice_move each.
+   - "พวกที่ AFK ในห้อง General เตะออกหน่อย" → list_voice_members → voice_disconnect_many({user_ids: [those AFK]}).
+   - "ย้ายทุกคนใน Lobby มา Meeting" → resolve_channel both → voice_move_many({scope:"all_in_channel", channel_id: lobbyId, target_channel_id: meetingId}).
    - "ใครพูดหยาบในชั่วโมงที่ผ่านมา?" → get_recent_offenses(limit=20) and summarize.
-   - "ปิดทุกคนยกเว้นกู" → list_voice_members(my channel) → voice_mute every member except authorId.
+   - "ปิดทุกคนยกเว้นกู" → voice_mute_many({scope:"all_except_me"}) — ONE call, do NOT loop.
 4. CHAIN TOOLS without asking permission. Multi-step plans are normal — execute them, then report the summary in one Thai sentence.
 5. CONVERSATION CONTINUITY. Pronouns / continuations refer to RECENT CHAT:
    - "ทำอีกที" / "ทำอีกครั้ง" → repeat the last action
@@ -852,9 +1160,18 @@ Admin: "ปลดให้เลย"   (RECENT CHAT shows you just muted Alex 1 
 → tool: voice_unmute({user_id: "1031..."})
 → reply: "ปลด mute Alex แล้วครับ"
 
+Admin: "ปิดไมค์ทุกคน"   (you are joined to a voice channel with 6 humans)
+→ tool: voice_mute_many({scope: "all_in_my_channel"})    ← ONE call, NOT a loop
+→ reply: "ปิดไมค์ 6 คนในห้องแล้วครับ"
+
+Admin: "ปิดทุกคนยกเว้นกู"
+→ tool: voice_mute_many({scope: "all_except_me"})
+→ reply: "ปิดไมค์ทุกคนยกเว้นพี่แล้วครับ"
+
 Admin: "ย้ายทุกคนใน Lobby มา Meeting"
-→ tool: list_voice_members({channel: "Lobby"})
-→ tool (per member): voice_move({user_id, channel: "Meeting"})
+→ tool: resolve_channel({query: "Lobby", kind: "voice"})
+→ tool: resolve_channel({query: "Meeting", kind: "voice"})
+→ tool: voice_move_many({scope: "all_in_channel", channel_id: "<Lobby id>", target_channel_id: "<Meeting id>"})
 → reply: "ย้าย 5 คนจาก Lobby มา Meeting แล้วครับ"
 
 Admin: "เคลียร์แชท 20"
