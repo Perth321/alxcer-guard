@@ -86,6 +86,23 @@
       "muteUntil": 0,
       "lastWord": "หี",
       "lastSource": "chat"
+    },
+    "264669488035659778": {
+      "chat": {
+        "count": 1,
+        "lastAt": 1777444466638,
+        "history": [
+          {
+            "at": 1777444466638,
+            "severity": 7,
+            "matched": "มึง",
+            "reason": "ใช้คำหยาบ",
+            "excerpt": "กุไล่มึงออก (เสียงสันติ)",
+            "action": "timeout_failed",
+            "source": "ai"
+          }
+        ]
+      }
     }
   }
 }
