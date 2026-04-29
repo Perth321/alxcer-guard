@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 2,
-        "lastAt": 1777441503964,
+        "count": 3,
+        "lastAt": 1777442456461,
         "history": [
           {
             "at": 1777441316268,
@@ -27,6 +27,15 @@
             "excerpt": "!th แจนไก้ยินไหม",
             "action": "timeout_failed",
             "source": "ai"
+          },
+          {
+            "at": 1777442456461,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควย",
+            "action": "timeout_failed",
+            "source": "local"
           }
         ]
       }
@@ -38,11 +47,20 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 1,
-        "lastAt": 1777442447808,
+        "count": 2,
+        "lastAt": 1777442457140,
         "history": [
           {
             "at": 1777442447808,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควย",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1777442457140,
             "severity": 7,
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
