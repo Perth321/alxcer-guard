@@ -72,6 +72,16 @@ import {
   prepareModel as prepareTranscriberModel,
   getStatus as getTranscribeStatus,
 } from "./transcribe.js";
+import {
+  detectProfanity,
+  generateRoastReply,
+  getOffenseCount,
+  nextEscalationSeconds,
+  recordOffense,
+  formatHumanDuration,
+} from "./moderation.js";
+import { generateReply, shouldEngage, aiAvailable } from "./ai.js";
+import { isAdmin, runAgent } from "./agent.js";
 
 let cryptoLib = "unknown";
 try {
@@ -1247,15 +1257,231 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   }
 });
 
+// ===== Recent message buffer per channel (in-memory, for AI context) =====
+const recentByChannel = new Map(); // channelId -> [{author, authorId, content, at}]
+const RECENT_LIMIT = 12;
+function pushRecent(channelId, entry) {
+  if (!recentByChannel.has(channelId)) recentByChannel.set(channelId, []);
+  const arr = recentByChannel.get(channelId);
+  arr.push(entry);
+  if (arr.length > RECENT_LIMIT) arr.splice(0, arr.length - RECENT_LIMIT);
+}
+function getRecent(channelId) {
+  return recentByChannel.get(channelId) || [];
+}
+
+// Spontaneous engagement throttle: at most once per 4 minutes per channel.
+const lastSpontaneousAt = new Map();
+const SPONTANEOUS_COOLDOWN_MS = 4 * 60 * 1000;
+const SPONTANEOUS_BASE_PROB = 0.04; // 4% chance per qualifying msg
+
+function isBotTriggered(msg) {
+  // Direct mention of the bot user
+  if (client.user && msg.mentions?.users?.has(client.user.id)) return "mention";
+  // Reply to one of the bot's messages
+  if (msg.reference?.messageId) {
+    // We can't easily resolve here without fetch; trust mention pings only
+  }
+  // Keyword "guard" / "การ์ด" as a standalone word
+  const lower = (msg.content || "").toLowerCase();
+  if (/(?:^|\s)(guard|การ์ด|ก๊าด|gaurd)(?:[\s,.!?:]|$)/i.test(lower)) return "keyword";
+  return null;
+}
+
+async function handleProfanityChat(msg, detection) {
+  const userId = msg.author.id;
+  const guild = msg.guild;
+  // Existing chat-offense count (with 7-day decay)
+  const prevCount = getOffenseCount(offenses, userId);
+  const seconds = nextEscalationSeconds(prevCount);
+
+  // Delete the offending message (best-effort)
+  let deleted = false;
+  try {
+    await msg.delete();
+    deleted = true;
+  } catch (err) {
+    console.warn("[mod] delete failed:", err?.message);
+  }
+
+  // Apply server timeout
+  let timedOut = false;
+  try {
+    const member = await guild.members.fetch(userId);
+    await member.timeout(seconds * 1000, `Alxcer Guard chat: ${detection.reason}`);
+    timedOut = true;
+  } catch (err) {
+    console.warn("[mod] timeout failed:", err?.message);
+  }
+
+  // Record + persist
+  const newCount = recordOffense(offenses, userId, {
+    at: Date.now(),
+    severity: detection.severity ?? null,
+    matched: detection.matched ?? null,
+    reason: detection.reason ?? null,
+    excerpt: (msg.content || "").slice(0, 200),
+    action: timedOut ? `timeout_${seconds}s` : "timeout_failed",
+    source: detection.source,
+  });
+  persistOffenses();
+
+  // Roast reply (sassy but controlled)
+  let roast;
+  try {
+    roast = await generateRoastReply({
+      username: userId,
+      matched: detection.matched ?? "คำหยาบ",
+      severity: detection.severity ?? 7,
+    });
+  } catch {
+    roast = `<@${userId}> โดน timeout ${formatHumanDuration(seconds)} เพราะใช้คำหยาบ`;
+  }
+
+  // Append the consequence so the user knows
+  const status = timedOut
+    ? `\n\n⛔ โดน timeout **${formatHumanDuration(seconds)}** (ครั้งที่ ${newCount})${deleted ? " · ลบข้อความแล้ว" : ""}`
+    : `\n\n⚠️ พยายาม timeout แต่ไม่สำเร็จ (สิทธิ์ไม่พอ?)`;
+
+  try {
+    await msg.channel.send({ content: (roast + status).slice(0, 2000) });
+  } catch (err) {
+    console.warn("[mod] send roast failed:", err?.message);
+  }
+
+  console.log(
+    `[mod] ${msg.author.tag} chat-offense#${newCount} (${detection.source}) → timeout ${seconds}s · matched="${detection.matched}"`,
+  );
+}
+
+async function handleAgentOrChatReply(msg, triggerReason) {
+  const author = msg.author;
+  const channel = msg.channel;
+  const guild = msg.guild;
+  const member = msg.member;
+
+  // Build conversational context
+  const ctxLines = getRecent(channel.id)
+    .slice(-8)
+    .map((m) => ({ role: "user", content: `${m.author}: ${m.content}` }));
+
+  const cleanContent = (msg.content || "").replace(/<@!?\d+>/g, "").trim() || "(empty mention)";
+
+  // Admin agent path
+  if (isAdmin(member)) {
+    try {
+      await channel.sendTyping().catch(() => {});
+      const result = await runAgent({
+        userPrompt: cleanContent,
+        ctx: {
+          guild,
+          channel,
+          authorTag: author.tag,
+          offenses,
+          persistOffenses: async () => persistOffenses(),
+        },
+      });
+      if (result) {
+        await msg.reply({ content: result.slice(0, 2000), allowedMentions: { repliedUser: false } });
+      }
+      return;
+    } catch (err) {
+      console.warn("[agent] failed:", err?.message);
+      // fall through to plain chat
+    }
+  }
+
+  // Regular user chat reply
+  try {
+    await channel.sendTyping().catch(() => {});
+    const reply = await generateReply({
+      history: [
+        ...ctxLines,
+        { role: "user", content: `${author.username}: ${cleanContent}` },
+      ],
+      systemExtra: `Trigger: ${triggerReason}. The user is NOT a server admin — do not perform actions, just chat.`,
+      max_tokens: 350,
+    });
+    const text = (reply?.content || "").trim();
+    if (text) {
+      await msg.reply({ content: text.slice(0, 2000), allowedMentions: { repliedUser: false } });
+    }
+  } catch (err) {
+    console.warn("[chat] reply failed:", err?.message);
+  }
+}
+
+async function maybeSpontaneousChime(msg) {
+  if (!aiAvailable()) return;
+  if (msg.author.bot) return;
+  const now = Date.now();
+  const last = lastSpontaneousAt.get(msg.channel.id) || 0;
+  if (now - last < SPONTANEOUS_COOLDOWN_MS) return;
+  if (Math.random() > SPONTANEOUS_BASE_PROB) return;
+
+  const recent = getRecent(msg.channel.id);
+  if (recent.length < 3) return;
+  const interested = await shouldEngage(recent);
+  if (!interested) return;
+
+  lastSpontaneousAt.set(msg.channel.id, now);
+  try {
+    await msg.channel.sendTyping().catch(() => {});
+    const reply = await generateReply({
+      history: recent.slice(-6).map((m) => ({ role: "user", content: `${m.author}: ${m.content}` })),
+      systemExtra:
+        "You are spontaneously chiming in to an ongoing chat. Be witty, brief (1 short sentence), and add value. Don't quote, don't summarize. Just react.",
+      max_tokens: 150,
+    });
+    const text = (reply?.content || "").trim();
+    if (text) await msg.channel.send({ content: text.slice(0, 500) });
+  } catch (err) {
+    console.warn("[chime] failed:", err?.message);
+  }
+}
+
 client.on(Events.MessageCreate, async (msg) => {
   try {
     if (!msg.guild) return;
     if (!config.guildId || msg.guild.id !== config.guildId) return;
     if (msg.author?.bot) return;
     if (!msg.content) return;
-    const word = findBannedWord(msg.content);
-    if (!word) return;
-    await applyWordBan(msg.guild, msg.author.id, word, "chat");
+
+    // Track for context
+    pushRecent(msg.channel.id, {
+      author: msg.author.username,
+      authorId: msg.author.id,
+      content: msg.content.slice(0, 500),
+      at: Date.now(),
+    });
+
+    // ===== EXISTING: legacy voice-mute on configured banned word (PRESERVED) =====
+    const legacyWord = findBannedWord(msg.content);
+    if (legacyWord) {
+      await applyWordBan(msg.guild, msg.author.id, legacyWord, "chat");
+      // Continue — also run new chat moderation to also delete + timeout text-side.
+    }
+
+    // ===== NEW: extended profanity detection (multi-language + AI) =====
+    const detection = await detectProfanity({
+      content: msg.content,
+      extraWords: config.bannedWords,
+      useAI: aiAvailable(),
+    });
+    if (detection.profane) {
+      await handleProfanityChat(msg, detection);
+      return;
+    }
+
+    // ===== NEW: AI reply when the bot is addressed =====
+    const triggered = isBotTriggered(msg);
+    if (triggered && aiAvailable()) {
+      await handleAgentOrChatReply(msg, triggered);
+      return;
+    }
+
+    // ===== NEW: spontaneous chime-in (rare, throttled) =====
+    await maybeSpontaneousChime(msg);
   } catch (err) {
     console.error("[message] handler error", err?.message);
   }

@@ -65,4 +65,5 @@ jobs:
           GITHUB_REF_NAME: ${{ github.ref_name }}
           WHISPER_MODEL: medium
           WHISPER_LANGUAGE: th
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: node src/index.js

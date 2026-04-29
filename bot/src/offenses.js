@@ -13,6 +13,14 @@ export function loadOffenses() {
     const raw = JSON.parse(fs.readFileSync(OFFENSES_PATH, "utf8"));
     if (!raw || typeof raw !== "object") return { users: {} };
     if (!raw.users || typeof raw.users !== "object") return { users: {} };
+    // Forward-compatible: ensure each user record has the optional `chat` field
+    // (used by the new chat-moderation system) without disturbing voice fields.
+    for (const id of Object.keys(raw.users)) {
+      const rec = raw.users[id];
+      if (rec && typeof rec === "object" && rec.chat && typeof rec.chat !== "object") {
+        delete rec.chat;
+      }
+    }
     return raw;
   } catch (err) {
     console.error("[offenses] failed to parse offenses.json:", err?.message);
