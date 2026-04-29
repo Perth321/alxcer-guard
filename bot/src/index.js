@@ -1349,8 +1349,11 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 });
 
 // ===== Recent message buffer per channel (in-memory, for AI context) =====
-const recentByChannel = new Map(); // channelId -> [{author, authorId, content, at}]
-const RECENT_LIMIT = 12;
+// Bigger window → bot can follow longer threads, references like "คนเดิม",
+// multi-turn admin commands, and stays "in the conversation" rather than
+// snapshotting one isolated message.
+const recentByChannel = new Map(); // channelId -> [{author, authorId, content, at, isBot}]
+const RECENT_LIMIT = 60;
 function pushRecent(channelId, entry) {
   if (!recentByChannel.has(channelId)) recentByChannel.set(channelId, []);
   const arr = recentByChannel.get(channelId);
@@ -1481,10 +1484,15 @@ async function handleAgentOrChatReply(msg, triggerReason) {
   const guild = msg.guild;
   const member = msg.member;
 
-  // Build conversational context
-  const ctxLines = getRecent(channel.id)
-    .slice(-8)
-    .map((m) => ({ role: "user", content: `${m.author}: ${m.content}` }));
+  // Build conversational context — bigger window so the bot follows the
+  // thread instead of replying in a vacuum.
+  const recent = getRecent(channel.id);
+  const ctxLines = recent
+    .slice(-25)
+    .map((m) => ({
+      role: m.isBot ? "assistant" : "user",
+      content: m.isBot ? m.content : `${m.author}: ${m.content}`,
+    }));
 
   // Strip mention markup, but keep a list of mentioned users so the agent can
   // act on them directly (e.g. "ปิดไมค์ @Alex" works even after we strip "<@id>").
@@ -1517,6 +1525,15 @@ async function handleAgentOrChatReply(msg, triggerReason) {
           authorId: author.id,
           offenses,
           persistOffenses: async () => persistOffenses(),
+          // Pass the last 30 messages so the agent has real conversation
+          // memory — references like "ทำอีกที", "คนเดิม", "ห้องเดิม" work.
+          chatHistory: recent.slice(-30).map((m) => ({
+            author: m.author,
+            authorId: m.authorId,
+            content: m.content,
+            isBot: !!m.isBot,
+            at: m.at,
+          })),
         },
       });
       const trimmed = (result || "").trim();
@@ -1574,7 +1591,10 @@ async function maybeSpontaneousChime(msg) {
   try {
     await msg.channel.sendTyping().catch(() => {});
     const reply = await generateReply({
-      history: recent.slice(-6).map((m) => ({ role: "user", content: `${m.author}: ${m.content}` })),
+      history: recent.slice(-15).map((m) => ({
+        role: m.isBot ? "assistant" : "user",
+        content: m.isBot ? m.content : `${m.author}: ${m.content}`,
+      })),
       systemExtra:
         "You are spontaneously chiming in to an ongoing Discord chat — uninvited but welcome. Be witty, brief (1–2 short sentences), playful, and add real flavor. React, joke, agree, or gently push back. Don't quote, don't summarize. Just talk.",
       max_tokens: 200,
@@ -1592,16 +1612,23 @@ client.on(Events.MessageCreate, async (msg) => {
   try {
     if (!msg.guild) return;
     if (!config.guildId || msg.guild.id !== config.guildId) return;
-    if (msg.author?.bot) return;
     if (!msg.content) return;
 
-    // Track for context
+    // Track ALL messages (including the bot's own replies) so the agent has
+    // a faithful conversation log to reason over. Without this, when the
+    // admin says "ทำอีกที" or "ใช่นั่นแหละ" the agent only sees its own
+    // questions vanishing into a void.
     pushRecent(msg.channel.id, {
       author: msg.author.username,
       authorId: msg.author.id,
       content: msg.content.slice(0, 500),
       at: Date.now(),
+      isBot: !!msg.author?.bot && msg.author?.id === client.user?.id,
     });
+
+    // Bots (including ourselves) are tracked above but never moderated /
+    // trigger the agent path.
+    if (msg.author?.bot) return;
 
     // ===== EXISTING: legacy voice-mute on configured banned word (PRESERVED) =====
     const legacyWord = findBannedWord(msg.content);

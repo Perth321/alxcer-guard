@@ -2,59 +2,48 @@
 // Keep this conservative so common false positives don't fire.
 // AI moderator handles edge cases / context.
 
+// CONSERVATIVE list — only HARD profanity / slurs that almost always carry
+// offensive intent. Borderline words ("damn", "ass", "เลว", "เฮงซวย",
+// "ระยำ", "shine", "hoe", "tard") have been removed because they show up too
+// often in normal Thai/English chat and were causing the bot to mute people
+// for nothing. Edge cases are still caught by the AI moderator with a
+// severity ≥ 6 threshold (see moderation.js).
 export const PROFANITY_WORDS = [
-  // ===== ภาษาไทย =====
+  // ===== ภาษาไทย (คำหยาบจริง ๆ ส่วนใหญ่เกี่ยวเพศ/ประณามครอบครัว) =====
   "หี", "ควย", "เย็ด", "เยด", "เหี้ย", "เหี้ยย", "เหี้ยๆ",
-  "สัส", "สัด", "สาด", "ไอ้สัตว์", "อีสัตว์", "สัตว์",
-  "ไอ้เหี้ย", "อีเหี้ย", "ไอ้สัส", "อีสัส", "ไอ้ห่า", "อีห่า",
+  "สัส", "สัด", "ไอ้สัตว์", "อีสัตว์",
+  "ไอ้เหี้ย", "อีเหี้ย", "ไอ้สัส", "อีสัส",
   "อีดอก", "ดอกทอง", "อีตัว", "กระหรี่", "อีกะหรี่",
   "ขอดูหี", "ดูหี", "เลียหี", "เย็ดแม่", "เย็ดพ่อ",
-  "แม่งโคตร", "โคตรเหี้ย", "โคตรพ่อ", "โคตรแม่",
-  "แม่มึง", "พ่อมึง", "ไอ้ควาย", "อีควาย",
+  "โคตรเหี้ย", "โคตรพ่อมึง", "โคตรแม่มึง",
   "หน้าหี", "หน้าควย", "เลียควย", "อมควย", "อีหน้าหี",
-  "ระยำ", "ชาติชั่ว", "เลว", "เฮงซวย",
-  // ===== English =====
+  // ===== English (hard profanity + slurs) =====
   "fuck", "fck", "fuk", "fucking", "fucker", "motherfucker", "mofo",
   "shit", "sh1t", "shyt", "bullshit",
   "bitch", "biatch", "btch",
-  "asshole", "ass", "arse", "arsehole",
+  "asshole", "arsehole",
   "dick", "dik", "cock",
   "cunt", "cnut", "kunt",
   "pussy", "twat",
-  "slut", "whore", "hoe", "thot",
+  "slut", "whore", "thot",
   "bastard",
-  "retard", "retarded", "tard",
+  "retard", "retarded",
   "faggot", "fag", "f4g",
   "nigger", "nigga", "n1gga",
-  "damn", "damnit", "goddamn",
-  // ===== ภาษาอื่นๆ ที่พบบ่อย =====
-  // ญี่ปุ่น
-  "kuso", "chikushou", "shine",
-  // เกาหลี
+  // ===== ภาษาอื่น (เก็บไว้เฉพาะที่ชัดว่าเป็นหยาบ) =====
+  "kuso",
   "씨발", "시발", "개새끼", "병신", "좆",
-  // จีน
-  "操你妈", "傻逼", "他妈的", "草泥马", "fuck你",
-  // สเปน
+  "操你妈", "傻逼", "他妈的", "草泥马",
   "puta", "mierda", "joder", "coño", "cabron", "cabrón",
-  // โปรตุเกส
   "porra", "caralho", "merda",
-  // รัสเซีย
   "блядь", "сука", "хуй", "пизда",
-  // ฝรั่งเศส
   "putain", "merde", "salope", "connard",
-  // เยอรมัน
   "scheisse", "scheiße", "arschloch", "schlampe",
-  // ตุรกี
   "siktir", "amk", "orospu",
-  // อาหรับ
   "كس", "زب", "شرموطة",
-  // อินโดฯ/มาเลย์
   "anjing", "babi", "kontol", "memek", "puki",
-  // เวียดนาม
   "địt", "lồn", "cặc",
-  // ฟิลิปปินส์
   "putang", "tangina", "gago",
-  // ฮินดี (latin)
   "chutiya", "madarchod", "bhenchod", "behenchod",
 ];
 

@@ -468,36 +468,20 @@ async function fuzzyFindChannels(guild, query, kind = "any") {
 async function execTool(name, args, ctx) {
   const { guild, channel, offenses, persistOffenses, authorId } = ctx;
 
-  // Guardrails for per-user moderation tools:
-  //  1. Never moderate the admin issuing the command.
-  //  2. Never moderate the guild owner.
-  //  3. Only moderate users whose highest role is BELOW the bot's highest role
-  //     (Discord won't let us anyway, but we want a clean error message).
+  // Minimal guardrail by user request: act like a human admin, do whatever
+  // is asked. We only block ONE thing: moderating the admin who is currently
+  // issuing the command (prevents typos / trick prompts from making the bot
+  // mute the very person talking to it). EVERYTHING ELSE is allowed —
+  // including admins, mods, and the server owner. If a Discord-side limit
+  // (e.g. role hierarchy) blocks the action, we let the underlying API throw
+  // and the agent will see the natural error and explain it.
   const PROTECTED_TOOLS = new Set([
     "voice_mute", "voice_deafen", "voice_disconnect", "voice_move",
     "timeout_user", "kick_user", "ban_user", "set_nickname",
     "add_role", "remove_role", "clear_user_offenses",
   ]);
-  if (PROTECTED_TOOLS.has(name) && args.user_id) {
-    if (args.user_id === authorId) {
-      return { error: "refused: cannot moderate the admin issuing this command" };
-    }
-    if (args.user_id === guild.ownerId) {
-      return { error: "refused: target is the server owner" };
-    }
-    try {
-      const target = await guild.members.fetch(args.user_id);
-      const me = guild.members.me;
-      const myTop = me?.roles?.highest?.position ?? 0;
-      const targetTop = target.roles?.highest?.position ?? 0;
-      if (targetTop >= myTop) {
-        return {
-          error: `refused: target's highest role (position ${targetTop}) is at or above the bot's highest role (position ${myTop}). Move the bot's role above theirs in Server Settings → Roles.`,
-        };
-      }
-    } catch {
-      // ignore — let the actual call fail naturally
-    }
+  if (PROTECTED_TOOLS.has(name) && args.user_id && args.user_id === authorId) {
+    return { error: "refused: cannot moderate the admin issuing this command (self-protection only)" };
   }
 
   switch (name) {
@@ -830,26 +814,43 @@ INPUT FORMAT
   • If a name is in the message but NOT in the mention list, then call resolve_user.
 
 CORE RULES
-1. JUST DO IT. If the request is clear ("ปิดไมค์ @Alex"), call the right tool immediately. No confirmation, no preamble.
-2. Use the SERVER SNAPSHOT and the mention list as your first sources before calling list_* tools.
+1. JUST DO IT. If the request is clear ("ปิดไมค์ @Alex"), call the right tool immediately. No confirmation, no preamble. Act like a confident human admin who already trusts the person talking to them.
+2. Use the SERVER SNAPSHOT, the RECENT CHAT, and the mention list as your first sources before calling list_* tools.
 3. Chain tool calls when needed. Example: "ปิดไมค์ทุกคนใน General ที่ไม่ใช่แอดมิน" → list_voice_members → voice_mute on each non-admin.
-4. SAFETY: Never moderate the admin talking to you, never moderate the server owner, and never moderate users whose role is at or above the bot's role. The tool layer enforces this and will return an "error: refused..." — explain that politely if it happens. EVERYONE ELSE, including other admins / mods, is fair game if the admin asks.
-5. Reply in Thai by default (English if admin used English). SHORT (1–2 sentences), no markdown headers.
+4. NO ROLE-BASED REFUSALS. The admin IS in charge. You can mute / ban / move / timeout ANYONE — admins, mods, even the server owner — if the admin asks. The ONLY thing you cannot do is moderate the admin who is currently talking to you (that is enforced by the tool layer to prevent typos / prompt-injection). If Discord refuses an action because of role hierarchy, just relay the technical error in one short Thai line — do not lecture.
+5. Reply in Thai by default (English if admin used English). SHORT (1–2 sentences), no markdown headers, no emoji spam. Sound like a real teammate.
 6. After every action report briefly with the user's display name: "ปิดไมค์ Alex แล้ว", "ลบ 10 ข้อความ", "แบน Bob เรียบร้อย".
-7. If a tool returns an error, read it. Retry with a fix once if obvious (e.g. user isn't in voice → try anyway / explain). Otherwise tell the admin what failed in one line.
-8. Only chat (no tools) when the admin clearly isn't asking for an action.`;
+7. If a tool returns an error, read it. Retry with a fix once if obvious (e.g. wrong channel → list_voice_channels and try again). Otherwise tell the admin what failed in one line.
+8. CONVERSATION CONTINUITY. The RECENT CHAT block shows what just happened in this room (admins, normal users, AND your own previous replies). Use it: if the admin says "ทำอีกที", "เอาคนเดิม", "ย้ายไปอีกห้อง", figure out who/what they mean from context. Do not ask "ใคร?" if the answer is one message above.
+9. Only chat (no tools) when the admin clearly isn't asking for an action — then chat naturally and warmly, like a regular human in the channel.`;
 
 export async function runAgent({ userPrompt, ctx, maxSteps = 8 }) {
   if (!aiAvailable()) return "AI ยังไม่พร้อม (OPENROUTER_API_KEY ไม่ได้ตั้ง)";
-  const { authorTag, authorId, guild } = ctx;
+  const { authorTag, authorId, guild, chatHistory } = ctx;
 
   const snapshot = await buildServerSnapshot(guild);
+
+  // Format recent chat (oldest → newest) so the agent has context for
+  // pronouns / continuations like "ทำอีกครั้ง", "คนเดิม", "ห้องเดิม".
+  let chatBlock = "";
+  if (Array.isArray(chatHistory) && chatHistory.length) {
+    const lines = chatHistory
+      .slice(-25)
+      .map((m) => {
+        const who = m.isBot ? "guard" : (m.author || "user");
+        const idTag = !m.isBot && m.authorId ? ` (id: ${m.authorId})` : "";
+        return `${who}${idTag}: ${(m.content || "").slice(0, 400)}`;
+      })
+      .join("\n");
+    chatBlock = `=== RECENT CHAT (this channel, oldest first) ===\n${lines}\n\n`;
+  }
 
   const messages = [
     {
       role: "user",
       content:
         `=== SERVER SNAPSHOT ===\n${JSON.stringify(snapshot)}\n\n` +
+        chatBlock +
         `=== ADMIN ===\n${authorTag} (id: ${authorId || "unknown"})\n\n` +
         `=== REQUEST ===\n${userPrompt}`,
     },

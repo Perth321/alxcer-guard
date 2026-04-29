@@ -47,6 +47,12 @@ export function recordOffense(offenses, userId, entry) {
   return rec.chat.count;
 }
 
+// Minimum severity (0–10) the AI moderator must report before we treat a
+// message as a real offense. Anything below this is considered "casual /
+// expressive language" and is left alone — this is what stops the bot from
+// timing people out for harmless complaining like "เซ็งว่ะ" or "this sucks".
+const AI_SEVERITY_THRESHOLD = 6;
+
 // Detect: returns { profane, severity, reason, matched, source }
 // Source: "local" (word list) or "ai" (LLM moderator). Local is instant + free.
 export async function detectProfanity({ content, extraWords, useAI = true }) {
@@ -63,9 +69,15 @@ export async function detectProfanity({ content, extraWords, useAI = true }) {
   if (!useAI || !aiAvailable()) return { profane: false, source: "skip" };
   // Skip AI on short / link-only / mention-only messages to save quota
   const stripped = content.replace(/<@!?\d+>/g, "").replace(/https?:\/\/\S+/g, "").trim();
-  if (stripped.length < 6) return { profane: false, source: "short" };
+  if (stripped.length < 8) return { profane: false, source: "short" };
   const ai = await aiModerate(content);
   if (!ai) return { profane: false, source: "ai-error" };
+  // Apply severity floor — AI says "profane" but only severity 3 means
+  // mild/casual; we don't punish that.
+  const sev = Number(ai.severity) || 0;
+  if (ai.profane && sev < AI_SEVERITY_THRESHOLD) {
+    return { profane: false, severity: sev, source: "ai-below-threshold", reason: ai.reason };
+  }
   return { ...ai, source: "ai" };
 }
 
