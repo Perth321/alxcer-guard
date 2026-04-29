@@ -85,7 +85,22 @@
       "lastOffenseAt": 1777384379910,
       "muteUntil": 0,
       "lastWord": "หี",
-      "lastSource": "chat"
+      "lastSource": "chat",
+      "chat": {
+        "count": 1,
+        "lastAt": 1777453823730,
+        "history": [
+          {
+            "at": 1777453823730,
+            "severity": 7,
+            "matched": "ยงะ",
+            "reason": "ใช้คำหยาบ",
+            "excerpt": "เปิดลำโพงยงะ",
+            "action": "timeout_failed",
+            "source": "ai"
+          }
+        ]
+      }
     },
     "1491387879648264347": {
       "chat": {
