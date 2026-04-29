@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 8,
-        "lastAt": 1777473378965,
+        "count": 9,
+        "lastAt": 1777473432006,
         "history": [
           {
             "at": 1777441316268,
@@ -79,6 +79,15 @@
             "matched": "อี",
             "reason": "ใช้คำหยาบคาย",
             "excerpt": "อี here หนิ",
+            "action": "timeout_failed",
+            "source": "ai"
+          },
+          {
+            "at": 1777473432006,
+            "severity": 7,
+            "matched": "เหรี้ย",
+            "reason": "ใช้คำหยาบคาย",
+            "excerpt": "กุคนสร้างนะไอ เหรี้ย",
             "action": "timeout_failed",
             "source": "ai"
           }
