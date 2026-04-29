@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 1,
-        "lastAt": 1777441316268,
+        "count": 2,
+        "lastAt": 1777441503964,
         "history": [
           {
             "at": 1777441316268,
@@ -18,6 +18,15 @@
             "excerpt": "Alxcer guard ตอบกูอีเหี้ย",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1777441503964,
+            "severity": 7,
+            "matched": "แจนไก้",
+            "reason": "ใช้คำหยาบคาย",
+            "excerpt": "!th แจนไก้ยินไหม",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
