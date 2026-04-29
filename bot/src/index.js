@@ -772,6 +772,16 @@ async function checkInactivity(guild) {
       s.silentTicks = 0;
     }
 
+    // === Skip self-muted / self-deafened users ===
+    // ผู้ใช้ปิดไมค์เอง (หรือปิดหู) อยู่แล้ว ไม่ต้องไปปิดซ้ำ — บอทจัดการเฉพาะ
+    // คนที่ "เปิดไมค์แต่เงียบ" เท่านั้น และต้องไม่ลงโทษเขาเมื่อกลับมา
+    if (member.voice.selfMute || member.voice.selfDeaf) {
+      s.lastSpoke = now;
+      s.silentTicks = 0;
+      if (s.warned) s.warned = false;
+      continue;
+    }
+
     if (s.speaking) {
       s.lastSpoke = now;
       s.silentTicks = 0;
@@ -1270,10 +1280,11 @@ function getRecent(channelId) {
   return recentByChannel.get(channelId) || [];
 }
 
-// Spontaneous engagement throttle: at most once per 4 minutes per channel.
+// Spontaneous engagement throttle: at most once per ~75s per channel.
 const lastSpontaneousAt = new Map();
-const SPONTANEOUS_COOLDOWN_MS = 4 * 60 * 1000;
-const SPONTANEOUS_BASE_PROB = 0.04; // 4% chance per qualifying msg
+const SPONTANEOUS_COOLDOWN_MS = 75 * 1000;
+const SPONTANEOUS_BASE_PROB = 0.18; // 18% chance per qualifying msg
+const SPONTANEOUS_MIN_RECENT = 1; // start chiming after just 1 msg in buffer
 
 function isBotTriggered(msg) {
   // Direct mention of the bot user
@@ -1354,6 +1365,35 @@ async function handleProfanityChat(msg, detection) {
   );
 }
 
+function aiFallbackLine() {
+  const lines = [
+    "ตอนนี้สมองช้านิดหน่อย เซิร์ฟ AI งอแง ลองอีกครั้งครับ 😅",
+    "อึ้งไปแป๊บ — model ฟรีโดน rate-limit อยู่ พิมพ์มาใหม่",
+    "เครื่องคิดงานล้น เดี๋ยวกลับมาตอบนะ",
+    "ฮึ ขอเวลาคิดอีกหน่อย",
+  ];
+  return lines[Math.floor(Math.random() * lines.length)];
+}
+
+async function safeReply(msg, content) {
+  try {
+    await msg.reply({
+      content: (content || aiFallbackLine()).slice(0, 2000),
+      allowedMentions: { repliedUser: false },
+    });
+    return true;
+  } catch (err) {
+    console.warn("[reply] send failed:", err?.message);
+    try {
+      await msg.channel.send({ content: (content || aiFallbackLine()).slice(0, 2000) });
+      return true;
+    } catch (err2) {
+      console.warn("[reply] channel send also failed:", err2?.message);
+      return false;
+    }
+  }
+}
+
 async function handleAgentOrChatReply(msg, triggerReason) {
   const author = msg.author;
   const channel = msg.channel;
@@ -1367,10 +1407,13 @@ async function handleAgentOrChatReply(msg, triggerReason) {
 
   const cleanContent = (msg.content || "").replace(/<@!?\d+>/g, "").trim() || "(empty mention)";
 
-  // Admin agent path
+  await channel.sendTyping().catch(() => {});
+
+  // Admin agent path — try first, but if it fails fall through to plain chat
+  let attemptedAgent = false;
   if (isAdmin(member)) {
+    attemptedAgent = true;
     try {
-      await channel.sendTyping().catch(() => {});
       const result = await runAgent({
         userPrompt: cleanContent,
         ctx: {
@@ -1381,34 +1424,41 @@ async function handleAgentOrChatReply(msg, triggerReason) {
           persistOffenses: async () => persistOffenses(),
         },
       });
-      if (result) {
-        await msg.reply({ content: result.slice(0, 2000), allowedMentions: { repliedUser: false } });
+      const trimmed = (result || "").trim();
+      if (trimmed) {
+        await safeReply(msg, trimmed);
+        return;
       }
-      return;
+      console.warn("[agent] returned empty — falling through to plain chat");
     } catch (err) {
-      console.warn("[agent] failed:", err?.message);
-      // fall through to plain chat
+      console.warn("[agent] failed:", err?.message?.slice(0, 200));
     }
   }
 
-  // Regular user chat reply
+  // Plain chat reply (also used as fallback for failed admin agent)
   try {
-    await channel.sendTyping().catch(() => {});
     const reply = await generateReply({
       history: [
         ...ctxLines,
         { role: "user", content: `${author.username}: ${cleanContent}` },
       ],
-      systemExtra: `Trigger: ${triggerReason}. The user is NOT a server admin — do not perform actions, just chat.`,
+      systemExtra: attemptedAgent
+        ? `Trigger: ${triggerReason}. (Admin agent path failed — just chat normally and tell them tools are temporarily unavailable if they were asking for an action.)`
+        : `Trigger: ${triggerReason}. The user is NOT a server admin — do not perform actions, just chat.`,
       max_tokens: 350,
     });
     const text = (reply?.content || "").trim();
     if (text) {
-      await msg.reply({ content: text.slice(0, 2000), allowedMentions: { repliedUser: false } });
+      await safeReply(msg, text);
+      return;
     }
+    console.warn("[chat] empty reply content");
   } catch (err) {
-    console.warn("[chat] reply failed:", err?.message);
+    console.warn("[chat] reply failed:", err?.message?.slice(0, 200));
   }
+
+  // Final fallback so the user always gets something
+  await safeReply(msg, aiFallbackLine());
 }
 
 async function maybeSpontaneousChime(msg) {
@@ -1420,23 +1470,26 @@ async function maybeSpontaneousChime(msg) {
   if (Math.random() > SPONTANEOUS_BASE_PROB) return;
 
   const recent = getRecent(msg.channel.id);
-  if (recent.length < 3) return;
+  if (recent.length < SPONTANEOUS_MIN_RECENT) return;
   const interested = await shouldEngage(recent);
   if (!interested) return;
 
+  // Set cooldown BEFORE sending so a long generation doesn't spawn duplicates.
   lastSpontaneousAt.set(msg.channel.id, now);
   try {
     await msg.channel.sendTyping().catch(() => {});
     const reply = await generateReply({
       history: recent.slice(-6).map((m) => ({ role: "user", content: `${m.author}: ${m.content}` })),
       systemExtra:
-        "You are spontaneously chiming in to an ongoing chat. Be witty, brief (1 short sentence), and add value. Don't quote, don't summarize. Just react.",
-      max_tokens: 150,
+        "You are spontaneously chiming in to an ongoing Discord chat — uninvited but welcome. Be witty, brief (1–2 short sentences), playful, and add real flavor. React, joke, agree, or gently push back. Don't quote, don't summarize. Just talk.",
+      max_tokens: 200,
     });
     const text = (reply?.content || "").trim();
     if (text) await msg.channel.send({ content: text.slice(0, 500) });
+    else lastSpontaneousAt.set(msg.channel.id, 0); // empty result — release cooldown
   } catch (err) {
-    console.warn("[chime] failed:", err?.message);
+    console.warn("[chime] failed:", err?.message?.slice(0, 200));
+    lastSpontaneousAt.set(msg.channel.id, 0); // failed — release cooldown
   }
 }
 

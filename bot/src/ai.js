@@ -3,49 +3,92 @@
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
+// Fallback chain. Primary first; we walk down on 429/5xx errors.
+// All chosen models support tool-calling and good Thai + English.
+const CHAT_FALLBACKS = (process.env.OPENROUTER_CHAT_MODELS ||
+  "qwen/qwen3-next-80b-a3b-instruct:free,z-ai/glm-4.5-air:free,openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free,nvidia/nemotron-3-super-120b-a12b:free"
+).split(",").map((s) => s.trim()).filter(Boolean);
+
+const FAST_FALLBACKS = (process.env.OPENROUTER_FAST_MODELS ||
+  "qwen/qwen3-next-80b-a3b-instruct:free,openai/gpt-oss-20b:free,z-ai/glm-4.5-air:free,meta-llama/llama-3.3-70b-instruct:free"
+).split(",").map((s) => s.trim()).filter(Boolean);
+
 export const MODELS = {
-  // Multilingual, smart, free, supports tool-calling
-  chat: process.env.OPENROUTER_CHAT_MODEL || "meta-llama/llama-3.3-70b-instruct:free",
-  // Fast small for moderation / interest scoring
-  fast: process.env.OPENROUTER_FAST_MODEL || "meta-llama/llama-3.3-70b-instruct:free",
+  chat: CHAT_FALLBACKS[0],
+  fast: FAST_FALLBACKS[0],
 };
+
+const REQUEST_TIMEOUT_MS = 25_000;
 
 export function aiAvailable() {
   return !!process.env.OPENROUTER_API_KEY;
 }
 
-async function callOpenRouter({ model, messages, tools, tool_choice, max_tokens = 800, temperature = 0.7, response_format }) {
-  if (!aiAvailable()) throw new Error("OPENROUTER_API_KEY missing");
-
-  const body = {
-    model,
-    messages,
-    max_tokens,
-    temperature,
-  };
+async function callOnce({ model, messages, tools, tool_choice, max_tokens, temperature, response_format }) {
+  const body = { model, messages, max_tokens, temperature };
   if (tools && tools.length) {
     body.tools = tools;
     if (tool_choice) body.tool_choice = tool_choice;
   }
   if (response_format) body.response_format = response_format;
 
-  const res = await fetch(OPENROUTER_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      "HTTP-Referer": "https://github.com/Perth321/alxcer-guard",
-      "X-Title": "Alxcer Guard Discord Bot",
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`OpenRouter ${res.status}: ${text.slice(0, 300)}`);
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "HTTP-Referer": "https://github.com/Perth321/alxcer-guard",
+        "X-Title": "Alxcer Guard Discord Bot",
+      },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(t);
   }
-  const json = await res.json();
+
+  const text = await res.text();
+  if (!res.ok) {
+    const retriable = res.status === 429 || res.status === 408 || res.status === 503 || res.status >= 500;
+    const err = new Error(`OpenRouter ${res.status} (${model}): ${text.slice(0, 250)}`);
+    err.retriable = retriable;
+    err.status = res.status;
+    throw err;
+  }
+  let json;
+  try { json = JSON.parse(text); } catch { throw new Error(`OpenRouter non-JSON (${model})`); }
+  if (json.error) {
+    const e = new Error(`OpenRouter error (${model}): ${json.error.message || JSON.stringify(json.error)}`);
+    e.retriable = true;
+    throw e;
+  }
   return json.choices?.[0]?.message ?? null;
+}
+
+async function callOpenRouter({ model, models, messages, tools, tool_choice, max_tokens = 800, temperature = 0.7, response_format }) {
+  if (!aiAvailable()) throw new Error("OPENROUTER_API_KEY missing");
+  const chain = (models && models.length ? models : [model]).filter(Boolean);
+  let lastErr;
+  for (const m of chain) {
+    try {
+      const result = await callOnce({ model: m, messages, tools, tool_choice, max_tokens, temperature, response_format });
+      if (m !== chain[0]) console.log(`[ai] fell back to model: ${m}`);
+      return result;
+    } catch (err) {
+      lastErr = err;
+      console.warn(`[ai] ${m} failed: ${err.message?.slice(0, 200)}`);
+      if (!err.retriable) {
+        // Non-retriable on this model — try next anyway since it might be a model-specific issue.
+      }
+      // brief jittered pause before next attempt to avoid hammering
+      await new Promise((r) => setTimeout(r, 200 + Math.random() * 300));
+    }
+  }
+  throw lastErr ?? new Error("OpenRouter: all models failed");
 }
 
 const PERSONA = `You are "Alxcer Guard" — a sassy, witty Discord bot that hangs out in a small Thai-speaking server with English mixed in. You are the server's guardian: you keep order, but you also have a personality. You banter, joke, roast people back politely, and occasionally chime into conversations that interest you.
@@ -76,7 +119,7 @@ export async function generateReply({ history, systemExtra, max_tokens = 500, to
     { role: "system", content: PERSONA + (systemExtra ? `\n\n${systemExtra}` : "") },
     ...history,
   ];
-  return callOpenRouter({ model: MODELS.chat, messages, max_tokens, temperature: 0.8, tools, tool_choice });
+  return callOpenRouter({ models: CHAT_FALLBACKS, messages, max_tokens, temperature: 0.8, tools, tool_choice });
 }
 
 // ===== AI MODERATION =====
@@ -98,7 +141,7 @@ export async function aiModerate(text) {
 
   try {
     const msg = await callOpenRouter({
-      model: MODELS.fast,
+      models: FAST_FALLBACKS,
       messages: [
         { role: "system", content: MODERATOR_PERSONA },
         { role: "user", content: `Message:\n"""${trimmed.slice(0, 800)}"""` },
@@ -132,7 +175,7 @@ export async function aiModerate(text) {
 // ===== INTEREST SCORE: should bot spontaneously chime in? =====
 export async function shouldEngage(recentMessages) {
   if (!aiAvailable()) return false;
-  if (!recentMessages || recentMessages.length < 2) return false;
+  if (!recentMessages || recentMessages.length < 1) return false;
   try {
     const sample = recentMessages
       .slice(-6)
@@ -140,12 +183,12 @@ export async function shouldEngage(recentMessages) {
       .join("\n")
       .slice(0, 1500);
     const msg = await callOpenRouter({
-      model: MODELS.fast,
+      models: FAST_FALLBACKS,
       messages: [
         {
           role: "system",
           content:
-            'You judge if a Discord chat is interesting/funny/provocative enough that a witty bot persona would NATURALLY join in. Reply ONLY with JSON: {"engage": boolean, "why": "<short>"}. Be SELECTIVE — engage true only ~10% of the time, when there is genuinely something fun to say.',
+            'You decide if a witty Discord bot persona ("guard") should chime into a chat. Be GENEROUS — engage true ~40% of the time, especially when people are talking about something fun, opinionated, joking, gossiping, complaining, asking questions out loud, or making confident claims. Only refuse for: pure 2-word reactions, clear DMs between two people deep in private convo, or boring single-word responses. Reply ONLY with JSON: {"engage": boolean, "why": "<short>"}.',
         },
         { role: "user", content: `Recent chat:\n${sample}` },
       ],
@@ -156,7 +199,8 @@ export async function shouldEngage(recentMessages) {
     const raw = (msg?.content || "{}").replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
     const parsed = JSON.parse(raw);
     return !!parsed.engage;
-  } catch {
+  } catch (err) {
+    console.warn("[ai] shouldEngage failed:", err?.message?.slice(0, 150));
     return false;
   }
 }
