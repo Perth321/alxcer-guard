@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 1,
-        "lastAt": 1777453255285,
+        "count": 2,
+        "lastAt": 1777453337615,
         "history": [
           {
             "at": 1777453255285,
@@ -16,6 +16,15 @@
             "matched": "หี",
             "reason": "ใช้คำต้องห้าม: \"หี\"",
             "excerpt": "พิมพ์เหี้ยไรนิ6655566555",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1777453337615,
+            "severity": 7,
+            "matched": "สัส",
+            "reason": "ใช้คำต้องห้าม: \"สัส\"",
+            "excerpt": "ไอสัสใครเข้านายมึงวะการ์ด กูงง",
             "action": "timeout_failed",
             "source": "local"
           }
