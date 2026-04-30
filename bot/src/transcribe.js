@@ -155,14 +155,36 @@ function pcmToWav(pcm, sampleRate = 16000, channels = 1, bitsPerSample = 16) {
   return buffer;
 }
 
+// Deepgram (with smart_format) tends to insert spaces between Thai syllables,
+// e.g. "การ์ด" → "การ ์ ด". Native Thai text has no inter-word spaces, so we
+// collapse any whitespace that sits between two Thai-script chars. This keeps
+// the wake-word regex (and any other text matching) working naturally.
+const THAI_RANGE = "\\u0E00-\\u0E7F";
+const THAI_SPACING_RE = new RegExp(
+  `([${THAI_RANGE}])\\s+(?=[${THAI_RANGE}])`,
+  "g",
+);
+function normalizeThaiSpacing(s) {
+  if (!s) return s;
+  let prev;
+  let cur = s;
+  // Multiple passes because each replacement may expose a new adjacency.
+  do {
+    prev = cur;
+    cur = cur.replace(THAI_SPACING_RE, "$1");
+  } while (cur !== prev);
+  return cur;
+}
+
 async function transcribePcm(pcm) {
   if (!API_KEY) return "";
   const monoPcm = downmixAndResample(pcm);
   const wav = pcmToWav(monoPcm);
+  // smart_format & punctuate are tuned for English — for Thai they insert
+  // syllable-level spaces that break downstream text matching, so we skip them.
   const url =
     `${ENDPOINT}?model=${encodeURIComponent(MODEL)}` +
-    `&language=${encodeURIComponent(LANGUAGE)}` +
-    `&punctuate=true&smart_format=true`;
+    `&language=${encodeURIComponent(LANGUAGE)}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30_000);
   let res;
@@ -186,5 +208,5 @@ async function transcribePcm(pcm) {
   const json = await res.json();
   const transcript =
     json?.results?.channels?.[0]?.alternatives?.[0]?.transcript || "";
-  return transcript.trim();
+  return normalizeThaiSpacing(transcript.trim());
 }
