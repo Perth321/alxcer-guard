@@ -1606,47 +1606,102 @@ async function handleVisionReply(msg, triggerReason, media) {
   }
 
   // ---- VIDEOS ----
+  // Two-mode treatment, mirroring the image flow:
+  //   • chat   → extract 4 evenly-spaced frames, feed them ALL to the vision
+  //              LLM so it perceives motion across time, attach the middle
+  //              frame as a thumbnail so the user sees what we sampled.
+  //   • detect → same frame extraction, run YOLO on every frame, draw boxes
+  //              on every frame that has detections (cap at 3 attachments),
+  //              produce a per-frame summary line + an aggregated count.
+  const VIDEO_FRAMES_CHAT = 4;
+  const VIDEO_FRAMES_DETECT = 4;
+  const MAX_ANNOTATED_FRAMES = 3;
+
   for (const vid of media.videos.slice(0, 1)) {
+    const baseName = (vid.name || "video").replace(/\.[^.]+$/, "");
     try {
       const buf = await fetchBuffer(vid.url, 50 * 1024 * 1024);
-      const frames = await extractVideoFrames(buf, 3);
-      // Always feed the middle frame to the vision LLM (so chat mode can talk about videos too).
-      const midFrame = frames[Math.floor(frames.length / 2)];
-      if (midFrame) {
-        visionImageUrls.push(`data:image/jpeg;base64,${midFrame.buffer.toString("base64")}`);
+      const frameCount = mode === "detect" ? VIDEO_FRAMES_DETECT : VIDEO_FRAMES_CHAT;
+      const frames = await extractVideoFrames(buf, frameCount);
+      if (!frames.length) {
+        if (mode === "detect") {
+          detectionSummaries.push(`🎬 ${vid.name || "video"}: ดึงเฟรมไม่ออกเลยครับ`);
+        }
+        continue;
       }
-      if (mode !== "detect") continue;
-      const allClasses = new Map();
-      for (const [i, f] of frames.entries()) {
+
+      // Feed every frame to the vision LLM (cap at 4 so the request stays light).
+      // The LLM will see them as a chronological sequence and can describe motion.
+      for (const f of frames.slice(0, 4)) {
+        visionImageUrls.push(`data:image/jpeg;base64,${f.buffer.toString("base64")}`);
+      }
+
+      if (mode !== "detect") {
+        // Chat mode: attach the middle frame so the user can see what we sampled.
+        const midFrame = frames[Math.floor(frames.length / 2)];
+        if (midFrame) {
+          annotatedAttachments.push({
+            attachment: midFrame.buffer,
+            name: `${baseName}_frame_t${midFrame.time.toFixed(1)}s.jpg`,
+          });
+        }
+        continue;
+      }
+
+      // ── Detect mode ────────────────────────────────────────────────
+      const allClasses = new Map();          // total occurrences across frames
+      const perFrameSummaries = [];          // "t=1.2s: คน 2, รถ 1"
+      const annotatedSoFar = [];             // {time, buffer}
+
+      for (const f of frames) {
         try {
           const { detections, width, height } = await detectObjects(f.buffer);
           for (const d of detections) {
             allClasses.set(d.class, (allClasses.get(d.class) || 0) + 1);
           }
-          if (detections.length && i === Math.floor(frames.length / 2)) {
-            // Annotate the middle frame and attach it.
+          // Per-frame summary line
+          const frameSummary = detections.length
+            ? [...new Map(
+                detections.reduce((m, d) => {
+                  m.set(d.class, (m.get(d.class) || 0) + 1);
+                  return m;
+                }, new Map()),
+              ).entries()]
+                .map(([cls, n]) => `${thaiLabel(cls)} ${n}`)
+                .join(", ")
+            : "ว่างเปล่า";
+          perFrameSummaries.push(`  • t=${f.time.toFixed(1)}s → ${frameSummary}`);
+
+          if (detections.length && annotatedSoFar.length < MAX_ANNOTATED_FRAMES) {
             const annotated = await drawBoxes(f.buffer, detections, width, height);
-            annotatedAttachments.push({
-              attachment: annotated,
-              name: `yolo_${(vid.name || "video").replace(/\.[^.]+$/, "")}_t${f.time.toFixed(1)}s.jpg`,
-            });
+            annotatedSoFar.push({ time: f.time, buffer: annotated });
           }
         } catch (err) {
           console.warn(`[vision] video frame YOLO failed: ${err.message?.slice(0, 200)}`);
+          perFrameSummaries.push(`  • t=${f.time.toFixed(1)}s → ประมวลผลล้มเหลว`);
         }
       }
+
+      // Attach all annotated frames in chronological order.
+      for (const a of annotatedSoFar) {
+        annotatedAttachments.push({
+          attachment: a.buffer,
+          name: `yolo_${baseName}_t${a.time.toFixed(1)}s.jpg`,
+        });
+      }
+
       const top = [...allClasses.entries()]
         .sort((a, b) => b[1] - a[1])
         .slice(0, 8)
         .map(([cls, n]) => `${thaiLabel(cls)} ${n}`)
         .join(", ");
       detectionSummaries.push(
-        `🎬 ${vid.name || "video"}: สุ่มดู ${frames.length} เฟรม → ${top || "ไม่เจอวัตถุที่รู้จัก"}`,
+        `🎬 ${vid.name || "video"} (สุ่ม ${frames.length} เฟรม) — รวม: ${top || "ไม่เจอวัตถุที่รู้จัก"}\n${perFrameSummaries.join("\n")}`,
       );
     } catch (err) {
       console.warn(`[vision] video processing failed: ${err.message?.slice(0, 200)}`);
       if (mode === "detect") {
-        detectionSummaries.push(`🎬 ${vid.name || "video"}: ประมวลผลวิดีโอล้มเหลว`);
+        detectionSummaries.push(`🎬 ${vid.name || "video"}: ประมวลผลวิดีโอล้มเหลว (${err.message?.slice(0, 80)})`);
       }
     }
   }
@@ -1655,11 +1710,15 @@ async function handleVisionReply(msg, triggerReason, media) {
   let descriptionText = "";
   if (visionImageUrls.length) {
     try {
+      const hasVideo = media.videos.length > 0;
+      const sequenceHint = hasVideo
+        ? ` ภาพที่ส่งให้คือเฟรมจากวิดีโอเรียงตามเวลา (เฟรมแรก → เฟรมสุดท้าย) ใช้ลำดับนี้บรรยายการเคลื่อนไหวหรือเหตุการณ์ที่เกิดขึ้นในคลิป`
+        : "";
       const systemExtra = mode === "detect"
-        ? `Trigger: ${triggerReason}. ผู้ใช้ขอให้วิเคราะห์/ตรวจวัตถุในสื่อ. มีผล YOLO แนบมาให้ — สรุปสิ่งที่เห็นแบบกระชับ ไม่ต้องอ่านผล YOLO ซ้ำเพราะระบบจะแสดงให้แล้ว`
-        : `Trigger: ${triggerReason}. ผู้ใช้ส่งสื่อมาคุยเล่น/ขอความเห็น ไม่ได้สั่งให้สแกน. ตอบคุยเล่น เป็นกันเอง สั้น กระชับ มีคาแรกเตอร์ ไม่ต้องลิสต์วัตถุแบบรายงาน`;
+        ? `Trigger: ${triggerReason}. ผู้ใช้ขอให้วิเคราะห์/ตรวจวัตถุในสื่อ. มีผล YOLO แนบมาให้ — สรุปสิ่งที่เห็นแบบกระชับ ไม่ต้องอ่านผล YOLO ซ้ำเพราะระบบจะแสดงให้แล้ว.${sequenceHint}`
+        : `Trigger: ${triggerReason}. ผู้ใช้ส่งสื่อมาคุยเล่น/ขอความเห็น ไม่ได้สั่งให้สแกน. ตอบคุยเล่น เป็นกันเอง สั้น กระชับ มีคาแรกเตอร์ ไม่ต้องลิสต์วัตถุแบบรายงาน.${sequenceHint}`;
       const reply = await generateVisionReply({
-        imageUrls: visionImageUrls.slice(0, 4),
+        imageUrls: visionImageUrls.slice(0, 6),
         userText: cleanText || undefined,
         detectionContext: mode === "detect" ? detectionSummaries.join(" | ") : "",
         systemExtra,
