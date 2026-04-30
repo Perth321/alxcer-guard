@@ -282,7 +282,11 @@ const PCM_BYTES_PER_SECOND = PCM_SAMPLE_RATE * PCM_CHANNELS * 2;
 // whisper. Without this, single-word wake calls were dropped silently.
 const MIN_UTTERANCE_SEC = 0.35;
 const MAX_UTTERANCE_SEC = 5;
-const IDLE_FLUSH_MS = 1500;
+// Lowered 1500 → 600. Discord's voice receiver fires speaking-end on its own
+// for normal utterances; this is just the safety-net flush for cases where
+// the speaking-end event is missed (e.g. abrupt disconnects). 600ms feels
+// snappy without splitting normal pauses mid-sentence.
+const IDLE_FLUSH_MS = 600;
 
 const offenses = loadOffenses();
 loadTranscriptsFromDisk();
@@ -599,9 +603,10 @@ async function handleWakeCommand({ userId, username, command, raw, isFollowUp })
   try {
     // Stage 1: only beep on the FIRST wake utterance, not on the follow-up.
     // The user already heard "ติ๊ดๆ" and is now giving the command — playing
-    // it again would be confusing and adds latency.
+    // it again would be confusing and adds latency. Fire-and-forget so the
+    // ~430ms beep doesn't block sending the status msg or starting the agent.
     if (!isFollowUp && conn) {
-      await playPcmBeep(conn, WAKE_BEEP_PCM, "wake", 2500);
+      playPcmBeep(conn, WAKE_BEEP_PCM, "wake", 2500).catch(() => {});
     }
 
     // Stage 2: command body empty → mark pending, await the next utterance
@@ -690,9 +695,9 @@ async function handleWakeCommand({ userId, username, command, raw, isFollowUp })
   } catch (err) {
     console.error("[wake] outer handler error", err?.message, err?.stack);
   } finally {
-    // ALWAYS play the done beep on success or failure (except for the
-    // pending-acknowledgement path which already returned above)
-    await playDone();
+    // Done beep is fire-and-forget — we don't want the user's ~610ms beep
+    // playback to block releasing wakeBusy or the visible reply turnaround.
+    playDone().catch(() => {});
     wakeBusy = false;
   }
 }

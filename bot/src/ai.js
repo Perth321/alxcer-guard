@@ -5,12 +5,15 @@ const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 // Fallback chain. Primary first; we walk down on 429/5xx errors.
 // All chosen models support tool-calling and good Thai + English.
+// Smaller / faster models first — voice-command UX is dominated by LLM
+// latency, and a 20B model with tool support responds in 1-3s vs 5-15s for
+// the 80B / 120B tier. The bigger ones stay as fallbacks for quality.
 const CHAT_FALLBACKS = (process.env.OPENROUTER_CHAT_MODELS ||
-  "qwen/qwen3-next-80b-a3b-instruct:free,z-ai/glm-4.5-air:free,openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free,nvidia/nemotron-3-super-120b-a12b:free"
+  "openai/gpt-oss-20b:free,z-ai/glm-4.5-air:free,qwen/qwen3-next-80b-a3b-instruct:free,openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free"
 ).split(",").map((s) => s.trim()).filter(Boolean);
 
 const FAST_FALLBACKS = (process.env.OPENROUTER_FAST_MODELS ||
-  "qwen/qwen3-next-80b-a3b-instruct:free,openai/gpt-oss-20b:free,z-ai/glm-4.5-air:free,meta-llama/llama-3.3-70b-instruct:free"
+  "openai/gpt-oss-20b:free,z-ai/glm-4.5-air:free,qwen/qwen3-next-80b-a3b-instruct:free,meta-llama/llama-3.3-70b-instruct:free"
 ).split(",").map((s) => s.trim()).filter(Boolean);
 
 // Vision-capable free models. We try Llama-4 multimodal first (best image

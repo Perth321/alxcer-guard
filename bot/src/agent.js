@@ -1186,7 +1186,7 @@ Admin: "เหนื่อยว่ะ"   (no action implied)
 → no tool
 → reply: "พักก่อนครับ เดี๋ยวอะไรก็ดูแลให้ ไม่ต้องห่วง 😌"`;
 
-export async function runAgent({ userPrompt, ctx, maxSteps = 8 }) {
+export async function runAgent({ userPrompt, ctx, maxSteps = 5 }) {
   if (!aiAvailable()) return "AI ยังไม่พร้อม (OPENROUTER_API_KEY ไม่ได้ตั้ง)";
   const { authorTag, authorId, guild, chatHistory } = ctx;
 
@@ -1223,7 +1223,9 @@ export async function runAgent({ userPrompt, ctx, maxSteps = 8 }) {
       history: messages,
       systemExtra: AGENT_SYSTEM,
       tools: TOOLS,
-      max_tokens: 700,
+      // Smaller token cap = faster generation. Voice replies are short
+      // confirmations ("ลบให้แล้ว 5 ข้อความ") so 350 is plenty.
+      max_tokens: 350,
     });
     if (!reply) break;
     messages.push(reply);
