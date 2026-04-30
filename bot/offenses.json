@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 4,
-        "lastAt": 1777551437138,
+        "count": 5,
+        "lastAt": 1777562977438,
         "history": [
           {
             "at": 1777483111839,
@@ -43,6 +43,15 @@
             "matched": "เว้ย",
             "reason": "ใช้คำหยาบ",
             "excerpt": "มันคือภาษาเวียดนามเว้ย",
+            "action": "timeout_failed",
+            "source": "ai"
+          },
+          {
+            "at": 1777562977437,
+            "severity": 7,
+            "matched": "รีเครื่องแปบ",
+            "reason": "มีเนื้อหาทางเพศ",
+            "excerpt": "รีเครื่องแปบ",
             "action": "timeout_failed",
             "source": "ai"
           }
@@ -99,7 +108,7 @@
     "264669488035659778": {
       "count": 1,
       "lastOffenseAt": 1777562392088,
-      "muteUntil": 0,
+      "muteUntil": 1777562452088,
       "lastWord": "หี",
       "lastSource": "voice"
     },
