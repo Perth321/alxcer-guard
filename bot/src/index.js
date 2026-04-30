@@ -200,6 +200,23 @@ const userState = new Map();
 const subscribed = new Set();
 const audioBuffers = new Map();
 
+// Voice wake-word state. When a user says "การ์ด"/"guard" alone, we set their
+// id here so the NEXT transcript from them (within WAKE_PENDING_MS) is treated
+// as the actual command. Concurrent commands are rejected via wakeBusy.
+const pendingWake = new Map();
+const WAKE_PENDING_MS = 12_000;
+let wakeBusy = false;
+const WAKE_RE =
+  /^[\s,.!?\-:'"`(]*(?:การ[์]?[ดต]ดี้?|การ์ดดี|กา[รล]ด|ก๊า[ดต]|guard|gaurd|gard|hey\s+guard|alxcer\s+guard)\b[\s,.!?:\-]*/i;
+function extractWakeCommand(text) {
+  const t = (text || "").trim();
+  if (!t) return null;
+  const m = t.match(WAKE_RE);
+  if (!m) return null;
+  // Whatever follows the wake word is the spoken command. May be empty.
+  return t.slice(m[0].length).replace(/^[\s,.;:!?\-]+/, "").trim();
+}
+
 let currentChannelId = null;
 let pollHandle = null;
 let audioFlushHandle = null;
@@ -450,6 +467,29 @@ async function handleVoiceTranscript(text, meta) {
     }
   } catch {}
 
+  // ── WAKE-WORD DETECTION ────────────────────────────────────────────────
+  // 1. Did this user already say "การ์ด" alone in the last 12s? → treat THIS
+  //    transcript as the command body.
+  // 2. Otherwise, does this transcript itself START with the wake word?
+  //    a) "การ์ด <command>" → run command immediately
+  //    b) "การ์ด" alone → set pending state, beep, wait for next transcript
+  let isWakeFlow = false;
+  let wakeCommand = null;
+
+  const pending = pendingWake.get(meta.userId);
+  if (pending && Date.now() - pending.at < WAKE_PENDING_MS) {
+    pendingWake.delete(meta.userId);
+    isWakeFlow = true;
+    wakeCommand = trimmed;
+  } else {
+    pendingWake.delete(meta.userId);
+    const cmd = extractWakeCommand(trimmed);
+    if (cmd !== null) {
+      isWakeFlow = true;
+      wakeCommand = cmd; // may be empty string
+    }
+  }
+
   addTranscript({
     userId: meta.userId,
     username,
@@ -458,7 +498,20 @@ async function handleVoiceTranscript(text, meta) {
     source: "voice",
     flagged: !!word,
     flaggedWord: word || null,
+    wake: isWakeFlow || undefined,
   });
+
+  if (isWakeFlow) {
+    // Don't apply word-ban to a guard wake-call even if a banned word is in
+    // the prompt — the user is talking TO the bot, not in casual chat.
+    handleWakeCommand({
+      userId: meta.userId,
+      username,
+      command: wakeCommand,
+      raw: trimmed,
+    }).catch((err) => console.error("[wake] handler failed", err?.message));
+    return;
+  }
 
   if (!word) return;
   if (!config.guildId) return;
@@ -468,6 +521,107 @@ async function handleVoiceTranscript(text, meta) {
   } catch (err) {
     console.error("[transcribe] wordban dispatch failed", err?.message);
   }
+}
+
+async function handleWakeCommand({ userId, username, command, raw }) {
+  if (!config.guildId) return;
+  if (wakeBusy) {
+    console.log(`[wake] busy — ignoring new wake from ${userId}`);
+    return;
+  }
+  wakeBusy = true;
+  let conn = getVoiceConnection(config.guildId);
+
+  try {
+    // Stage 1: acknowledge with the short "ติ๊ดๆ" beep
+    if (conn) await playPcmBeep(conn, WAKE_BEEP_PCM, "wake", 2500);
+
+    // Stage 2: if no command body yet, mark pending and let the next utterance
+    // from this user come in. The transcript handler will route back here.
+    if (!command) {
+      pendingWake.set(userId, { at: Date.now() });
+      console.log(`[wake] user=${userId} acknowledged — awaiting command (${WAKE_PENDING_MS}ms)`);
+      // Auto-expire pending so beep status resets cleanly
+      setTimeout(() => {
+        const p = pendingWake.get(userId);
+        if (p && Date.now() - p.at >= WAKE_PENDING_MS - 100) {
+          pendingWake.delete(userId);
+          console.log(`[wake] user=${userId} pending timed out`);
+        }
+      }, WAKE_PENDING_MS + 100).unref?.();
+      return;
+    }
+
+    console.log(`[wake] user=${userId} command="${command.slice(0, 200)}"`);
+
+    const guild = await client.guilds.fetch(config.guildId).catch(() => null);
+    if (!guild) return;
+    const member = await guild.members.fetch(userId).catch(() => null);
+
+    // Pick a channel to post the result in: prefer the voice channel itself
+    // (Discord lets you chat inside voice channels), fall back to the system
+    // channel or the first sendable text channel.
+    const replyChannel = pickReplyChannel(guild);
+
+    if (!member || !isAdmin(member)) {
+      if (replyChannel) {
+        await replyChannel
+          .send(`🎙 <@${userId}> เรียก "${raw}" — แต่ไม่ใช่แอดมิน เลยใช้คำสั่งไม่ได้นะ`)
+          .catch(() => {});
+      }
+      return;
+    }
+
+    if (replyChannel) await replyChannel.sendTyping().catch(() => {});
+
+    let result = "";
+    try {
+      result = await runAgent({
+        userPrompt: `[คำสั่งเสียงจาก ${username || userId}]: ${command}`,
+        ctx: {
+          guild,
+          channel: replyChannel,
+          authorTag: username || userId,
+          authorId: userId,
+          offenses,
+          persistOffenses: async () => persistOffenses(),
+          chatHistory: [],
+        },
+      });
+    } catch (err) {
+      console.warn("[wake] agent failed:", err?.message?.slice(0, 200));
+      result = `เออร์เรอครับ: ${err?.message?.slice(0, 120) || "unknown"}`;
+    }
+
+    const text = (result || "").trim() || "เสร็จแล้วครับ";
+    if (replyChannel) {
+      await replyChannel
+        .send(`🎙 <@${userId}> สั่ง: \`${command.slice(0, 180)}\`\n${text.slice(0, 1800)}`)
+        .catch((err) => console.warn("[wake] reply send failed", err?.message));
+    }
+
+    // Stage 3: long beep so the user hears that processing is done
+    conn = getVoiceConnection(config.guildId);
+    if (conn) await playPcmBeep(conn, DONE_BEEP_PCM, "wake-done", 3000);
+  } finally {
+    wakeBusy = false;
+  }
+}
+
+function pickReplyChannel(guild) {
+  const voiceChan = currentChannelId ? guild.channels.cache.get(currentChannelId) : null;
+  const me = guild.members.me;
+  const canSend = (ch) => {
+    if (!ch || !me) return false;
+    const perms = ch.permissionsFor(me);
+    return perms?.has(PermissionFlagsBits.SendMessages) && perms?.has(PermissionFlagsBits.ViewChannel);
+  };
+  if (canSend(voiceChan)) return voiceChan;
+  if (canSend(guild.systemChannel)) return guild.systemChannel;
+  for (const ch of guild.channels.cache.values()) {
+    if (ch.type === ChannelType.GuildText && canSend(ch)) return ch;
+  }
+  return null;
 }
 
 function subscribeUser(receiver, userId) {
@@ -509,18 +663,9 @@ function subscribeUser(receiver, userId) {
   }
 }
 
-function generateBeepPCM() {
+function generateBeepFromSegments(segments, gain = 0.7) {
   const sampleRate = 48000;
   const channels = 2;
-  const segments = [
-    { freq: 0, ms: 200 },
-    { freq: 880, ms: 280 },
-    { freq: 0, ms: 120 },
-    { freq: 660, ms: 320 },
-    { freq: 0, ms: 100 },
-    { freq: 1100, ms: 380 },
-    { freq: 0, ms: 400 },
-  ];
   const totalSamples = segments.reduce(
     (sum, seg) => sum + Math.floor((sampleRate * seg.ms) / 1000),
     0,
@@ -536,7 +681,7 @@ function generateBeepPCM() {
       let val = 0;
       if (seg.freq > 0) {
         const env = Math.min(1, i / fade, (samples - i) / fade);
-        val = Math.sin(phase) * 0.7 * env;
+        val = Math.sin(phase) * gain * env;
         phase += omega;
       }
       const sample = Math.max(-32767, Math.min(32767, Math.round(val * 32767)));
@@ -547,6 +692,36 @@ function generateBeepPCM() {
   }
   return buf;
 }
+
+function generateBeepPCM() {
+  // Original 3-tone join greeting
+  return generateBeepFromSegments([
+    { freq: 0, ms: 200 },
+    { freq: 880, ms: 280 },
+    { freq: 0, ms: 120 },
+    { freq: 660, ms: 320 },
+    { freq: 0, ms: 100 },
+    { freq: 1100, ms: 380 },
+    { freq: 0, ms: 400 },
+  ]);
+}
+
+// "ติ๊ดๆ" — short two-tone chirp meaning "I'm listening"
+const WAKE_BEEP_PCM = generateBeepFromSegments([
+  { freq: 0, ms: 40 },
+  { freq: 1400, ms: 110 },
+  { freq: 0, ms: 70 },
+  { freq: 1700, ms: 130 },
+  { freq: 0, ms: 80 },
+], 0.55);
+
+// Single longer descending tone — "done, you can speak again"
+const DONE_BEEP_PCM = generateBeepFromSegments([
+  { freq: 0, ms: 30 },
+  { freq: 880, ms: 220 },
+  { freq: 660, ms: 280 },
+  { freq: 0, ms: 80 },
+], 0.55);
 
 let cachedBeepPCM = null;
 let beepPlaying = false;
@@ -684,17 +859,20 @@ async function playPrankSound(name) {
   return { ok: true, channelId };
 }
 
-async function playJoinBeep(connection) {
+async function playPcmBeep(connection, pcmBuffer, label = "beep", timeoutMs = 5000) {
   if (beepPlaying) {
-    console.log("[beep] already playing — skipping");
+    console.log(`[${label}] another beep already playing — skipping`);
+    return;
+  }
+  if (!connection || connection.state?.status === VoiceConnectionStatus.Destroyed) {
+    console.warn(`[${label}] no live voice connection — skipping`);
     return;
   }
   beepPlaying = true;
   let subscription = null;
   let player = null;
   try {
-    if (!cachedBeepPCM) cachedBeepPCM = generateBeepPCM();
-    const stream = Readable.from([cachedBeepPCM], { objectMode: false });
+    const stream = Readable.from([pcmBuffer], { objectMode: false });
     const resource = createAudioResource(stream, {
       inputType: StreamType.Raw,
       silencePaddingFrames: 5,
@@ -704,38 +882,41 @@ async function playJoinBeep(connection) {
     });
     subscription = connection.subscribe(player);
     if (!subscription) {
-      console.warn("[beep] connection.subscribe returned null");
+      console.warn(`[${label}] connection.subscribe returned null`);
       return;
     }
     player.play(resource);
-    console.log(
-      `[beep] playing join signal (3-tone, ${cachedBeepPCM.length} bytes PCM)`,
-    );
+    console.log(`[${label}] playing (${pcmBuffer.length} bytes PCM)`);
     await new Promise((resolve) => {
       const timeout = setTimeout(() => {
-        console.warn("[beep] timed out after 5s");
+        console.warn(`[${label}] timed out after ${timeoutMs}ms`);
         try { player.stop(); } catch {}
         resolve();
-      }, 5000);
+      }, timeoutMs);
       player.on(AudioPlayerStatus.Idle, () => {
-        console.log("[beep] finished");
+        console.log(`[${label}] finished`);
         clearTimeout(timeout);
         resolve();
       });
       player.on("error", (err) => {
-        console.error("[beep] player error:", err?.message);
+        console.error(`[${label}] player error:`, err?.message);
         clearTimeout(timeout);
         resolve();
       });
     });
   } catch (err) {
-    console.error("[beep] play failed:", err?.message, err?.stack);
+    console.error(`[${label}] play failed:`, err?.message, err?.stack);
   } finally {
     if (subscription) {
       try { subscription.unsubscribe(); } catch {}
     }
     beepPlaying = false;
   }
+}
+
+async function playJoinBeep(connection) {
+  if (!cachedBeepPCM) cachedBeepPCM = generateBeepPCM();
+  await playPcmBeep(connection, cachedBeepPCM, "beep", 5000);
 }
 
 async function attachReceiver(connection, channel) {
