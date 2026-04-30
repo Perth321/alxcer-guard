@@ -686,13 +686,22 @@ async function handleWakeCommand({ userId, username, command, raw, isFollowUp })
     }
 
     const body = (result || "").trim();
+    // Honest engine tag so the user can see which AI actually answered.
+    let engineTag = "";
+    try {
+      const s = getModelStatus();
+      if (s.lastProvider && s.lastModel) {
+        const shortModel = s.lastModel.replace(/^.+\//, "").replace(/-preview-\d+-\d+$/, "");
+        engineTag = ` _(via ${s.lastProvider}: ${shortModel})_`;
+      }
+    } catch {}
     let finalText;
     if (errMsg) {
-      finalText = `🎙 <@${userId}> สั่ง: \`${command.slice(0, 180)}\`\n⚠️ เออร์เรอ: ${errMsg}`;
+      finalText = `🎙 <@${userId}> สั่ง: \`${command.slice(0, 180)}\`\n⚠️ เออร์เรอ: ${errMsg}${engineTag}`;
     } else if (!body) {
-      finalText = `🎙 <@${userId}> สั่ง: \`${command.slice(0, 180)}\`\n✅ เสร็จแล้วครับ`;
+      finalText = `🎙 <@${userId}> สั่ง: \`${command.slice(0, 180)}\`\n✅ เสร็จแล้วครับ${engineTag}`;
     } else {
-      finalText = `🎙 <@${userId}> สั่ง: \`${command.slice(0, 180)}\`\n${body.slice(0, 1800)}`;
+      finalText = `🎙 <@${userId}> สั่ง: \`${command.slice(0, 180)}\`\n${body.slice(0, 1800)}${engineTag}`;
     }
     try {
       if (statusMsg) await statusMsg.edit(finalText);
@@ -2516,7 +2525,7 @@ async function handleAgentOrChatReply(msg, triggerReason) {
     const reply = await generateReply({
       history: [
         ...ctxLines,
-        { role: "user", content: `${author.username}: ${cleanContent}` },
+        { role: "user", content: `${author.username}: ${cleanText}` },
       ],
       systemExtra: attemptedAgent
         ? `Trigger: ${triggerReason}. (Admin agent path failed — just chat normally and tell them tools are temporarily unavailable if they were asking for an action.)`

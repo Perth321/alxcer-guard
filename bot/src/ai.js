@@ -18,13 +18,16 @@ const GEMINI_VISION_MODELS = (process.env.GEMINI_VISION_MODELS ||
   "gemini-2.5-pro-preview-06-05,gemini-2.5-flash-preview-05-20,gemini-2.0-flash"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
-// OpenRouter fallback chains (used when Gemini is exhausted)
+// OpenRouter fallback chains (used when Gemini is exhausted).
+// IMPORTANT: OpenAI-branded models (openai/gpt-oss-*) are LAST in the chain
+// because they aggressively self-identify as "ChatGPT made by OpenAI" and
+// override our persona. Qwen / GLM / Llama / Mistral respect the system prompt.
 const OPENROUTER_CHAT_FALLBACKS = (process.env.OPENROUTER_CHAT_MODELS ||
-  "qwen/qwen3-next-80b-a3b-instruct:free,z-ai/glm-4.5-air:free,openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free,nvidia/nemotron-3-super-120b-a12b:free"
+  "qwen/qwen3-next-80b-a3b-instruct:free,z-ai/glm-4.5-air:free,meta-llama/llama-3.3-70b-instruct:free,mistralai/mistral-small-3.2-24b-instruct:free,nvidia/nemotron-3-super-120b-a12b:free,openai/gpt-oss-120b:free"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const OPENROUTER_FAST_FALLBACKS = (process.env.OPENROUTER_FAST_MODELS ||
-  "qwen/qwen3-next-80b-a3b-instruct:free,openai/gpt-oss-20b:free,z-ai/glm-4.5-air:free,meta-llama/llama-3.3-70b-instruct:free"
+  "qwen/qwen3-next-80b-a3b-instruct:free,z-ai/glm-4.5-air:free,meta-llama/llama-3.3-70b-instruct:free,mistralai/mistral-small-3.2-24b-instruct:free,openai/gpt-oss-20b:free"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const OPENROUTER_VISION_FALLBACKS = (process.env.OPENROUTER_VISION_MODELS ||
@@ -156,13 +159,91 @@ async function callOpenRouter({ model, models, messages, tools, tool_choice, max
 
 // ===== GEMINI =====
 
+// Strip OpenAI-only schema keywords ($schema, additionalProperties, etc.) that
+// Gemini's parameters validator rejects. Walks the schema in place.
+function _sanitizeSchemaForGemini(schema) {
+  if (!schema || typeof schema !== "object") return schema;
+  const drop = ["$schema", "additionalProperties", "$id", "$defs", "definitions"];
+  for (const k of drop) delete schema[k];
+  // Gemini wants types lowercased.
+  if (typeof schema.type === "string") schema.type = schema.type.toLowerCase();
+  if (schema.properties) {
+    for (const v of Object.values(schema.properties)) _sanitizeSchemaForGemini(v);
+  }
+  if (schema.items) _sanitizeSchemaForGemini(schema.items);
+  if (Array.isArray(schema.anyOf)) schema.anyOf.forEach(_sanitizeSchemaForGemini);
+  if (Array.isArray(schema.oneOf)) schema.oneOf.forEach(_sanitizeSchemaForGemini);
+  if (Array.isArray(schema.allOf)) schema.allOf.forEach(_sanitizeSchemaForGemini);
+  return schema;
+}
+
+function convertToolsToGemini(tools) {
+  if (!tools?.length) return undefined;
+  const declarations = tools
+    .filter((t) => t?.type === "function" && t.function?.name)
+    .map((t) => {
+      const params = t.function.parameters
+        ? _sanitizeSchemaForGemini(JSON.parse(JSON.stringify(t.function.parameters)))
+        : undefined;
+      return {
+        name: t.function.name,
+        description: (t.function.description || "").slice(0, 1024),
+        ...(params ? { parameters: params } : {}),
+      };
+    });
+  if (!declarations.length) return undefined;
+  return [{ functionDeclarations: declarations }];
+}
+
 async function convertMessagesToGemini(messages) {
   const systemMsg = messages.find(m => m.role === "system");
   const nonSystem = messages.filter(m => m.role !== "system");
 
   const contents = [];
   for (const msg of nonSystem) {
+    // ── Tool-result message (OpenAI: role="tool") → Gemini functionResponse
+    if (msg.role === "tool") {
+      let payload;
+      try { payload = JSON.parse(msg.content); }
+      catch { payload = { result: msg.content }; }
+      // functionResponse must be wrapped in an object body for Gemini
+      const responseBody = (payload && typeof payload === "object" && !Array.isArray(payload))
+        ? payload
+        : { result: payload };
+      const part = {
+        functionResponse: {
+          name: msg.name || "tool",
+          response: responseBody,
+        },
+      };
+      const last = contents[contents.length - 1];
+      if (last && last.role === "user") last.parts.push(part);
+      else contents.push({ role: "user", parts: [part] });
+      continue;
+    }
+
     const role = msg.role === "assistant" ? "model" : "user";
+
+    // ── Assistant message with tool_calls → Gemini functionCall parts
+    if (msg.role === "assistant" && Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
+      const parts = [];
+      if (typeof msg.content === "string" && msg.content.trim()) {
+        parts.push({ text: msg.content });
+      }
+      for (const c of msg.tool_calls) {
+        if (c?.function?.name) {
+          let args = {};
+          try { args = JSON.parse(c.function.arguments || "{}"); } catch {}
+          parts.push({ functionCall: { name: c.function.name, args } });
+        }
+      }
+      if (parts.length === 0) parts.push({ text: " " });
+      const last = contents[contents.length - 1];
+      if (last && last.role === role) last.parts.push(...parts);
+      else contents.push({ role, parts });
+      continue;
+    }
+
     let parts;
 
     if (typeof msg.content === "string") {
@@ -208,20 +289,26 @@ async function convertMessagesToGemini(messages) {
   return { contents, systemInstruction: systemMsg ? { parts: [{ text: typeof systemMsg.content === "string" ? systemMsg.content : (systemMsg.content?.[0]?.text ?? "") }] } : undefined };
 }
 
-async function callGemini({ model, messages, max_tokens = 800, temperature = 0.7, response_format }) {
+async function callGemini({ model, messages, tools, tool_choice, max_tokens = 800, temperature = 0.7, response_format }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not set");
 
   const { contents, systemInstruction } = await convertMessagesToGemini(messages);
+  const geminiTools = convertToolsToGemini(tools);
 
   const requestBody = {
     contents,
     generationConfig: {
       maxOutputTokens: max_tokens,
       temperature,
-      ...(response_format?.type === "json_object" ? { responseMimeType: "application/json" } : {}),
+      // response_format is incompatible with function calling on Gemini.
+      ...(response_format?.type === "json_object" && !geminiTools ? { responseMimeType: "application/json" } : {}),
     },
     ...(systemInstruction ? { systemInstruction } : {}),
+    ...(geminiTools ? { tools: geminiTools } : {}),
+    ...(geminiTools && tool_choice
+      ? { toolConfig: { functionCallingConfig: { mode: tool_choice === "required" ? "ANY" : "AUTO" } } }
+      : {}),
     safetySettings: [
       { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
       { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -256,32 +343,48 @@ async function callGemini({ model, messages, max_tokens = 800, temperature = 0.7
   let json;
   try { json = JSON.parse(text); } catch { throw new Error(`Gemini non-JSON (${model})`); }
 
-  const content = json.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join("") ?? null;
-  if (!content) {
+  const parts = json.candidates?.[0]?.content?.parts || [];
+  const textContent = parts.map(p => p.text).filter(Boolean).join("");
+
+  // Surface any functionCall parts as OpenAI-style tool_calls so agent.js
+  // doesn't need to know which provider answered.
+  const fnCalls = parts
+    .map((p, idx) => p.functionCall ? { p: p.functionCall, idx } : null)
+    .filter(Boolean);
+  if (fnCalls.length) {
+    const tool_calls = fnCalls.map(({ p, idx }) => ({
+      id: `gemcall_${Date.now().toString(36)}_${idx}`,
+      type: "function",
+      function: {
+        name: p.name,
+        arguments: JSON.stringify(p.args || {}),
+      },
+    }));
+    return { role: "assistant", content: textContent || "", tool_calls };
+  }
+
+  if (!textContent) {
     const reason = json.candidates?.[0]?.finishReason;
     if (reason === "SAFETY") throw new Error(`Gemini safety block (${model})`);
     throw new Error(`Gemini empty response (${model}): ${JSON.stringify(json).slice(0, 200)}`);
   }
-  return { role: "assistant", content };
+  return { role: "assistant", content: textContent };
 }
 
 // ===== UNIFIED CALL: Gemini first → OpenRouter fallback =====
-// Note: tool-calling always goes through OpenRouter (Gemini tools need different format)
+// Tool-calling now also goes through Gemini first; only when every Gemini
+// model fails do we fall back to OpenRouter. This keeps replies in Gemini's
+// "voice" instead of OpenRouter's OpenAI-branded models.
 
 async function callAI({ geminiModels, openrouterModels, messages, tools, tool_choice, max_tokens = 800, temperature = 0.7, response_format, task }) {
   const _task = task || "chat";
-  // Agent tool-calls: OpenRouter only (Gemini tool format differs)
-  if (tools && tools.length > 0) {
-    if (!process.env.OPENROUTER_API_KEY) throw new Error("Tool-calling requires OPENROUTER_API_KEY");
-    return callOpenRouter({ models: openrouterModels, messages, tools, tool_choice, max_tokens, temperature, response_format, _task });
-  }
 
-  // Try Gemini first
+  // Try Gemini first — chat AND tool-calls
   if (process.env.GEMINI_API_KEY && geminiModels?.length) {
     let lastErr;
     for (const model of geminiModels) {
       try {
-        const result = await callGemini({ model, messages, max_tokens, temperature, response_format });
+        const result = await callGemini({ model, messages, tools, tool_choice, max_tokens, temperature, response_format });
         if (model !== geminiModels[0]) console.log(`[ai] Gemini fell back to: ${model}`);
         _recordUse("gemini", model, _task);
         return result;
@@ -291,12 +394,12 @@ async function callAI({ geminiModels, openrouterModels, messages, tools, tool_ch
         await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
       }
     }
-    console.warn("[ai] All Gemini models failed → falling back to OpenRouter");
+    console.warn(`[ai] All Gemini models failed (${lastErr?.message?.slice(0, 120)}) → falling back to OpenRouter`);
   }
 
   // OpenRouter fallback
   if (process.env.OPENROUTER_API_KEY && openrouterModels?.length) {
-    return callOpenRouter({ models: openrouterModels, messages, max_tokens, temperature, response_format, _task });
+    return callOpenRouter({ models: openrouterModels, messages, tools, tool_choice, max_tokens, temperature, response_format, _task });
   }
 
   throw new Error("No AI provider available (set GEMINI_API_KEY or OPENROUTER_API_KEY)");
