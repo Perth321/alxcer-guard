@@ -6,36 +6,43 @@ const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 // Gemini models — ordered smartest first, then progressively faster/cheaper.
-// Use STABLE GA model IDs only; preview IDs (e.g. *-preview-06-05) start
-// returning 404 the moment they're promoted to GA, and gemini-1.5-* were
-// deprecated in April 2025. Listing flash-lite gives us a real fallback when
-// the bigger models get rate-limited on the free tier (separate quota pool).
+// Use STABLE GA model IDs only; preview IDs start returning 404 the moment
+// they're promoted to GA. Gemini 3.x went GA in Q1 2026; gemini-1.5-* were
+// deprecated April 2025; we keep 2.5/2.0 as deep fallbacks because their
+// quotas are tracked SEPARATELY from the 3.x pool — when 3.1 hits its free
+// limit, 2.5 still has budget.
 const GEMINI_CHAT_MODELS = (process.env.GEMINI_CHAT_MODELS ||
-  "gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite"
+  "gemini-3.1-pro,gemini-3.1-flash,gemini-3.0-flash,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GEMINI_FAST_MODELS = (process.env.GEMINI_FAST_MODELS ||
-  "gemini-2.5-flash-lite,gemini-2.0-flash-lite,gemini-2.5-flash,gemini-2.0-flash"
+  "gemini-3.1-flash,gemini-3.0-flash,gemini-2.5-flash-lite,gemini-2.0-flash-lite,gemini-2.5-flash,gemini-2.0-flash"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GEMINI_VISION_MODELS = (process.env.GEMINI_VISION_MODELS ||
-  "gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash,gemini-2.5-flash-lite"
+  "gemini-3.1-pro,gemini-3.1-flash,gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash,gemini-2.5-flash-lite"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 // OpenRouter fallback chains (used when Gemini is exhausted).
-// IMPORTANT: OpenAI-branded models (openai/gpt-oss-*) are LAST in the chain
-// because they aggressively self-identify as "ChatGPT made by OpenAI" and
-// override our persona. Qwen / GLM / Llama / Mistral respect the system prompt.
+// Refreshed against OpenRouter's live :free model catalog (April 2026):
+//   - Removed dead models: meta-llama/llama-4-maverick:free, llama-4-scout:free,
+//     google/gemini-2.0-flash-exp:free, qwen/qwen2.5-vl-72b-instruct:free,
+//     mistralai/mistral-small-3.2-24b-instruct:free — all 404 now.
+//   - Added GA April 2026: inclusionai/ling-2.6-1t (1T params, 262k ctx),
+//     minimax/minimax-m2.5, nvidia/nemotron-3-* family, google/gemma-4-*.
+// IMPORTANT: OpenAI-branded models (openai/gpt-oss-*) stay LAST because they
+// self-identify as "ChatGPT made by OpenAI" and override our persona. Qwen /
+// GLM / Llama / MiniMax / Nemotron / Gemma respect the system prompt.
 const OPENROUTER_CHAT_FALLBACKS = (process.env.OPENROUTER_CHAT_MODELS ||
-  "qwen/qwen3-next-80b-a3b-instruct:free,z-ai/glm-4.5-air:free,meta-llama/llama-3.3-70b-instruct:free,mistralai/mistral-small-3.2-24b-instruct:free,nvidia/nemotron-3-super-120b-a12b:free,openai/gpt-oss-120b:free"
+  "inclusionai/ling-2.6-1t:free,minimax/minimax-m2.5:free,qwen/qwen3-next-80b-a3b-instruct:free,nvidia/nemotron-3-super-120b-a12b:free,z-ai/glm-4.5-air:free,meta-llama/llama-3.3-70b-instruct:free,openai/gpt-oss-120b:free"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const OPENROUTER_FAST_FALLBACKS = (process.env.OPENROUTER_FAST_MODELS ||
-  "qwen/qwen3-next-80b-a3b-instruct:free,z-ai/glm-4.5-air:free,meta-llama/llama-3.3-70b-instruct:free,mistralai/mistral-small-3.2-24b-instruct:free,openai/gpt-oss-20b:free"
+  "google/gemma-4-26b-a4b-it:free,nvidia/nemotron-3-nano-30b-a3b:free,qwen/qwen3-next-80b-a3b-instruct:free,z-ai/glm-4.5-air:free,meta-llama/llama-3.3-70b-instruct:free,openai/gpt-oss-20b:free"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const OPENROUTER_VISION_FALLBACKS = (process.env.OPENROUTER_VISION_MODELS ||
-  "meta-llama/llama-4-maverick:free,meta-llama/llama-4-scout:free,google/gemini-2.0-flash-exp:free,qwen/qwen2.5-vl-72b-instruct:free,mistralai/mistral-small-3.2-24b-instruct:free"
+  "google/gemma-4-31b-it:free,google/gemma-4-26b-a4b-it:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free,nvidia/nemotron-nano-12b-v2-vl:free,google/gemma-3-27b-it:free"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 // Keep back-compat for agent tool-calling (still goes through OpenRouter)
