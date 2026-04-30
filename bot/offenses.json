@@ -1,54 +1,11 @@
 {
   "users": {
     "603182413660684321": {
-      "count": 6,
-      "lastOffenseAt": 1777441315567,
-      "muteUntil": 0,
+      "count": 7,
+      "lastOffenseAt": 1777557008121,
+      "muteUntil": 1777560608121,
       "lastWord": "หี",
-      "lastSource": "chat",
-      "chat": {
-        "count": 4,
-        "lastAt": 1777551437138,
-        "history": [
-          {
-            "at": 1777483111839,
-            "severity": 7,
-            "matched": "สัส",
-            "reason": "ใช้คำต้องห้าม: \"สัส\"",
-            "excerpt": "กวนตีนไอสัส",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777548365496,
-            "severity": 7,
-            "matched": "fuck",
-            "reason": "ใช้คำต้องห้าม: \"fuck\"",
-            "excerpt": "Gaurd what the fuck are you doing",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777551356782,
-            "severity": 7,
-            "matched": "Dung roi",
-            "reason": "ใช้คำหยาบคาย",
-            "excerpt": "Dung roi",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1777551437138,
-            "severity": 6,
-            "matched": "เว้ย",
-            "reason": "ใช้คำหยาบ",
-            "excerpt": "มันคือภาษาเวียดนามเว้ย",
-            "action": "timeout_failed",
-            "source": "ai"
-          }
-        ]
-      },
-      "times": 0
+      "lastSource": "voice"
     },
     "946756535936233542": {
       "count": 4,
