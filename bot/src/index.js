@@ -204,17 +204,59 @@ const audioBuffers = new Map();
 // id here so the NEXT transcript from them (within WAKE_PENDING_MS) is treated
 // as the actual command. Concurrent commands are rejected via wakeBusy.
 const pendingWake = new Map();
-const WAKE_PENDING_MS = 12_000;
+const WAKE_PENDING_MS = 15_000;
 let wakeBusy = false;
-const WAKE_RE =
-  /^[\s,.!?\-:'"`(]*(?:การ[์]?[ดต]ดี้?|การ์ดดี|กา[รล]ด|ก๊า[ดต]|guard|gaurd|gard|hey\s+guard|alxcer\s+guard)\b[\s,.!?:\-]*/i;
+
+// Wake-word matcher. Be VERY tolerant of whisper transcription noise:
+// - whisper often prepends junk like "อืม", "เอ่อ", "[เสียงเพลง]"
+// - the same Thai word can come back as การ์ด / การด / ก๊าด / กาด / กาดด /
+//   การ์ก / กาด์ / การ์ต / คาด / การ์ด์ depending on diction + accent
+// - English versions: guard / gaurd / gard / god / gar / "hey guard"
+// We match the wake token ANYWHERE in the first ~30 chars of the cleaned text
+// so a leading filler word doesn't kill the trigger.
+const WAKE_TOKEN_RE =
+  /(?:การ[์์]?[ดตก]ดี้?|การ์[ดตก]|กา[รล]?[ดต]|ก[า๊]า?[ดต]|คา[รล]?ด|guard|gaurd|gard|alxcer\s+guard|hey\s+guard)/i;
+const WAKE_LEADING_NOISE_RE = /^[\s,.!?\-:'"`()\[\]{}♪♫\*<>]+/;
+// IMPORTANT: longest variants first — JS regex alternation is left-to-right,
+// not longest-match. "อะ" before "อะนะ" would steal the match and break the
+// stripping pass.
+const WAKE_PROMPT_PREFIX_RE =
+  /^(?:[\s,.;:!?\-]+|alxcer|อันนี้|อะนะ|อืม|เอ่อ|เออ|อ้า|โอ้|อะ|นี่|hey)\s*/i;
+
+function cleanForWake(text) {
+  if (!text) return "";
+  let t = text.trim();
+  // Strip whisper bracket annotations like "[เสียงเพลง]" / "(music)" / "♪♪♪"
+  // FIRST so the regex finds the bracket — order matters because the leading
+  // noise stripper would chew off the opening "[" by itself otherwise.
+  for (let i = 0; i < 3; i++) {
+    const before = t;
+    t = t
+      .replace(/^\[[^\]]{1,60}\]\s*/, "")
+      .replace(/^\([^)]{1,60}\)\s*/, "")
+      .replace(/^♪+[^♪]{0,60}♪+\s*/, "")
+      .replace(WAKE_LEADING_NOISE_RE, "");
+    if (t === before) break;
+  }
+  return t.trim();
+}
+
 function extractWakeCommand(text) {
-  const t = (text || "").trim();
-  if (!t) return null;
-  const m = t.match(WAKE_RE);
-  if (!m) return null;
-  // Whatever follows the wake word is the spoken command. May be empty.
-  return t.slice(m[0].length).replace(/^[\s,.;:!?\-]+/, "").trim();
+  let cleaned = cleanForWake(text);
+  if (!cleaned) return null;
+  // Strip up to two leading filler particles ("อืม การ์ด" → "การ์ด").
+  // After that, the wake token MUST be at position 0 to count as a wake call.
+  // This prevents accidental triggers on sentences like "ผมเอาการ์ดเกม...".
+  for (let i = 0; i < 2; i++) {
+    const before = cleaned;
+    cleaned = cleaned.replace(WAKE_PROMPT_PREFIX_RE, "");
+    if (cleaned === before) break;
+  }
+  const m = cleaned.match(WAKE_TOKEN_RE);
+  if (!m || m.index !== 0) return null;
+  let rest = cleaned.slice(m[0].length).trim();
+  rest = rest.replace(WAKE_PROMPT_PREFIX_RE, "").replace(/^[\s,.;:!?\-]+/, "").trim();
+  return rest;
 }
 
 let currentChannelId = null;
@@ -236,7 +278,9 @@ const WATCHDOG_COOLDOWN_MS = 3 * 60 * 1000;
 const PCM_SAMPLE_RATE = 48000;
 const PCM_CHANNELS = 2;
 const PCM_BYTES_PER_SECOND = PCM_SAMPLE_RATE * PCM_CHANNELS * 2;
-const MIN_UTTERANCE_SEC = 0.6;
+// Lowered from 0.6 → 0.35 so a quick "การ์ด" (under 0.5s) still gets sent to
+// whisper. Without this, single-word wake calls were dropped silently.
+const MIN_UTTERANCE_SEC = 0.35;
 const MAX_UTTERANCE_SEC = 5;
 const IDLE_FLUSH_MS = 1500;
 
@@ -468,19 +512,23 @@ async function handleVoiceTranscript(text, meta) {
   } catch {}
 
   // ── WAKE-WORD DETECTION ────────────────────────────────────────────────
-  // 1. Did this user already say "การ์ด" alone in the last 12s? → treat THIS
-  //    transcript as the command body.
-  // 2. Otherwise, does this transcript itself START with the wake word?
-  //    a) "การ์ด <command>" → run command immediately
-  //    b) "การ์ด" alone → set pending state, beep, wait for next transcript
+  // 1. Did this user already say "การ์ด" alone in the last WAKE_PENDING_MS?
+  //    → treat THIS transcript as the command body (no second beep).
+  // 2. Otherwise, does this transcript START with the wake word?
+  //    a) "การ์ด <command>"  → run command immediately
+  //    b) "การ์ด" alone       → set pending state, beep, wait for next utterance
   let isWakeFlow = false;
   let wakeCommand = null;
+  let isFollowUp = false;
 
   const pending = pendingWake.get(meta.userId);
   if (pending && Date.now() - pending.at < WAKE_PENDING_MS) {
     pendingWake.delete(meta.userId);
     isWakeFlow = true;
-    wakeCommand = trimmed;
+    isFollowUp = true;
+    // If the user re-said "การ์ด <cmd>" instead of just <cmd>, strip wake word
+    const stripped = extractWakeCommand(trimmed);
+    wakeCommand = stripped !== null ? stripped : trimmed;
   } else {
     pendingWake.delete(meta.userId);
     const cmd = extractWakeCommand(trimmed);
@@ -489,6 +537,9 @@ async function handleVoiceTranscript(text, meta) {
       wakeCommand = cmd; // may be empty string
     }
   }
+  console.log(
+    `[wake] candidate user=${meta.userId} match=${isWakeFlow ? "Y" : "N"} followUp=${isFollowUp} text="${trimmed.slice(0, 80)}"${isWakeFlow ? ` cmd="${(wakeCommand || "").slice(0, 80)}"` : ""}`,
+  );
 
   addTranscript({
     userId: meta.userId,
@@ -509,6 +560,7 @@ async function handleVoiceTranscript(text, meta) {
       username,
       command: wakeCommand,
       raw: trimmed,
+      isFollowUp,
     }).catch((err) => console.error("[wake] handler failed", err?.message));
     return;
   }
@@ -523,7 +575,7 @@ async function handleVoiceTranscript(text, meta) {
   }
 }
 
-async function handleWakeCommand({ userId, username, command, raw }) {
+async function handleWakeCommand({ userId, username, command, raw, isFollowUp }) {
   if (!config.guildId) return;
   if (wakeBusy) {
     console.log(`[wake] busy — ignoring new wake from ${userId}`);
@@ -531,17 +583,33 @@ async function handleWakeCommand({ userId, username, command, raw }) {
   }
   wakeBusy = true;
   let conn = getVoiceConnection(config.guildId);
+  let donePlayed = false;
+
+  const playDone = async () => {
+    if (donePlayed) return;
+    donePlayed = true;
+    try {
+      const c = getVoiceConnection(config.guildId);
+      if (c) await playPcmBeep(c, DONE_BEEP_PCM, "wake-done", 3000);
+    } catch (err) {
+      console.warn("[wake] done beep failed", err?.message);
+    }
+  };
 
   try {
-    // Stage 1: acknowledge with the short "ติ๊ดๆ" beep
-    if (conn) await playPcmBeep(conn, WAKE_BEEP_PCM, "wake", 2500);
+    // Stage 1: only beep on the FIRST wake utterance, not on the follow-up.
+    // The user already heard "ติ๊ดๆ" and is now giving the command — playing
+    // it again would be confusing and adds latency.
+    if (!isFollowUp && conn) {
+      await playPcmBeep(conn, WAKE_BEEP_PCM, "wake", 2500);
+    }
 
-    // Stage 2: if no command body yet, mark pending and let the next utterance
-    // from this user come in. The transcript handler will route back here.
+    // Stage 2: command body empty → mark pending, await the next utterance
     if (!command) {
       pendingWake.set(userId, { at: Date.now() });
-      console.log(`[wake] user=${userId} acknowledged — awaiting command (${WAKE_PENDING_MS}ms)`);
-      // Auto-expire pending so beep status resets cleanly
+      console.log(
+        `[wake] user=${userId} acknowledged — awaiting command (${WAKE_PENDING_MS}ms)`,
+      );
       setTimeout(() => {
         const p = pendingWake.get(userId);
         if (p && Date.now() - p.at >= WAKE_PENDING_MS - 100) {
@@ -555,26 +623,39 @@ async function handleWakeCommand({ userId, username, command, raw }) {
     console.log(`[wake] user=${userId} command="${command.slice(0, 200)}"`);
 
     const guild = await client.guilds.fetch(config.guildId).catch(() => null);
-    if (!guild) return;
+    if (!guild) {
+      console.warn("[wake] guild fetch failed");
+      return;
+    }
     const member = await guild.members.fetch(userId).catch(() => null);
-
-    // Pick a channel to post the result in: prefer the voice channel itself
-    // (Discord lets you chat inside voice channels), fall back to the system
-    // channel or the first sendable text channel.
     const replyChannel = pickReplyChannel(guild);
 
-    if (!member || !isAdmin(member)) {
-      if (replyChannel) {
-        await replyChannel
-          .send(`🎙 <@${userId}> เรียก "${raw}" — แต่ไม่ใช่แอดมิน เลยใช้คำสั่งไม่ได้นะ`)
-          .catch(() => {});
+    // Stage 3 (visibility): post what we HEARD immediately, before the agent
+    // even runs. This is the "voice → text" view the user wants — they see
+    // the bot's interpretation of their voice instantly, even if the agent
+    // takes 5-30 seconds to think.
+    let statusMsg = null;
+    if (replyChannel) {
+      try {
+        statusMsg = await replyChannel.send(
+          `🎙 <@${userId}> ได้ยิน: \`${command.slice(0, 180)}\`\n_(กำลังประมวลผล...)_`,
+        );
+      } catch (err) {
+        console.warn("[wake] status send failed", err?.message);
       }
+    }
+
+    if (!member || !isAdmin(member)) {
+      const denyMsg = `🚫 <@${userId}> ใช้คำสั่งเสียงไม่ได้ — ต้องเป็นแอดมินเซิร์ฟเวอร์เท่านั้น`;
+      if (statusMsg) await statusMsg.edit(denyMsg).catch(() => {});
+      else if (replyChannel) await replyChannel.send(denyMsg).catch(() => {});
       return;
     }
 
     if (replyChannel) await replyChannel.sendTyping().catch(() => {});
 
     let result = "";
+    let errMsg = "";
     try {
       result = await runAgent({
         userPrompt: `[คำสั่งเสียงจาก ${username || userId}]: ${command}`,
@@ -589,21 +670,32 @@ async function handleWakeCommand({ userId, username, command, raw }) {
         },
       });
     } catch (err) {
-      console.warn("[wake] agent failed:", err?.message?.slice(0, 200));
-      result = `เออร์เรอครับ: ${err?.message?.slice(0, 120) || "unknown"}`;
+      errMsg = err?.message?.slice(0, 200) || "unknown error";
+      console.warn("[wake] agent failed:", errMsg);
     }
 
-    const text = (result || "").trim() || "เสร็จแล้วครับ";
-    if (replyChannel) {
-      await replyChannel
-        .send(`🎙 <@${userId}> สั่ง: \`${command.slice(0, 180)}\`\n${text.slice(0, 1800)}`)
-        .catch((err) => console.warn("[wake] reply send failed", err?.message));
+    const body = (result || "").trim();
+    let finalText;
+    if (errMsg) {
+      finalText = `🎙 <@${userId}> สั่ง: \`${command.slice(0, 180)}\`\n⚠️ เออร์เรอ: ${errMsg}`;
+    } else if (!body) {
+      finalText = `🎙 <@${userId}> สั่ง: \`${command.slice(0, 180)}\`\n✅ เสร็จแล้วครับ`;
+    } else {
+      finalText = `🎙 <@${userId}> สั่ง: \`${command.slice(0, 180)}\`\n${body.slice(0, 1800)}`;
     }
-
-    // Stage 3: long beep so the user hears that processing is done
-    conn = getVoiceConnection(config.guildId);
-    if (conn) await playPcmBeep(conn, DONE_BEEP_PCM, "wake-done", 3000);
+    try {
+      if (statusMsg) await statusMsg.edit(finalText);
+      else if (replyChannel) await replyChannel.send(finalText);
+    } catch (err) {
+      console.warn("[wake] reply edit/send failed", err?.message);
+      if (replyChannel) await replyChannel.send(finalText).catch(() => {});
+    }
+  } catch (err) {
+    console.error("[wake] outer handler error", err?.message, err?.stack);
   } finally {
+    // ALWAYS play the done beep on success or failure (except for the
+    // pending-acknowledgement path which already returned above)
+    await playDone();
     wakeBusy = false;
   }
 }
