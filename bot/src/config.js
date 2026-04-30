@@ -17,6 +17,10 @@ const DEFAULTS = {
   bannedWords: ["หี", "ขอดูหี", "ดูหี"],
   firstOffenseMuteSeconds: 60,
   repeatOffenseMuteSeconds: 3600,
+  // Wake-alarm: URL of an MP3/OGG/WAV stream to loop while waking the user.
+  // Empty = fall back to a soft synthesized chime + repeated TTS.
+  wakeMusicUrl: "",
+  wakeTtsText: "ขออนุญาตปลุกนะครับ ตื่นได้แล้วเด้อ",
 };
 
 export function loadConfig() {
@@ -43,6 +47,10 @@ export function normalize(cfg) {
     bannedWords: normalizeWords(cfg.bannedWords),
     firstOffenseMuteSeconds: clampInt(cfg.firstOffenseMuteSeconds, 5, 86400, 60),
     repeatOffenseMuteSeconds: clampInt(cfg.repeatOffenseMuteSeconds, 5, 86400, 3600),
+    wakeMusicUrl: typeof cfg.wakeMusicUrl === "string" ? cfg.wakeMusicUrl.trim() : "",
+    wakeTtsText: typeof cfg.wakeTtsText === "string" && cfg.wakeTtsText.trim()
+      ? cfg.wakeTtsText.trim()
+      : DEFAULTS.wakeTtsText,
   };
 }
 

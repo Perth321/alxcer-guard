@@ -7,5 +7,7 @@
   "ignoreBots": true,
   "bannedWords": ["หี", "ขอดูหี", "ดูหี"],
   "firstOffenseMuteSeconds": 60,
-  "repeatOffenseMuteSeconds": 3600
+  "repeatOffenseMuteSeconds": 3600,
+  "wakeMusicUrl": "",
+  "wakeTtsText": "ขออนุญาตปลุกนะครับ ตื่นได้แล้วเด้อ"
 }

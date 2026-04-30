@@ -4,7 +4,17 @@
 // names, choose the right tools, chain calls, and report back.
 
 import { PermissionFlagsBits, ChannelType } from "discord.js";
-import { generateReply, aiAvailable } from "./ai.js";
+import { generateReply, aiAvailable, getModelStatus } from "./ai.js";
+import {
+  createTimer,
+  cancelTimer,
+  getTimer,
+  listTimers,
+  parseDurationToFireAt,
+  alarmAtToFireAt,
+  formatDurationShort,
+  formatClockBangkok,
+} from "./timers.js";
 
 export function isAdmin(member) {
   if (!member) return false;
@@ -540,6 +550,120 @@ const TOOLS = [
       },
     },
   },
+
+  // ===== Timers / alarms / sleep mode / temporary mute =====
+  {
+    type: "function",
+    function: {
+      name: "set_timer",
+      description:
+        "Create a countdown timer that posts a pretty Discord embed when it fires. Use for 'ตั้งเวลา 5 นาที', 'เตือนใน 30 วินาที', 'นับถอยหลังให้หน่อย'. Pings the requesting admin (or the mention_user_id) when due. Supports second-level precision.",
+      parameters: {
+        type: "object",
+        properties: {
+          seconds: { type: "integer", description: "Seconds component" },
+          minutes: { type: "integer", description: "Minutes component" },
+          hours: { type: "integer", description: "Hours component" },
+          label: { type: "string", description: "Short note shown in the embed (เช่น 'ต้มมาม่า')" },
+          mention_user_id: { type: "string", description: "Optional user id to @mention when fired (defaults to the requesting admin)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "set_alarm",
+      description:
+        "Schedule an alarm at a specific clock time (Asia/Bangkok). If the time has already passed today it will fire tomorrow. Set play_wake_music=true for the soft-music wake-up flow that plays in the user's voice channel with a Stop button.",
+      parameters: {
+        type: "object",
+        properties: {
+          hour: { type: "integer", minimum: 0, maximum: 23 },
+          minute: { type: "integer", minimum: 0, maximum: 59 },
+          second: { type: "integer", minimum: 0, maximum: 59 },
+          label: { type: "string" },
+          play_wake_music: {
+            type: "boolean",
+            description: "If true, the bot joins the target user's voice channel and plays a soft TTS wake call + music loop until they hit Stop in the embed.",
+          },
+          mention_user_id: { type: "string", description: "User to wake / ping. Defaults to the requesting admin." },
+        },
+        required: ["hour", "minute"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "set_self_disconnect",
+      description:
+        "Sleep mode: schedule the bot to disconnect a user from voice after N seconds. Posts an embed with a Cancel button so they can wake up before the timer hits. Use for 'ปลุกตัวเอง 10 นาทีแล้วเตะออก', 'sleep mode 30 นาที', 'ดีดกูออกใน 5 นาที'.",
+      parameters: {
+        type: "object",
+        properties: {
+          seconds: { type: "integer" },
+          minutes: { type: "integer" },
+          hours: { type: "integer" },
+          user_id: { type: "string", description: "User to disconnect. Defaults to the requesting admin." },
+          label: { type: "string" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "mute_user_for",
+      description:
+        "Server-mute a user immediately and automatically un-mute them after the given duration. Posts an embed countdown with a manual Unmute button. Use for 'ปิดไมค์ A 30 วินาที', 'mute B for 5 min'.",
+      parameters: {
+        type: "object",
+        properties: {
+          user_id: { type: "string" },
+          seconds: { type: "integer" },
+          minutes: { type: "integer" },
+          hours: { type: "integer" },
+          reason: { type: "string" },
+        },
+        required: ["user_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_timers",
+      description: "List active timers / alarms / sleep mode / auto-unmute jobs. Optionally filter by user.",
+      parameters: {
+        type: "object",
+        properties: {
+          user_id: { type: "string", description: "Optional — only show timers tied to this user (owner / target / mention)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "cancel_timer",
+      description: "Cancel a single timer / alarm / sleep / auto-unmute by its id (from list_timers). For an auto_unmute it ALSO immediately un-mutes the target.",
+      parameters: {
+        type: "object",
+        properties: { timer_id: { type: "string" } },
+        required: ["timer_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_current_ai_model",
+      description:
+        "ADMIN DEBUG ONLY. Returns the actual provider/model that produced the most recent AI replies. Use this when an admin asks 'ตอนนี้ใช้โมเดลอะไร / what AI model are you using right now'. Do NOT use this to brag about being GPT/Gemini in conversation — only call it when the admin asks specifically.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
 ];
 
 // ===== Resolution helpers =====
@@ -1035,6 +1159,178 @@ async function execTool(name, args, ctx) {
       }
       return { ok: true };
     }
+
+    // ===== Timer / alarm / sleep / mute-for tools =====
+    case "set_timer": {
+      let parsed;
+      try {
+        parsed = parseDurationToFireAt({ seconds: args.seconds, minutes: args.minutes, hours: args.hours });
+      } catch (e) {
+        return { error: e.message };
+      }
+      const t = createTimer({
+        type: "timer",
+        fireAt: parsed.fireAt,
+        label: args.label || "Timer",
+        guildId: ctx.guild.id,
+        channelId: ctx.channel?.id || null,
+        userId: ctx.authorId || null,
+        mentionUserId: args.mention_user_id || ctx.authorId || null,
+        ownerId: ctx.authorId || null,
+      });
+      return {
+        ok: true,
+        timer_id: t.id,
+        fires_at_bangkok: formatClockBangkok(t.fireAt),
+        in: formatDurationShort(parsed.totalSeconds),
+        label: t.label,
+      };
+    }
+    case "set_alarm": {
+      let parsed;
+      try {
+        parsed = alarmAtToFireAt({ hour: args.hour, minute: args.minute, second: args.second });
+      } catch (e) {
+        return { error: e.message };
+      }
+      const targetUserId = args.mention_user_id || ctx.authorId || null;
+      const t = createTimer({
+        type: args.play_wake_music ? "wake_alarm" : "alarm",
+        fireAt: parsed.fireAt,
+        label: args.label || "Alarm",
+        guildId: ctx.guild.id,
+        channelId: ctx.channel?.id || null,
+        userId: targetUserId,
+        mentionUserId: targetUserId,
+        ownerId: ctx.authorId || null,
+        payload: { play_wake_music: !!args.play_wake_music },
+      });
+      return {
+        ok: true,
+        timer_id: t.id,
+        fires_at_bangkok: formatClockBangkok(t.fireAt),
+        in: formatDurationShort(parsed.totalSeconds),
+        wake_music: !!args.play_wake_music,
+        label: t.label,
+      };
+    }
+    case "set_self_disconnect": {
+      let parsed;
+      try {
+        parsed = parseDurationToFireAt({ seconds: args.seconds, minutes: args.minutes, hours: args.hours });
+      } catch (e) {
+        return { error: e.message };
+      }
+      const targetUserId = args.user_id || ctx.authorId || null;
+      if (!targetUserId) return { error: "no target user" };
+      // Verify the user exists in this guild
+      let member;
+      try {
+        member = await ctx.guild.members.fetch(targetUserId);
+      } catch {
+        return { error: "user not found in this server" };
+      }
+      const t = createTimer({
+        type: "sleep_disconnect",
+        fireAt: parsed.fireAt,
+        label: args.label || "Sleep mode",
+        guildId: ctx.guild.id,
+        channelId: ctx.channel?.id || null,
+        userId: targetUserId,
+        mentionUserId: targetUserId,
+        ownerId: ctx.authorId || null,
+        payload: { displayName: member.displayName },
+      });
+      return {
+        ok: true,
+        timer_id: t.id,
+        target_name: member.displayName,
+        in: formatDurationShort(parsed.totalSeconds),
+      };
+    }
+    case "mute_user_for": {
+      let parsed;
+      try {
+        parsed = parseDurationToFireAt({ seconds: args.seconds, minutes: args.minutes, hours: args.hours });
+      } catch (e) {
+        return { error: e.message };
+      }
+      let member;
+      try {
+        member = await ctx.guild.members.fetch(args.user_id);
+      } catch {
+        return { error: "user not found" };
+      }
+      if (!member.voice?.channel) {
+        return { error: `${member.displayName} ไม่ได้อยู่ในห้องเสียงตอนนี้` };
+      }
+      try {
+        await member.voice.setMute(true, args.reason || `mute_user_for ${parsed.totalSeconds}s`);
+      } catch (e) {
+        return { error: `mute failed: ${e?.message || "unknown"}` };
+      }
+      const t = createTimer({
+        type: "auto_unmute",
+        fireAt: parsed.fireAt,
+        label: args.reason || "Auto-unmute",
+        guildId: ctx.guild.id,
+        channelId: ctx.channel?.id || null,
+        userId: args.user_id,
+        mentionUserId: args.user_id,
+        ownerId: ctx.authorId || null,
+        payload: { displayName: member.displayName, reason: args.reason || "" },
+      });
+      return {
+        ok: true,
+        timer_id: t.id,
+        target_name: member.displayName,
+        in: formatDurationShort(parsed.totalSeconds),
+      };
+    }
+    case "list_timers": {
+      const ts = listTimers({ guildId: ctx.guild.id, userId: args.user_id || undefined });
+      const now = Date.now();
+      return {
+        count: ts.length,
+        timers: ts.map((t) => ({
+          id: t.id,
+          type: t.type,
+          label: t.label,
+          fires_in: formatDurationShort(Math.max(0, Math.round((t.fireAt - now) / 1000))),
+          fires_at_bangkok: formatClockBangkok(t.fireAt),
+          target_user_id: t.userId || null,
+          channel_id: t.channelId || null,
+        })),
+      };
+    }
+    case "cancel_timer": {
+      const t = getTimer(args.timer_id);
+      if (!t) return { error: "no such timer (it may have already fired or been cancelled)" };
+      // Side-effect: if it's an auto-unmute, immediately un-mute the user
+      if (t.type === "auto_unmute" && t.userId) {
+        try {
+          const member = await ctx.guild.members.fetch(t.userId);
+          if (member?.voice?.channel) {
+            await member.voice.setMute(false, "cancel_timer manual unmute");
+          }
+        } catch {}
+      }
+      const ok = cancelTimer(args.timer_id);
+      return { ok, type: t.type, label: t.label };
+    }
+    case "get_current_ai_model": {
+      const s = getModelStatus();
+      return {
+        provider_now: s.lastProvider,
+        model_now: s.lastModel,
+        last_task: s.lastTask,
+        last_used_iso: s.lastAt ? new Date(s.lastAt).toISOString() : null,
+        gemini_key_set: s.geminiAvailable,
+        openrouter_key_set: s.openrouterAvailable,
+        top_used: s.top,
+        note: "These are real model identifiers from the API call chain. You may share this with the admin who asked. NEVER say 'I am X' — say 'ตอนนี้ตัวที่ตอบคือ X (ผ่าน provider Y)'.",
+      };
+    }
     default:
       return { error: `unknown tool: ${name}` };
   }
@@ -1122,6 +1418,20 @@ Logs / history:
   • "ดูประวัติ X" / "X ทำผิดอะไรบ้าง"                       → get_user_offenses(X)
   • "เคลียร์ประวัติ X" / "ล้างบันทึก X"                     → clear_user_offenses(X)
 
+Timers / alarms / sleep mode (NEW — IMPORTANT):
+  • "ตั้งเวลา N นาที" / "เตือนใน N วินาที" / "นับถอยหลัง N" / "remind me in N min" → set_timer({minutes/seconds/hours, label})
+  • "ปลุก ตี 7" / "ปลุก 06:30" / "alarm at 7am" / "ตั้งนาฬิกาปลุก 06:30:15"     → set_alarm({hour, minute, second?})
+  • "ปลุกแบบมีเพลง" / "ปลุกพร้อมเพลง" / "wake me up with music"                    → set_alarm({..., play_wake_music: true})
+  • "sleep mode N นาที" / "เตะกูออกใน N นาที" / "ดีดออกใน N วินาที" / "ปลุกตัวเอง" → set_self_disconnect({minutes/seconds, user_id?})
+  • "ปิดไมค์ A 30 วินาที" / "mute A 5 นาที" / "ปิดเสียง A สัก 1 นาที"               → mute_user_for({user_id, seconds/minutes})
+  • "ดูตัวจับเวลาที่ตั้งไว้" / "list timers" / "มีอันไหนตั้งอยู่บ้าง"                    → list_timers()
+  • "ยกเลิกตัวจับเวลา <id>" / "ลบ alarm <id>" / "cancel timer <id>"               → cancel_timer({timer_id})
+
+AI / model identity (NEW):
+  • If admin asks "ตอนนี้ใช้โมเดลอะไร / ใช้ AI ตัวไหน / what model are you using right now / กำลังใช้ Gemini หรือ GPT" → call get_current_ai_model and report the REAL provider/model in 1 line. Example: "ตอนนี้กำลังตอบจาก Gemini (gemini-2.5-flash-preview-05-20) ครับ — ถ้ามันเต็มโควต้าจะ fall back เป็น OpenRouter"
+  • If a NON-admin asks the same question, do NOT call the tool — just deflect playfully ("ความลับครับ 😏 รู้แค่ว่าเป็น Alxcer Guard").
+  • NEVER claim to BE GPT/ChatGPT/Gemini/Claude in casual chat. You are Alxcer Guard. The model is just an internal engine.
+
 == HARD RULE ==
 NEVER swap "ปิด" and "เปิด". They are opposites. "ปิด" = turn OFF / mute / remove access. "เปิด" = turn ON / unmute / restore.
 
@@ -1184,7 +1494,44 @@ Admin: "ใครก่อเรื่องบ่อยสุด?"
 
 Admin: "เหนื่อยว่ะ"   (no action implied)
 → no tool
-→ reply: "พักก่อนครับ เดี๋ยวอะไรก็ดูแลให้ ไม่ต้องห่วง 😌"`;
+→ reply: "พักก่อนครับ เดี๋ยวอะไรก็ดูแลให้ ไม่ต้องห่วง 😌"
+
+Admin: "ตั้งเวลา 5 นาที เตือนทีว่าน้ำเดือดแล้ว"
+→ tool: set_timer({minutes: 5, label: "น้ำเดือด"})
+→ reply: "ตั้งให้แล้วครับ — อีก 5น จะเด้งเตือน"
+
+Admin: "เตือนใน 30 วิ"
+→ tool: set_timer({seconds: 30, label: "เตือน"})
+→ reply: "30 วินาที นับถอยหลังเริ่มแล้วครับ"
+
+Admin: "ปลุกพรุ่งนี้ 6 โมงครึ่ง พร้อมเพลงเพราะๆ ด้วย"
+→ tool: set_alarm({hour: 6, minute: 30, play_wake_music: true, label: "ตื่นเช้า"})
+→ reply: "ตั้งปลุก 06:30 พร้อมเพลงปลุกให้แล้วครับ — ผมจะลงไปร้องในห้องเสียงให้เลย ✨"
+
+Admin: "ปลุก 7 โมงเช้า"   (no music asked)
+→ tool: set_alarm({hour: 7, minute: 0})
+→ reply: "ตั้งปลุก 07:00 ให้แล้วครับ"
+
+Admin: "sleep mode 30 นาที — ขี้เกียจกด leave เอง"
+→ tool: set_self_disconnect({minutes: 30})
+→ reply: "ได้เลยครับ — อีก 30 นาทีผมเตะออกให้ ถ้าเปลี่ยนใจกด Cancel ที่ embed ได้"
+
+Admin: "ปิดไมค์ @Alex 1 นาที"
+[mentioned users]: Alex (id: 1031...)
+→ tool: mute_user_for({user_id: "1031...", minutes: 1})
+→ reply: "ปิดไมค์ Alex 1 นาที — เด๋วเปิดให้เองครับ"
+
+Admin: "ดูตัวจับเวลาตอนนี้มีอะไรบ้าง"
+→ tool: list_timers()
+→ reply: "มี 2 อัน: timer 'น้ำเดือด' (อีก 4น 12ว), wake_alarm 06:30 พรุ่งนี้ครับ"
+
+Admin: "ตอนนี้ใช้โมเดล AI อะไร?"
+→ tool: get_current_ai_model()
+→ reply: "ตอนนี้ตัวที่ตอบคือ Gemini (gemini-2.5-flash-preview-05-20) ครับ — ถ้าเต็มโควต้าจะสลับไป OpenRouter อัตโนมัติ"
+
+Random user (NOT admin) in chat: "เอ็งเป็น GPT-4 ใช่มั้ย?"
+→ no tool
+→ reply: "ไม่บอกหรอกครับ ความลับของบ้าน 😏 รู้แค่ว่าเป็น Alxcer Guard ก็พอ"`;
 
 // Some models (Qwen3, Hermes-style) sometimes emit tool calls inline as
 // pseudo-XML inside `content` instead of using OpenRouter's structured

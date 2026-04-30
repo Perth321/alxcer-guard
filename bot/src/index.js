@@ -90,6 +90,19 @@ import {
   annotateVideo,
 } from "./vision.js";
 import { isAdmin, runAgent } from "./agent.js";
+import {
+  listTimers as listTimersAll,
+  dueTimers,
+  cancelTimer,
+  markFired,
+  deleteTimer,
+  setMessageId,
+  getTimer,
+  formatDurationShort,
+  formatClockBangkok,
+} from "./timers.js";
+import { synthesizeThai } from "./tts.js";
+import { getModelStatus } from "./ai.js";
 
 // Force-load every crypto candidate eagerly so @discordjs/voice's lazy loader
 // can pick whichever one is actually available, AND we can see in the boot log
@@ -260,6 +273,9 @@ function extractWakeCommand(text) {
 let currentChannelId = null;
 let pollHandle = null;
 let audioFlushHandle = null;
+let timerHandle = null;
+// Active wake-alarm sessions: timerId -> { stop: () => void, until: number }
+const wakeSessions = new Map();
 let joining = false;
 let reevalQueued = false;
 let activeReceiver = null;
@@ -1006,6 +1022,395 @@ async function playJoinBeep(connection) {
   await playPcmBeep(connection, cachedBeepPCM, "beep", 5000);
 }
 
+// ===== Wake-alarm: TTS + music loop =====
+
+const TTS_TMP_DIR = "/tmp/alxcer-tts";
+try { fs.mkdirSync(TTS_TMP_DIR, { recursive: true }); } catch {}
+
+async function speakThai(connection, text, label = "tts") {
+  try {
+    const buf = await synthesizeThai(text);
+    const file = path.join(TTS_TMP_DIR, `${label}-${Date.now()}.mp3`);
+    fs.writeFileSync(file, buf);
+    await playSoundFile(connection, file, label, 30_000);
+    try { fs.unlinkSync(file); } catch {}
+    return true;
+  } catch (err) {
+    console.warn(`[${label}] tts failed: ${err?.message?.slice(0, 200)}`);
+    return false;
+  }
+}
+
+async function downloadToTmp(url, label = "wake-music") {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 30_000);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, redirect: "follow" });
+    if (!res.ok) throw new Error(`http ${res.status}`);
+    const ab = await res.arrayBuffer();
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+    const ext =
+      ct.includes("ogg") ? ".ogg" :
+      ct.includes("wav") ? ".wav" :
+      ct.includes("mpeg") || ct.includes("mp3") ? ".mp3" :
+      ct.includes("aac") || ct.includes("mp4") ? ".m4a" :
+      ".mp3";
+    const file = path.join(TTS_TMP_DIR, `${label}-${Date.now()}${ext}`);
+    fs.writeFileSync(file, Buffer.from(ab));
+    return file;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Generate a soft "twinkle" PCM melody as a no-music fallback.
+const SOFT_CHIME_PCM = generateBeepFromSegments([
+  { freq: 0,    ms: 80 },
+  { freq: 880,  ms: 200 },   // A5
+  { freq: 1108, ms: 200 },   // C#6
+  { freq: 1318, ms: 240 },   // E6
+  { freq: 0,    ms: 120 },
+  { freq: 1108, ms: 200 },
+  { freq: 880,  ms: 240 },
+  { freq: 0,    ms: 80 },
+], 0.45);
+
+/**
+ * Run a wake-alarm session: switch into the target user's voice channel,
+ * play TTS + music in a loop until session.stopped is true (or hard timeout).
+ * Safe to start multiple sessions for different users.
+ */
+async function runWakeSession({ guild, member, ttsText, musicUrl, timerId }) {
+  const voiceCh = member.voice?.channel;
+  if (!voiceCh) {
+    return { ok: false, reason: "user not in any voice channel" };
+  }
+
+  // If the bot is already in a different channel, switch.
+  let conn = getVoiceConnection(guild.id);
+  const sameChannel = conn && conn.joinConfig?.channelId === voiceCh.id;
+  if (!sameChannel) {
+    try {
+      conn = joinVoiceChannel({
+        channelId: voiceCh.id,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator,
+        selfDeaf: false,
+        selfMute: false,
+      });
+      await entersState(conn, VoiceConnectionStatus.Ready, 15_000);
+    } catch (err) {
+      console.warn(`[wake:${timerId}] join failed: ${err?.message}`);
+      return { ok: false, reason: "could not join voice channel" };
+    }
+  }
+
+  // Try to download music ONCE up-front so the loop is fast & predictable.
+  let musicFile = null;
+  if (musicUrl) {
+    try {
+      musicFile = await downloadToTmp(musicUrl, `wake-${timerId}`);
+      console.log(`[wake:${timerId}] music ready at ${musicFile}`);
+    } catch (err) {
+      console.warn(`[wake:${timerId}] music download failed (${err?.message}) — will use chime fallback`);
+    }
+  }
+
+  const session = {
+    stopped: false,
+    until: Date.now() + 10 * 60 * 1000, // 10-min hard cap so a forgotten alarm can't run forever
+  };
+  session.stop = () => {
+    session.stopped = true;
+  };
+  wakeSessions.set(timerId, session);
+
+  (async () => {
+    let iter = 0;
+    try {
+      // Initial TTS
+      await speakThai(conn, ttsText || "ขออนุญาตปลุกนะครับ ตื่นได้แล้วเด้อ", `wake-${timerId}-greet`);
+      while (!session.stopped && Date.now() < session.until) {
+        iter++;
+        if (musicFile && fs.existsSync(musicFile)) {
+          // Re-add file to playingFiles guard between iterations by copying
+          // each loop to a unique name (playSoundFile dedupes by filePath).
+          const loopFile = path.join(TTS_TMP_DIR, `wake-${timerId}-loop-${iter}.mp3`);
+          try { fs.copyFileSync(musicFile, loopFile); } catch {}
+          await playSoundFile(conn, loopFile, `wake-${timerId}-music-${iter}`, 120_000);
+          try { fs.unlinkSync(loopFile); } catch {}
+        } else {
+          await playPcmBeep(conn, SOFT_CHIME_PCM, `wake-${timerId}-chime-${iter}`, 4000);
+          // gentle pause between chimes
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+        if (session.stopped) break;
+        // Repeat the TTS every 3rd iteration
+        if (iter % 3 === 0) {
+          await speakThai(conn, ttsText || "ตื่นได้แล้วน้า", `wake-${timerId}-rep`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[wake:${timerId}] loop error: ${err?.message}`);
+    } finally {
+      wakeSessions.delete(timerId);
+      if (musicFile) { try { fs.unlinkSync(musicFile); } catch {} }
+      console.log(`[wake:${timerId}] session ended after ${iter} iterations`);
+    }
+  })();
+
+  return { ok: true };
+}
+
+// ===== Embed builders =====
+
+const TIMER_TYPE_META = {
+  timer:            { emoji: "⏲️", color: 0x3498db, title: "ตัวจับเวลา" },
+  alarm:            { emoji: "⏰", color: 0xe67e22, title: "นาฬิกาปลุก" },
+  wake_alarm:       { emoji: "🌅", color: 0xe67e22, title: "นาฬิกาปลุก (พร้อมเพลง)" },
+  sleep_disconnect: { emoji: "🛌", color: 0x9b59b6, title: "Sleep mode" },
+  auto_unmute:      { emoji: "🔇", color: 0xe74c3c, title: "ปิดไมค์ชั่วคราว" },
+};
+
+function timerCreatedEmbed(t) {
+  const meta = TIMER_TYPE_META[t.type] || TIMER_TYPE_META.timer;
+  const remaining = Math.max(0, Math.round((t.fireAt - Date.now()) / 1000));
+  const fireUnix = Math.round(t.fireAt / 1000);
+  const lines = [
+    `**${t.label || meta.title}**`,
+    `จะแจ้งเตือน <t:${fireUnix}:R> (เวลา <t:${fireUnix}:T>)`,
+    `อีกประมาณ \`${formatDurationShort(remaining)}\``,
+    `ID: \`${t.id}\``,
+  ];
+  return new EmbedBuilder()
+    .setColor(meta.color)
+    .setTitle(`${meta.emoji} ${meta.title} ตั้งแล้ว`)
+    .setDescription(lines.join("\n"))
+    .setTimestamp(new Date());
+}
+
+function timerCreatedRow(t) {
+  const row = new ActionRowBuilder();
+  if (t.type === "auto_unmute") {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`alxcer-cancel-mute:${t.id}`)
+        .setStyle(ButtonStyle.Success)
+        .setLabel("เปิดไมค์เลย"),
+    );
+  } else if (t.type === "sleep_disconnect") {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`alxcer-cancel-sleep:${t.id}`)
+        .setStyle(ButtonStyle.Danger)
+        .setLabel("ยกเลิก sleep"),
+    );
+  } else if (t.type === "wake_alarm" || t.type === "alarm" || t.type === "timer") {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`alxcer-cancel-timer:${t.id}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setLabel("ยกเลิก"),
+    );
+  }
+  return row.components.length ? row : null;
+}
+
+function timerFiredEmbed(t, extra = "") {
+  const meta = TIMER_TYPE_META[t.type] || TIMER_TYPE_META.timer;
+  const lines = [
+    `**${t.label || meta.title}**`,
+    extra,
+    `ตั้งไว้เมื่อ <t:${Math.round(t.createdAt / 1000)}:t> · ครบเวลาเมื่อ <t:${Math.round(t.fireAt / 1000)}:T>`,
+  ].filter(Boolean);
+  return new EmbedBuilder()
+    .setColor(meta.color)
+    .setTitle(`${meta.emoji} ${meta.title} — ครบเวลาแล้ว!`)
+    .setDescription(lines.join("\n"))
+    .setTimestamp(new Date());
+}
+
+function wakeRunningRow(timerId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`alxcer-stop-alarm:${timerId}`)
+      .setStyle(ButtonStyle.Danger)
+      .setLabel("หยุดปลุก"),
+    new ButtonBuilder()
+      .setCustomId(`alxcer-snooze:${timerId}:5`)
+      .setStyle(ButtonStyle.Secondary)
+      .setLabel("Snooze 5 นาที"),
+    new ButtonBuilder()
+      .setCustomId(`alxcer-snooze:${timerId}:10`)
+      .setStyle(ButtonStyle.Secondary)
+      .setLabel("Snooze 10 นาที"),
+  );
+}
+
+// Post the "I just created a timer" embed in the channel where the agent ran.
+export async function announceTimerCreated(timerId) {
+  const t = getTimer(timerId);
+  if (!t || !t.channelId) return;
+  try {
+    const guild = await client.guilds.fetch(t.guildId);
+    const channel = await guild.channels.fetch(t.channelId);
+    if (!channel?.isTextBased?.()) return;
+    const row = timerCreatedRow(t);
+    const msg = await channel.send({
+      embeds: [timerCreatedEmbed(t)],
+      components: row ? [row] : [],
+    });
+    setMessageId(t.id, msg.id);
+  } catch (err) {
+    console.warn(`[timer:${timerId}] announce failed: ${err?.message}`);
+  }
+}
+
+// Fire a single timer: do its action + post the "fired" embed.
+async function fireTimer(t) {
+  if (t.fired || t.cancelled) return;
+  markFired(t.id);
+  try {
+    const guild = await client.guilds.fetch(t.guildId);
+    const channel = t.channelId ? await guild.channels.fetch(t.channelId).catch(() => null) : null;
+    const mention = t.mentionUserId ? `<@${t.mentionUserId}> ` : "";
+
+    if (t.type === "timer" || t.type === "alarm") {
+      const embed = timerFiredEmbed(t, "🔔 ครบเวลา!");
+      if (channel?.isTextBased?.()) {
+        await channel.send({ content: mention.trim() || undefined, embeds: [embed] }).catch(() => {});
+      }
+      // Also chime in voice if the bot is connected
+      const conn = getVoiceConnection(guild.id);
+      if (conn && conn.state.status === VoiceConnectionStatus.Ready) {
+        await speakThai(conn, `แจ้งเตือนครับ ${t.label || "ครบเวลาแล้ว"}`, `timer-${t.id}`);
+      }
+      deleteTimer(t.id);
+      return;
+    }
+
+    if (t.type === "wake_alarm") {
+      // Find the target member; only proceed if they're in voice.
+      let member = null;
+      try { member = await guild.members.fetch(t.userId); } catch {}
+      if (!member?.voice?.channel) {
+        if (channel?.isTextBased?.()) {
+          await channel.send({
+            content: mention,
+            embeds: [
+              timerFiredEmbed(t, "⚠️ ปลุกไม่ได้ — ผู้ใช้ไม่ได้อยู่ในห้องเสียง"),
+            ],
+          }).catch(() => {});
+        }
+        deleteTimer(t.id);
+        return;
+      }
+      const ttsText = config.wakeTtsText || "ขออนุญาตปลุกนะครับ ตื่นได้แล้วเด้อ";
+      const musicUrl = config.wakeMusicUrl || "";
+      // Post embed FIRST (with stop button) so user has UI before audio kicks in
+      let firedMsg = null;
+      if (channel?.isTextBased?.()) {
+        firedMsg = await channel.send({
+          content: mention,
+          embeds: [timerFiredEmbed(t, "🌅 กำลังปลุกในห้องเสียง — กดปุ่มเพื่อหยุด")],
+          components: [wakeRunningRow(t.id)],
+        }).catch(() => null);
+      }
+      // Kick off the actual loop (non-blocking)
+      runWakeSession({ guild, member, ttsText, musicUrl, timerId: t.id }).catch((err) =>
+        console.warn(`[wake:${t.id}] runWakeSession threw:`, err?.message),
+      );
+      // Don't deleteTimer — the stop button needs the record. We mark fired,
+      // and clean up after the wake session finishes.
+      const cleanupHandle = setInterval(() => {
+        if (!wakeSessions.has(t.id)) {
+          clearInterval(cleanupHandle);
+          deleteTimer(t.id);
+          if (firedMsg) {
+            firedMsg.edit({
+              embeds: [timerFiredEmbed(t, "✅ หยุดปลุกแล้ว")],
+              components: [],
+            }).catch(() => {});
+          }
+        }
+      }, 5000);
+      return;
+    }
+
+    if (t.type === "sleep_disconnect") {
+      // Disconnect the user from voice
+      let member = null;
+      try { member = await guild.members.fetch(t.userId); } catch {}
+      let outcome = "❌ ผู้ใช้ไม่อยู่ในเซิร์ฟเวอร์";
+      if (member?.voice?.channel) {
+        try {
+          await member.voice.disconnect("Sleep mode timer");
+          outcome = `🛌 เตะ ${member.displayName} ออกจาก ${member.voice.channel.name} เรียบร้อย — หลับสบาย`;
+        } catch (err) {
+          outcome = `❌ เตะไม่สำเร็จ: ${err?.message?.slice(0, 100)}`;
+        }
+      } else {
+        outcome = "ℹ️ ผู้ใช้ไม่ได้อยู่ในห้องเสียงแล้ว — ข้ามการเตะ";
+      }
+      if (channel?.isTextBased?.()) {
+        await channel.send({ content: mention, embeds: [timerFiredEmbed(t, outcome)] }).catch(() => {});
+      }
+      deleteTimer(t.id);
+      return;
+    }
+
+    if (t.type === "auto_unmute") {
+      let member = null;
+      try { member = await guild.members.fetch(t.userId); } catch {}
+      let outcome = "ℹ️ ผู้ใช้ไม่อยู่แล้ว";
+      if (member?.voice?.channel) {
+        try {
+          await member.voice.setMute(false, "auto_unmute timer");
+          outcome = `🔊 เปิดไมค์ ${member.displayName} แล้ว`;
+        } catch (err) {
+          outcome = `❌ เปิดไมค์ไม่สำเร็จ: ${err?.message?.slice(0, 100)}`;
+        }
+      } else if (member) {
+        outcome = `ℹ️ ${member.displayName} ไม่ได้อยู่ในห้องเสียงแล้ว`;
+      }
+      if (channel?.isTextBased?.()) {
+        await channel.send({ content: mention, embeds: [timerFiredEmbed(t, outcome)] }).catch(() => {});
+      }
+      deleteTimer(t.id);
+      return;
+    }
+  } catch (err) {
+    console.error(`[timer:${t.id}] fire crashed: ${err?.message}`);
+    deleteTimer(t.id);
+  }
+}
+
+async function tickTimers() {
+  const due = dueTimers();
+  if (!due.length) return;
+  for (const t of due) {
+    // Run them in parallel — they're independent and can each take a while
+    fireTimer(t).catch((err) => console.warn(`[timer:${t.id}] fire error: ${err?.message}`));
+  }
+}
+
+// Background sweeper: post "created" embeds for any timer that hasn't had one
+// posted yet (in case the agent created several in one turn).
+const announcedTimers = new Set();
+async function announceNewTimers() {
+  const all = listTimersAll();
+  for (const t of all) {
+    if (announcedTimers.has(t.id)) continue;
+    announcedTimers.add(t.id);
+    announceTimerCreated(t.id).catch(() => {});
+  }
+  // Trim memory
+  if (announcedTimers.size > 500) {
+    const arr = [...announcedTimers];
+    arr.slice(0, arr.length - 200).forEach((id) => announcedTimers.delete(id));
+  }
+}
+
 async function attachReceiver(connection, channel) {
   const receiver = connection.receiver;
   activeReceiver = receiver;
@@ -1563,6 +1968,12 @@ client.once(Events.ClientReady, async (c) => {
         }
       }
     }, 1_000);
+
+    // Timer / alarm / sleep / auto-unmute tick — sub-second precision.
+    timerHandle = setInterval(() => {
+      announceNewTimers().catch(() => {});
+      tickTimers().catch((err) => console.warn("[timers] tick error", err?.message));
+    }, 500);
 
     setInterval(() => {
       try {
@@ -2301,6 +2712,153 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
       return;
     }
+
+    // ===== Timer / alarm / sleep / wake-music buttons =====
+    if (interaction.isButton()) {
+      const cid = interaction.customId;
+
+      // Cancel a regular timer or alarm
+      if (cid.startsWith("alxcer-cancel-timer:")) {
+        const id = cid.split(":")[1];
+        const t = getTimer(id);
+        if (!t) {
+          await interaction.reply({ content: "ตัวจับเวลานี้หายไปแล้ว (ครบเวลา หรือถูกยกเลิกไปก่อนหน้านี้)", ephemeral: true });
+          return;
+        }
+        cancelTimer(id);
+        await interaction.update({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x95a5a6)
+              .setTitle("❎ ยกเลิกแล้ว")
+              .setDescription(`ยกเลิก **${t.label || t.type}** เรียบร้อย`),
+          ],
+          components: [],
+        }).catch(() => {});
+        return;
+      }
+
+      // Cancel a sleep mode (auto-disconnect)
+      if (cid.startsWith("alxcer-cancel-sleep:")) {
+        const id = cid.split(":")[1];
+        const t = getTimer(id);
+        if (!t) {
+          await interaction.reply({ content: "Sleep mode นี้หมดอายุไปแล้ว", ephemeral: true });
+          return;
+        }
+        // Only the targeted user (or an admin) can cancel
+        if (interaction.user.id !== t.userId && !isAdmin(interaction.member)) {
+          await interaction.reply({ content: "ปุ่มนี้สำหรับเจ้าของ sleep mode เท่านั้น", ephemeral: true });
+          return;
+        }
+        cancelTimer(id);
+        await interaction.update({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x2ecc71)
+              .setTitle("🛌 ยกเลิก sleep mode แล้ว")
+              .setDescription("ตื่นแล้วเหรอครับ — งั้นไม่เตะออกแล้ว"),
+          ],
+          components: [],
+        }).catch(() => {});
+        return;
+      }
+
+      // Cancel an auto-unmute and immediately un-mute the user
+      if (cid.startsWith("alxcer-cancel-mute:")) {
+        const id = cid.split(":")[1];
+        const t = getTimer(id);
+        if (!t) {
+          await interaction.reply({ content: "ตัวจับเวลานี้หมดอายุไปแล้ว", ephemeral: true });
+          return;
+        }
+        if (!isAdmin(interaction.member) && interaction.user.id !== t.ownerId) {
+          await interaction.reply({ content: "ปุ่มนี้สำหรับแอดมินหรือคนที่สั่ง mute เท่านั้น", ephemeral: true });
+          return;
+        }
+        try {
+          const guild = await client.guilds.fetch(t.guildId);
+          const member = await guild.members.fetch(t.userId);
+          if (member.voice?.channel) {
+            await member.voice.setMute(false, "manual cancel via button");
+          }
+        } catch (err) {
+          console.warn("[cancel-mute] unmute failed", err?.message);
+        }
+        cancelTimer(id);
+        await interaction.update({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x2ecc71)
+              .setTitle("🔊 เปิดไมค์แล้ว")
+              .setDescription("ปลด mute เรียบร้อยครับ"),
+          ],
+          components: [],
+        }).catch(() => {});
+        return;
+      }
+
+      // Stop a wake-alarm session
+      if (cid.startsWith("alxcer-stop-alarm:")) {
+        const id = cid.split(":")[1];
+        const t = getTimer(id);
+        const session = wakeSessions.get(id);
+        // Either the user being woken or an admin can stop it
+        if (t && interaction.user.id !== t.userId && !isAdmin(interaction.member)) {
+          await interaction.reply({ content: "ปุ่มนี้สำหรับคนที่ถูกปลุก (หรือแอดมิน) เท่านั้น", ephemeral: true });
+          return;
+        }
+        if (session) {
+          session.stop();
+        }
+        await interaction.update({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x2ecc71)
+              .setTitle("✅ หยุดปลุกแล้ว")
+              .setDescription("ตื่นแล้วเหรอครับ ขอให้เป็นวันที่ดีนะ ☀️"),
+          ],
+          components: [],
+        }).catch(() => {});
+        return;
+      }
+
+      // Snooze: stop the current alarm and re-create it +N minutes
+      if (cid.startsWith("alxcer-snooze:")) {
+        const parts = cid.split(":");
+        const id = parts[1];
+        const minutes = Number(parts[2]) || 5;
+        const t = getTimer(id);
+        const session = wakeSessions.get(id);
+        if (t && interaction.user.id !== t.userId && !isAdmin(interaction.member)) {
+          await interaction.reply({ content: "ปุ่มนี้สำหรับคนที่ถูกปลุกเท่านั้น", ephemeral: true });
+          return;
+        }
+        if (session) session.stop();
+        const { createTimer: createTimerFn } = await import("./timers.js");
+        const next = createTimerFn({
+          type: t?.type === "wake_alarm" ? "wake_alarm" : "alarm",
+          fireAt: Date.now() + minutes * 60 * 1000,
+          label: `${t?.label || "Alarm"} (snooze ${minutes}น)`,
+          guildId: interaction.guildId,
+          channelId: interaction.channelId,
+          userId: t?.userId || interaction.user.id,
+          mentionUserId: t?.mentionUserId || interaction.user.id,
+          ownerId: t?.ownerId || interaction.user.id,
+          payload: t?.payload || {},
+        });
+        await interaction.update({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xf1c40f)
+              .setTitle(`💤 Snooze ${minutes} นาที`)
+              .setDescription(`เด๋วผมมาปลุกใหม่อีก ${minutes} นาที — ID ใหม่: \`${next.id}\``),
+          ],
+          components: [],
+        }).catch(() => {});
+        return;
+      }
+    }
   } catch (err) {
     console.error("[interaction] error", err?.message);
     if (!interaction.replied && !interaction.deferred) {
@@ -2315,6 +2873,12 @@ async function shutdown(signal) {
   console.log(`[shutdown] received ${signal}`);
   if (pollHandle) clearInterval(pollHandle);
   if (audioFlushHandle) clearInterval(audioFlushHandle);
+  if (timerHandle) clearInterval(timerHandle);
+  // Stop any running wake-alarm sessions so the process can exit cleanly.
+  for (const session of wakeSessions.values()) {
+    try { session.stop(); } catch {}
+  }
+  wakeSessions.clear();
   for (const handle of wordBanTimers.values()) clearTimeout(handle);
   wordBanTimers.clear();
   try {
