@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 1,
-        "lastAt": 1777483111839,
+        "count": 2,
+        "lastAt": 1777548365496,
         "history": [
           {
             "at": 1777483111839,
@@ -16,6 +16,15 @@
             "matched": "สัส",
             "reason": "ใช้คำต้องห้าม: \"สัส\"",
             "excerpt": "กวนตีนไอสัส",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1777548365496,
+            "severity": 7,
+            "matched": "fuck",
+            "reason": "ใช้คำต้องห้าม: \"fuck\"",
+            "excerpt": "Gaurd what the fuck are you doing",
             "action": "timeout_failed",
             "source": "local"
           }
