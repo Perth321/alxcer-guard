@@ -35,30 +35,14 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install ffmpeg (required by nodejs-whisper)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
-          ffmpeg -version | head -n 1
-
-      - name: Cache bot dependencies (incl. whisper.cpp build)
+      - name: Cache bot dependencies
         id: cache-deps
         uses: actions/cache@v4
         with:
           path: bot/node_modules
-          key: bot-deps-${{ runner.os }}-node22-${{ hashFiles('bot/package.json') }}-v5
+          key: bot-deps-${{ runner.os }}-node22-${{ hashFiles('bot/package.json') }}-v6
           restore-keys: |
             bot-deps-${{ runner.os }}-node22-
-
-      # IMPORTANT: store whisper model OUTSIDE node_modules so npm install
-      # can never wipe it. We then copy/symlink it into the nodejs-whisper
-      # models dir after npm install. This is the cache that actually persists.
-      - name: Cache Whisper model (external)
-        id: cache-whisper
-        uses: actions/cache@v4
-        with:
-          path: bot/.cache/whisper
-          key: whisper-medium-bin-v2
 
       - name: Cache YOLO model
         uses: actions/cache@v4
@@ -75,38 +59,14 @@ jobs:
       - name: Install bot dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Download Whisper medium model (cache miss only)
-        if: steps.cache-whisper.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p .cache/whisper
-          echo "[setup] cache miss — downloading ggml-medium.bin (~1.5GB)..."
-          curl -L --fail --retry 3 --retry-delay 5 \
-            -o .cache/whisper/ggml-medium.bin \
-            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin
-          ls -la .cache/whisper/
-          echo "[setup] download complete"
-
-      - name: Install Whisper model into nodejs-whisper
-        run: |
-          MODEL_DIR="node_modules/nodejs-whisper/cpp/whisper.cpp/models"
-          mkdir -p "$MODEL_DIR"
-          if [ ! -f .cache/whisper/ggml-medium.bin ]; then
-            echo "[setup] FATAL: cached whisper model missing!"
-            exit 1
-          fi
-          # Hard-copy (cheap on Actions runners, ~2s) — symlinks sometimes
-          # confuse nodejs-whisper's existence check.
-          cp -f .cache/whisper/ggml-medium.bin "$MODEL_DIR/ggml-medium.bin"
-          ls -la "$MODEL_DIR/"
-          echo "[setup] whisper model installed"
-
       - name: Run Alxcer Guard
         env:
           DISCORD_PERSONAL_ACCESS_TOKEN: ${{ secrets.DISCORD_PERSONAL_ACCESS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
-          WHISPER_MODEL: medium
-          WHISPER_LANGUAGE: th
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          DEEPGRAM_MODEL: nova-3
+          DEEPGRAM_LANGUAGE: th
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: node src/index.js

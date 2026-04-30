@@ -1,53 +1,48 @@
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
+import { Buffer } from "node:buffer";
 
-const MODEL_NAME = process.env.WHISPER_MODEL || "base";
-const LANGUAGE = process.env.WHISPER_LANGUAGE || "th";
+const API_KEY = process.env.DEEPGRAM_API_KEY || "";
+const MODEL = process.env.DEEPGRAM_MODEL || "nova-3";
+const LANGUAGE = process.env.DEEPGRAM_LANGUAGE || "th";
+const ENDPOINT = "https://api.deepgram.com/v1/listen";
 
-let nodewhisper = null;
-let importChecked = false;
-let modelReadyPromise = null;
-let modelReadyAt = 0;
-let lastImportError = null;
+let lastImportError = API_KEY ? null : "DEEPGRAM_API_KEY env var not set";
+let modelReadyAt = API_KEY ? Date.now() : 0;
 let totalProcessed = 0;
 let totalEmpty = 0;
 let totalErrors = 0;
 let lastTextAt = 0;
 let lastError = "";
 
-async function tryImport() {
-  if (importChecked) return nodewhisper;
-  importChecked = true;
-  try {
-    const mod = await import("nodejs-whisper");
-    nodewhisper = mod.nodewhisper || mod.default || null;
-    if (!nodewhisper) throw new Error("nodewhisper export not found");
-    console.log(`[transcribe] nodejs-whisper loaded — model="${MODEL_NAME}" lang="${LANGUAGE}"`);
-  } catch (err) {
-    lastImportError = err?.message || String(err);
-    console.warn(`[transcribe] nodejs-whisper unavailable — voice STT disabled (${lastImportError})`);
-    nodewhisper = null;
-  }
-  return nodewhisper;
-}
-
 export async function isAvailable() {
-  return !!(await tryImport());
+  return !!API_KEY;
 }
 
 export function importError() {
   return lastImportError;
 }
 
+export async function prepareModel() {
+  if (!API_KEY) {
+    console.warn("[transcribe] DEEPGRAM_API_KEY not set — voice STT disabled");
+    return false;
+  }
+  console.log(
+    `[transcribe] ✓ READY — Deepgram model="${MODEL}" lang="${LANGUAGE}" (cloud, no warmup)`,
+  );
+  return true;
+}
+
 const queue = [];
 let active = 0;
-const MAX_CONCURRENT = 2;
-const MAX_QUEUE = 16;
+const MAX_CONCURRENT = 4;
+const MAX_QUEUE = 32;
 
 export function enqueueTranscription(pcmBuffer, callback, meta = {}) {
+  if (!API_KEY) return false;
   if (queue.length >= MAX_QUEUE) {
-    console.warn(`[transcribe] queue FULL (${queue.length}/${MAX_QUEUE}) — dropping ${meta.userId || ""}`);
+    console.warn(
+      `[transcribe] queue FULL (${queue.length}/${MAX_QUEUE}) — dropping ${meta.userId || ""}`,
+    );
     return false;
   }
   queue.push({ pcm: pcmBuffer, callback, meta, queuedAt: Date.now() });
@@ -57,9 +52,10 @@ export function enqueueTranscription(pcmBuffer, callback, meta = {}) {
 
 export function getStatus() {
   return {
-    modelName: MODEL_NAME,
+    engine: "deepgram",
+    model: MODEL,
     language: LANGUAGE,
-    modelReady: modelReadyAt > 0,
+    modelReady: !!API_KEY,
     modelReadyAt,
     queued: queue.length,
     active,
@@ -74,34 +70,6 @@ export function getStatus() {
   };
 }
 
-export async function prepareModel() {
-  const fn = await tryImport();
-  if (!fn) {
-    console.warn("[transcribe] cannot prepare model — import failed");
-    return false;
-  }
-  if (modelReadyAt > 0) return true;
-  console.log(
-    `[transcribe] PRE-WARMING model "${MODEL_NAME}" (downloads if needed, ~30-90s for base, ~3min for small)...`,
-  );
-  const startedAt = Date.now();
-  const silentPcm = Buffer.alloc(48000 * 2 * 2 * 1, 0);
-  try {
-    await transcribePcm(silentPcm);
-    modelReadyAt = Date.now();
-    console.log(
-      `[transcribe] ✓ MODEL READY "${MODEL_NAME}" (warmup took ${((modelReadyAt - startedAt) / 1000).toFixed(1)}s)`,
-    );
-    return true;
-  } catch (err) {
-    lastError = err?.message || String(err);
-    console.error(
-      `[transcribe] ✗ model warmup FAILED: ${lastError}`,
-    );
-    return false;
-  }
-}
-
 async function pump() {
   if (active >= MAX_CONCURRENT) return;
   const job = queue.shift();
@@ -113,35 +81,32 @@ async function pump() {
     `[transcribe] START user=${job.meta.userId} dur=${job.meta.durationSec?.toFixed(1)}s waited=${waitMs}ms (queue=${queue.length}, active=${active})`,
   );
   try {
-    const rawText = await transcribePcm(job.pcm);
+    const text = await transcribePcm(job.pcm);
     const elapsed = Date.now() - t0;
     totalProcessed++;
-    const trimmed = (rawText || "").trim();
-    const hallucinated = trimmed && isHallucinatedPlaceholder(trimmed);
-    const finalText = hallucinated ? "" : rawText;
-    if (finalText && finalText.trim().length > 0) {
+    const trimmed = (text || "").trim();
+    if (trimmed) {
       lastTextAt = Date.now();
       console.log(
-        `[transcribe] OK user=${job.meta.userId} took=${elapsed}ms text="${finalText.slice(0, 80)}"`,
+        `[transcribe] OK user=${job.meta.userId} took=${elapsed}ms text="${trimmed.slice(0, 80)}"`,
       );
     } else {
       totalEmpty++;
-      const reason = hallucinated
-        ? `hallucination filtered: "${trimmed.slice(0, 60)}"`
-        : "silence or non-speech";
       console.log(
-        `[transcribe] EMPTY user=${job.meta.userId} took=${elapsed}ms (${reason})`,
+        `[transcribe] EMPTY user=${job.meta.userId} took=${elapsed}ms (silence or non-speech)`,
       );
     }
     try {
-      job.callback?.(finalText, job.meta);
+      job.callback?.(trimmed, job.meta);
     } catch (cbErr) {
       console.error("[transcribe] callback error", cbErr?.message);
     }
   } catch (err) {
     totalErrors++;
     lastError = err?.message || String(err);
-    console.error("[transcribe] job error", lastError);
+    console.error(
+      `[transcribe] job error user=${job.meta.userId}: ${lastError}`,
+    );
   } finally {
     active--;
     setImmediate(pump);
@@ -149,6 +114,7 @@ async function pump() {
 }
 
 function downmixAndResample(pcm) {
+  // Discord gives 48kHz stereo s16le; Deepgram does best with 16kHz mono s16le.
   const inSamples = pcm.length / 4;
   const ratio = 48000 / 16000;
   const outSamples = Math.floor(inSamples / ratio);
@@ -158,7 +124,10 @@ function downmixAndResample(pcm) {
     const offset = srcIdx * 4;
     const left = pcm.readInt16LE(offset);
     const right = pcm.readInt16LE(offset + 2);
-    const mono = Math.max(-32768, Math.min(32767, Math.round((left + right) / 2)));
+    const mono = Math.max(
+      -32768,
+      Math.min(32767, Math.round((left + right) / 2)),
+    );
     out.writeInt16LE(mono, i * 2);
   }
   return out;
@@ -186,159 +155,36 @@ function pcmToWav(pcm, sampleRate = 16000, channels = 1, bitsPerSample = 16) {
   return buffer;
 }
 
-let rawLogCount = 0;
-const RAW_LOG_MAX = 5;
-
 async function transcribePcm(pcm) {
-  const fn = await tryImport();
-  if (!fn) return null;
-
-  const tmp = path.join(
-    os.tmpdir(),
-    `alxcer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`,
-  );
+  if (!API_KEY) return "";
   const monoPcm = downmixAndResample(pcm);
+  const wav = pcmToWav(monoPcm);
+  const url =
+    `${ENDPOINT}?model=${encodeURIComponent(MODEL)}` +
+    `&language=${encodeURIComponent(LANGUAGE)}` +
+    `&punctuate=true&smart_format=true`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  let res;
   try {
-    fs.writeFileSync(tmp, pcmToWav(monoPcm));
-  } catch (err) {
-    console.error("[transcribe] write wav failed", err?.message);
-    return null;
-  }
-  try {
-    const result = await fn(tmp, {
-      modelName: MODEL_NAME,
-      autoDownloadModelName: MODEL_NAME,
-      removeWavFileAfterTranscription: false,
-      verbose: false,
-      whisperOptions: {
-        outputInText: true,
-        outputInVtt: false,
-        outputInSrt: false,
-        outputInCsv: false,
-        translateToEnglish: false,
-        wordTimestamps: false,
-        timestamps_length: 0,
-        splitOnWord: false,
-        language: LANGUAGE,
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Token ${API_KEY}`,
+        "Content-Type": "audio/wav",
       },
+      body: wav,
+      signal: controller.signal,
     });
-    let text = parseTranscript(result);
-    if (!text) {
-      const txtPath = `${tmp}.txt`;
-      try {
-        if (fs.existsSync(txtPath)) {
-          const fileText = fs.readFileSync(txtPath, "utf8").trim();
-          if (fileText) {
-            text = parseTranscript(fileText);
-            if (rawLogCount < RAW_LOG_MAX) {
-              console.log(
-                `[transcribe] recovered text from .txt file: "${fileText.slice(0, 100)}"`,
-              );
-            }
-          }
-        }
-      } catch {}
-    }
-    if (rawLogCount < RAW_LOG_MAX) {
-      rawLogCount++;
-      const rawType = typeof result;
-      const rawLen = result?.length ?? 0;
-      const rawSnippet =
-        rawType === "string"
-          ? result.slice(0, 300).replace(/\n/g, "\\n")
-          : JSON.stringify(result).slice(0, 300);
-      console.log(
-        `[transcribe] RAW#${rawLogCount} type=${rawType} len=${rawLen} snippet="${rawSnippet}" → parsed="${text.slice(0, 100)}"`,
-      );
-    }
-    try { fs.unlinkSync(tmp); } catch {}
-    try { fs.unlinkSync(`${tmp}.txt`); } catch {}
-    return text;
-  } catch (err) {
-    console.error("[transcribe] whisper error", err?.message);
-    try { fs.unlinkSync(tmp); } catch {}
-    try { fs.unlinkSync(`${tmp}.txt`); } catch {}
-    return null;
+  } finally {
+    clearTimeout(timer);
   }
-}
-
-function parseTranscript(raw) {
-  if (!raw) return "";
-  const stringified = typeof raw === "string" ? raw : String(raw);
-  return stringified
-    .split("\n")
-    .map((line) =>
-      line.replace(
-        /^\[\s*\d+:\d+:\d+\.\d+\s*-->\s*\d+:\d+:\d+\.\d+\s*\]\s*/,
-        "",
-      ),
-    )
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-}
-
-// Whisper.cpp on small/base models hallucinates these placeholders when fed
-// silence, breath, ambient noise, or short non-speech clips. Filter them out
-// so they don't pollute transcripts.json.
-const HALLUCINATION_PHRASES = [
-  "เสียงดนตรี",
-  "เสียงเพลง",
-  "ดนตรี",
-  "เพลง",
-  "เสียงปรบมือ",
-  "เสียงหัวเราะ",
-  "เสียงนกร้อง",
-  "เสียงกริ่ง",
-  "เสียงระฆัง",
-  "เสียงไอ",
-  "เสียงพัดลม",
-  "ขอบคุณที่รับชม",
-  "ขอบคุณครับ",
-  "ขอบคุณค่ะ",
-  "music",
-  "Music",
-  "MUSIC",
-  "applause",
-  "Applause",
-  "laughter",
-  "Laughter",
-  "BLANK_AUDIO",
-  "blank_audio",
-  "silence",
-  "Silence",
-  "Thanks for watching",
-  "Thank you for watching",
-  "Thanks for watching!",
-  "Thank you",
-  "Thank you.",
-  "Thanks",
-  "you",
-  "You",
-  "You.",
-  "Bye.",
-  "Bye!",
-];
-
-function isHallucinatedPlaceholder(text) {
-  if (!text) return false;
-  // strip surrounding brackets/parens/punctuation/whitespace
-  const stripped = text
-    .trim()
-    .replace(/^[\s\[\(\{<♪♫\*\-_=]+/, "")
-    .replace(/[\s\]\)\}>♪♫\*\-_=\.\!\?,…]+$/, "")
-    .trim();
-  if (!stripped) return true; // pure punctuation/symbols
-  if (/^[♪♫\*\-_=…\.\!\?, ]+$/.test(stripped)) return true;
-  for (const phrase of HALLUCINATION_PHRASES) {
-    if (stripped === phrase) return true;
-    // also catch repeated forms like "you you you" or "ดนตรี ดนตรี"
-    const re = new RegExp(
-      `^(?:${phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s,\\.]*)+$`,
-      "i",
-    );
-    if (re.test(stripped)) return true;
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Deepgram HTTP ${res.status}: ${body.slice(0, 200)}`);
   }
-  return false;
+  const json = await res.json();
+  const transcript =
+    json?.results?.channels?.[0]?.alternatives?.[0]?.transcript || "";
+  return transcript.trim();
 }
