@@ -15,26 +15,11 @@
       "lastSource": "voice"
     },
     "967120879689551873": {
-      "count": 2,
-      "lastOffenseAt": 1777384379910,
-      "muteUntil": 0,
+      "count": 3,
+      "lastOffenseAt": 1777557061103,
+      "muteUntil": 1777560661103,
       "lastWord": "หี",
-      "lastSource": "chat",
-      "chat": {
-        "count": 1,
-        "lastAt": 1777544540699,
-        "history": [
-          {
-            "at": 1777544540699,
-            "severity": 6,
-            "matched": "อ้วน",
-            "reason": "ใช้คำหยาบคาย",
-            "excerpt": "อ้วน คิดถึงเค้าไหม",
-            "action": "timeout_failed",
-            "source": "ai"
-          }
-        ]
-      }
+      "lastSource": "voice"
     },
     "1491387879648264347": {
       "chat": {
