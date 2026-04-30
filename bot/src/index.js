@@ -645,12 +645,9 @@ async function handleWakeCommand({ userId, username, command, raw, isFollowUp })
       }
     }
 
-    if (!member || !isAdmin(member)) {
-      const denyMsg = `🚫 <@${userId}> ใช้คำสั่งเสียงไม่ได้ — ต้องเป็นแอดมินเซิร์ฟเวอร์เท่านั้น`;
-      if (statusMsg) await statusMsg.edit(denyMsg).catch(() => {});
-      else if (replyChannel) await replyChannel.send(denyMsg).catch(() => {});
-      return;
-    }
+    // Admin gate removed — voice commands are open to everyone in the server.
+    // The agent itself still enforces role-hierarchy guardrails for any
+    // moderation action it performs (ban / mute / move).
 
     if (replyChannel) await replyChannel.sendTyping().catch(() => {});
 
