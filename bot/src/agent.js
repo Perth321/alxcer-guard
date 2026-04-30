@@ -1186,6 +1186,108 @@ Admin: "เหนื่อยว่ะ"   (no action implied)
 → no tool
 → reply: "พักก่อนครับ เดี๋ยวอะไรก็ดูแลให้ ไม่ต้องห่วง 😌"`;
 
+// Some models (Qwen3, Hermes-style) sometimes emit tool calls inline as
+// pseudo-XML inside `content` instead of using OpenRouter's structured
+// `tool_calls` field. Without this rescue parser those calls would leak as
+// raw text to the user (e.g. `voice_unmute<arg_key>...</arg_key>...`) and
+// the action would never run. We detect, parse, and re-inject them as
+// normal tool_calls so the agent loop can execute them.
+function parseTextualToolCallBody(body) {
+  const trimmed = (body || "").trim();
+  if (!trimmed) return null;
+
+  // Variant A: JSON body — e.g. {"name":"voice_unmute","arguments":{...}}
+  if (trimmed.startsWith("{")) {
+    try {
+      const j = JSON.parse(trimmed);
+      const name = j.name || j.function?.name;
+      if (name) {
+        let args = j.arguments ?? j.parameters ?? j.function?.arguments ?? {};
+        if (typeof args === "string") {
+          try { args = JSON.parse(args || "{}"); } catch { args = {}; }
+        }
+        return { name, arguments: args || {} };
+      }
+    } catch {}
+  }
+
+  // Variant B: Hermes/Qwen pseudo-XML
+  //   functionName
+  //   <arg_key>k</arg_key>
+  //   <arg_value>v</arg_value>
+  const firstArgIdx = trimmed.indexOf("<arg_key>");
+  let name = "";
+  let argsText = "";
+  if (firstArgIdx >= 0) {
+    const beforeArgs = trimmed.slice(0, firstArgIdx).trim();
+    const beforeLines = beforeArgs.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    name = beforeLines[beforeLines.length - 1] || "";
+    argsText = trimmed.slice(firstArgIdx);
+  } else {
+    name = trimmed.split(/\r?\n/)[0].trim();
+  }
+  // Strip stray tags / whitespace from name; require a JS-identifier-like name.
+  name = name.replace(/<\/?[^>]+>/g, "").trim();
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) return null;
+
+  const args = {};
+  const pairRe = /<arg_key>([\s\S]*?)<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/g;
+  let pm;
+  while ((pm = pairRe.exec(argsText)) !== null) {
+    const k = pm[1].trim();
+    let v = pm[2].trim();
+    if (v === "true" || v === "false" || v === "null") {
+      v = JSON.parse(v);
+    } else if (/^-?\d+(\.\d+)?$/.test(v)) {
+      // Only coerce numbers if they round-trip safely. Discord snowflake IDs
+      // are 17-19 digit strings that exceed Number.MAX_SAFE_INTEGER and lose
+      // precision under Number(); they must stay as strings.
+      const asNum = Number(v);
+      if (Number.isFinite(asNum) && String(asNum) === v) v = asNum;
+    } else if ((v.startsWith("{") && v.endsWith("}")) || (v.startsWith("[") && v.endsWith("]"))) {
+      try { v = JSON.parse(v); } catch {}
+    }
+    if (k) args[k] = v;
+  }
+  return { name, arguments: args };
+}
+
+function extractTextualToolCalls(content) {
+  if (!content || typeof content !== "string") {
+    return { extracted: [], cleanedContent: content || "" };
+  }
+  const calls = [];
+  // First try: properly-tagged blocks <tool_call>...</tool_call>
+  const tagged = /<tool_call>([\s\S]*?)<\/tool_call>/g;
+  let cleaned = content;
+  let m;
+  let removedTagged = false;
+  while ((m = tagged.exec(content)) !== null) {
+    const parsed = parseTextualToolCallBody(m[1]);
+    if (parsed) {
+      calls.push(parsed);
+      removedTagged = true;
+    }
+  }
+  if (removedTagged) cleaned = content.replace(tagged, "").trim();
+
+  // Fallback: opening <tool_call> dropped by the model — anchor on </tool_call>
+  if (!calls.length && content.includes("</tool_call>")) {
+    const orphan = /([\s\S]*?)<\/tool_call>/g;
+    let removedOrphan = false;
+    while ((m = orphan.exec(content)) !== null) {
+      const parsed = parseTextualToolCallBody(m[1]);
+      if (parsed) {
+        calls.push(parsed);
+        removedOrphan = true;
+      }
+    }
+    if (removedOrphan) cleaned = content.replace(orphan, "").trim();
+  }
+
+  return { extracted: calls, cleanedContent: cleaned };
+}
+
 export async function runAgent({ userPrompt, ctx, maxSteps = 8 }) {
   if (!aiAvailable()) return "AI ยังไม่พร้อม (OPENROUTER_API_KEY ไม่ได้ตั้ง)";
   const { authorTag, authorId, guild, chatHistory } = ctx;
@@ -1226,6 +1328,25 @@ export async function runAgent({ userPrompt, ctx, maxSteps = 8 }) {
       max_tokens: 700,
     });
     if (!reply) break;
+
+    // Rescue inline pseudo-XML tool calls before pushing the reply, so the
+    // assistant message we keep in `messages` reflects the structured calls
+    // (otherwise the next turn won't have matching tool_call_id pairs).
+    if (!reply.tool_calls?.length && reply.content) {
+      const { extracted, cleanedContent } = extractTextualToolCalls(reply.content);
+      if (extracted.length) {
+        reply.tool_calls = extracted.map((c, i) => ({
+          id: `call_inline_${step}_${i}`,
+          type: "function",
+          function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) },
+        }));
+        reply.content = cleanedContent;
+        console.log(
+          `[agent] rescued ${extracted.length} inline tool call(s) from text reply: ${extracted.map((c) => c.name).join(", ")}`,
+        );
+      }
+    }
+
     messages.push(reply);
 
     const toolCalls = reply.tool_calls || [];
