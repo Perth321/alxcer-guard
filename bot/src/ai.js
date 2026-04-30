@@ -5,17 +5,21 @@
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
-// Gemini models — ordered smartest to fastest (used as primary provider)
+// Gemini models — ordered smartest first, then progressively faster/cheaper.
+// Use STABLE GA model IDs only; preview IDs (e.g. *-preview-06-05) start
+// returning 404 the moment they're promoted to GA, and gemini-1.5-* were
+// deprecated in April 2025. Listing flash-lite gives us a real fallback when
+// the bigger models get rate-limited on the free tier (separate quota pool).
 const GEMINI_CHAT_MODELS = (process.env.GEMINI_CHAT_MODELS ||
-  "gemini-2.5-pro-preview-06-05,gemini-2.5-flash-preview-05-20,gemini-2.0-flash,gemini-1.5-pro,gemini-1.5-flash"
+  "gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash,gemini-2.0-flash-lite"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GEMINI_FAST_MODELS = (process.env.GEMINI_FAST_MODELS ||
-  "gemini-2.5-flash-preview-05-20,gemini-2.0-flash,gemini-1.5-flash"
+  "gemini-2.5-flash-lite,gemini-2.0-flash-lite,gemini-2.5-flash,gemini-2.0-flash"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GEMINI_VISION_MODELS = (process.env.GEMINI_VISION_MODELS ||
-  "gemini-2.5-pro-preview-06-05,gemini-2.5-flash-preview-05-20,gemini-2.0-flash"
+  "gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash,gemini-2.5-flash-lite"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 // OpenRouter fallback chains (used when Gemini is exhausted).
