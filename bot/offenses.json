@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 2,
-        "lastAt": 1777548365496,
+        "count": 3,
+        "lastAt": 1777551356782,
         "history": [
           {
             "at": 1777483111839,
@@ -27,6 +27,15 @@
             "excerpt": "Gaurd what the fuck are you doing",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1777551356782,
+            "severity": 7,
+            "matched": "Dung roi",
+            "reason": "ใช้คำหยาบคาย",
+            "excerpt": "Dung roi",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       },
