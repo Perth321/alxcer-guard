@@ -89,6 +89,7 @@ import {
   extractVisionIntent,
   summarizeDetections,
   thaiLabel,
+  annotateVideo,
 } from "./vision.js";
 import { isAdmin, runAgent } from "./agent.js";
 
@@ -1606,104 +1607,110 @@ async function handleVisionReply(msg, triggerReason, media) {
   }
 
   // ---- VIDEOS ----
-  // Two-mode treatment, mirroring the image flow:
-  //   • chat   → extract 4 evenly-spaced frames, feed them ALL to the vision
-  //              LLM so it perceives motion across time, attach the middle
-  //              frame as a thumbnail so the user sees what we sampled.
-  //   • detect → same frame extraction, run YOLO on every frame, draw boxes
-  //              on every frame that has detections (cap at 3 attachments),
-  //              produce a per-frame summary line + an aggregated count.
-  const VIDEO_FRAMES_CHAT = 4;
-  const VIDEO_FRAMES_DETECT = 4;
-  const MAX_ANNOTATED_FRAMES = 3;
+  // Reply with an actual video, never just standalone frames:
+  //   • chat   → re-attach the original clip (under Discord's 24 MB cap),
+  //              after sampling a few frames internally so the vision LLM
+  //              still perceives motion when composing its caption.
+  //   • detect → run YOLO on a sampled frame stream, redraw each frame with
+  //              labelled boxes, then re-encode as MP4 and attach THAT video.
+  //              Falls back to the original clip if annotation fails.
+  // Frames are never sent as separate image attachments.
+  const VIDEO_FRAMES_FOR_LLM = 4;
+  const DISCORD_FILE_CAP = 24 * 1024 * 1024;
 
   for (const vid of media.videos.slice(0, 1)) {
     const baseName = (vid.name || "video").replace(/\.[^.]+$/, "");
+    let originalBuf = null;
     try {
-      const buf = await fetchBuffer(vid.url, 50 * 1024 * 1024);
-      const frameCount = mode === "detect" ? VIDEO_FRAMES_DETECT : VIDEO_FRAMES_CHAT;
-      const frames = await extractVideoFrames(buf, frameCount);
-      if (!frames.length) {
-        if (mode === "detect") {
-          detectionSummaries.push(`🎬 ${vid.name || "video"}: ดึงเฟรมไม่ออกเลยครับ`);
-        }
-        continue;
+      originalBuf = await fetchBuffer(vid.url, 50 * 1024 * 1024);
+    } catch (err) {
+      console.warn(`[vision] video fetch failed: ${err.message?.slice(0, 200)}`);
+      if (mode === "detect") {
+        detectionSummaries.push(`🎬 ${vid.name || "video"}: โหลดไฟล์ไม่ได้ (${err.message?.slice(0, 80)})`);
       }
+      continue;
+    }
 
-      // Feed every frame to the vision LLM (cap at 4 so the request stays light).
-      // The LLM will see them as a chronological sequence and can describe motion.
-      for (const f of frames.slice(0, 4)) {
+    // Sample a few frames purely for the vision-LLM's chronological context.
+    let llmFrames = [];
+    try {
+      llmFrames = await extractVideoFrames(originalBuf, VIDEO_FRAMES_FOR_LLM);
+      for (const f of llmFrames.slice(0, VIDEO_FRAMES_FOR_LLM)) {
         visionImageUrls.push(`data:image/jpeg;base64,${f.buffer.toString("base64")}`);
       }
+    } catch (err) {
+      console.warn(`[vision] LLM frame sampling failed: ${err.message?.slice(0, 200)}`);
+    }
 
-      if (mode !== "detect") {
-        // Chat mode: attach the middle frame so the user can see what we sampled.
-        const midFrame = frames[Math.floor(frames.length / 2)];
-        if (midFrame) {
-          annotatedAttachments.push({
-            attachment: midFrame.buffer,
-            name: `${baseName}_frame_t${midFrame.time.toFixed(1)}s.jpg`,
-          });
-        }
-        continue;
-      }
-
-      // ── Detect mode ────────────────────────────────────────────────
-      const allClasses = new Map();          // total occurrences across frames
-      const perFrameSummaries = [];          // "t=1.2s: คน 2, รถ 1"
-      const annotatedSoFar = [];             // {time, buffer}
-
-      for (const f of frames) {
-        try {
-          const { detections, width, height } = await detectObjects(f.buffer);
-          for (const d of detections) {
-            allClasses.set(d.class, (allClasses.get(d.class) || 0) + 1);
-          }
-          // Per-frame summary line
-          const frameSummary = detections.length
-            ? [...new Map(
-                detections.reduce((m, d) => {
-                  m.set(d.class, (m.get(d.class) || 0) + 1);
-                  return m;
-                }, new Map()),
-              ).entries()]
-                .map(([cls, n]) => `${thaiLabel(cls)} ${n}`)
-                .join(", ")
-            : "ว่างเปล่า";
-          perFrameSummaries.push(`  • t=${f.time.toFixed(1)}s → ${frameSummary}`);
-
-          if (detections.length && annotatedSoFar.length < MAX_ANNOTATED_FRAMES) {
-            const annotated = await drawBoxes(f.buffer, detections, width, height);
-            annotatedSoFar.push({ time: f.time, buffer: annotated });
-          }
-        } catch (err) {
-          console.warn(`[vision] video frame YOLO failed: ${err.message?.slice(0, 200)}`);
-          perFrameSummaries.push(`  • t=${f.time.toFixed(1)}s → ประมวลผลล้มเหลว`);
-        }
-      }
-
-      // Attach all annotated frames in chronological order.
-      for (const a of annotatedSoFar) {
+    if (mode !== "detect") {
+      // Chat mode: just hand the original clip back to the user.
+      if (originalBuf.length <= DISCORD_FILE_CAP) {
         annotatedAttachments.push({
-          attachment: a.buffer,
-          name: `yolo_${baseName}_t${a.time.toFixed(1)}s.jpg`,
+          attachment: originalBuf,
+          name: vid.name || `${baseName}.mp4`,
         });
       }
+      continue;
+    }
 
-      const top = [...allClasses.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 8)
-        .map(([cls, n]) => `${thaiLabel(cls)} ${n}`)
-        .join(", ");
-      detectionSummaries.push(
-        `🎬 ${vid.name || "video"} (สุ่ม ${frames.length} เฟรม) — รวม: ${top || "ไม่เจอวัตถุที่รู้จัก"}\n${perFrameSummaries.join("\n")}`,
+    // ── Detect mode: build an annotated MP4 ────────────────────────────
+    const allClasses = new Map();
+    let processedFrames = 0;
+    let detectedFrames = 0;
+    let annotatedBuf = null;
+
+    try {
+      const result = await annotateVideo(
+        originalBuf,
+        async (frameBuf) => {
+          processedFrames++;
+          try {
+            const { detections, width, height } = await detectObjects(frameBuf);
+            if (!detections.length) return null;
+            detectedFrames++;
+            for (const d of detections) {
+              allClasses.set(d.class, (allClasses.get(d.class) || 0) + 1);
+            }
+            return await drawBoxes(frameBuf, detections, width, height);
+          } catch (err) {
+            console.warn(`[vision] frame annotate failed: ${err.message?.slice(0, 200)}`);
+            return null;
+          }
+        },
+        { maxFrames: 90, targetFpsCap: 6 },
+      );
+      annotatedBuf = result.buffer;
+      console.log(
+        `[vision] annotated video: ${result.frames} frames @ ${result.fps.toFixed(2)} fps, ${result.annotated} drawn, ${(annotatedBuf.length / 1024).toFixed(0)} KB`,
       );
     } catch (err) {
-      console.warn(`[vision] video processing failed: ${err.message?.slice(0, 200)}`);
-      if (mode === "detect") {
-        detectionSummaries.push(`🎬 ${vid.name || "video"}: ประมวลผลวิดีโอล้มเหลว (${err.message?.slice(0, 80)})`);
-      }
+      console.warn(`[vision] annotateVideo failed: ${err.message?.slice(0, 200)}`);
     }
+
+    // Pick the best video to attach: annotated (if it fits Discord) else original.
+    if (annotatedBuf && annotatedBuf.length <= DISCORD_FILE_CAP) {
+      annotatedAttachments.push({
+        attachment: annotatedBuf,
+        name: `yolo_${baseName}.mp4`,
+      });
+    } else if (originalBuf.length <= DISCORD_FILE_CAP) {
+      annotatedAttachments.push({
+        attachment: originalBuf,
+        name: vid.name || `${baseName}.mp4`,
+      });
+    }
+
+    const top = [...allClasses.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([cls, n]) => `${thaiLabel(cls)} ${n}`)
+      .join(", ");
+    const sampleNote = processedFrames > 0
+      ? `(วิเคราะห์ ${processedFrames} เฟรม, เจอวัตถุ ${detectedFrames} เฟรม)`
+      : "(วิเคราะห์เฟรมไม่สำเร็จ)";
+    detectionSummaries.push(
+      `🎬 ${vid.name || "video"} ${sampleNote} — รวม: ${top || "ไม่เจอวัตถุที่รู้จัก"}`,
+    );
   }
 
   // ---- ASK VISION-LLM TO DESCRIBE / CHAT ----

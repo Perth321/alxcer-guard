@@ -410,13 +410,13 @@ export async function detectObjects(imageBuffer) {
 }
 
 // Render bounding boxes onto an image and return a JPEG buffer.
-// Thai-aware labels are vectorised with opentype.js → SVG <path>, so the
-// final composite never depends on librsvg's font-handling capabilities.
+// Thai labels are rendered via sharp's pango/HarfBuzz text engine (using the
+// downloaded Sarabun font) so vowels and tone marks are shaped and stacked
+// correctly — no more upside-down or misaligned glyphs from raw SVG paths.
 export async function drawBoxes(imageBuffer, detections, width, height) {
   await ensureDeps();
   if (!detections.length) return imageBuffer;
-
-  const font = await getFont();
+  await ensureFont();
 
   const colors = [
     "#FF3B30","#FF9500","#FFCC00","#34C759","#00C7BE","#30B0C7",
@@ -424,48 +424,67 @@ export async function drawBoxes(imageBuffer, detections, width, height) {
   ];
   const fontSize = Math.max(16, Math.round(Math.min(width, height) / 36));
   const stroke = Math.max(2, Math.round(Math.min(width, height) / 300));
-  const padX = Math.round(fontSize * 0.35);
-  const padY = Math.round(fontSize * 0.25);
+  const padX = Math.round(fontSize * 0.4);
+  const padY = Math.round(fontSize * 0.22);
+  // sharp's text input takes a Pango-style font string. With dpi=72, the point
+  // size equals the resulting pixel size for the cap-height of basic Latin —
+  // close enough for our pill sizing.
+  const ptSize = Math.max(10, fontSize);
 
-  const parts = detections.map((d) => {
+  // Pre-render every label as an RGBA PNG so we know its true width/height
+  // before drawing the colored pill behind it.
+  const labels = await Promise.all(detections.map(async (d) => {
+    const label = `${thaiLabel(d.class)} ${(d.score * 100).toFixed(0)}%`;
+    const out = await sharp({
+      text: {
+        text: `<span foreground="white">${escapePango(label)}</span>`,
+        font: `Sarabun Bold ${ptSize}`,
+        fontfile: FONT_PATH,
+        rgba: true,
+        dpi: 72,
+      },
+    }).png().toBuffer({ resolveWithObject: true });
+    return { png: out.data, w: out.info.width, h: out.info.height };
+  }));
+
+  const rectParts = [];
+  const textComposites = [];
+  detections.forEach((d, i) => {
     const [x1, y1, x2, y2] = d.box;
     const w = x2 - x1;
     const h = y2 - y1;
     const color = colors[d.classIndex % colors.length];
-    const label = `${thaiLabel(d.class)} ${(d.score * 100).toFixed(0)}%`;
-
-    // Measure the label using the actual font metrics so the background
-    // pill always matches the glyph width — no more "text overflows pill".
-    const advance = font.getAdvanceWidth(label, fontSize);
-    const labelW = Math.ceil(advance) + padX * 2;
-    const labelH = fontSize + padY * 2;
+    const lbl = labels[i];
+    const labelW = lbl.w + padX * 2;
+    const labelH = lbl.h + padY * 2;
 
     // Place the label pill above the box; flip below if it would clip the top.
     let tagY = y1 - labelH;
     if (tagY < 0) tagY = Math.min(height - labelH, y1 + 2);
     const tagX = Math.max(0, Math.min(width - labelW, x1));
 
-    // Vectorise the text. Baseline ≈ tagY + padY + fontSize * 0.85.
-    const baseline = tagY + padY + Math.round(fontSize * 0.82);
-    const textPath = font.getPath(label, tagX + padX, baseline, fontSize);
-    textPath.fill = "white";
-    textPath.stroke = null;
-    const textSvg = textPath.toSVG();
-
-    return `
-      <rect x="${x1}" y="${y1}" width="${w}" height="${h}"
-        fill="none" stroke="${color}" stroke-width="${stroke}"/>
-      <rect x="${tagX}" y="${tagY}" width="${labelW}" height="${labelH}"
-        fill="${color}" rx="${Math.round(padY)}"/>
-      ${textSvg}
-    `;
+    rectParts.push(
+      `<rect x="${x1}" y="${y1}" width="${w}" height="${h}" fill="none" stroke="${color}" stroke-width="${stroke}"/>` +
+      `<rect x="${tagX}" y="${tagY}" width="${labelW}" height="${labelH}" fill="${color}" rx="${Math.round(padY * 1.2)}"/>`,
+    );
+    textComposites.push({
+      input: lbl.png,
+      top: Math.max(0, Math.round(tagY + padY)),
+      left: Math.max(0, Math.round(tagX + padX)),
+    });
   });
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${parts.join("\n")}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${rectParts.join("\n")}</svg>`;
   return await sharp(imageBuffer)
-    .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+    .composite([{ input: Buffer.from(svg), top: 0, left: 0 }, ...textComposites])
     .jpeg({ quality: 88 })
     .toBuffer();
+}
+
+function escapePango(s) {
+  return String(s).replace(/[<>&]/g, (c) =>
+    ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]),
+  );
 }
 
 function escapeXml(s) {
@@ -525,6 +544,128 @@ function probeDuration(filePath) {
     });
     proc.on("error", () => resolve(null));
   });
+}
+
+// Probe duration + frame rate + dimensions in one ffprobe call.
+function probeVideo(filePath) {
+  return new Promise((resolve) => {
+    const proc = spawn("ffprobe", [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=width,height,r_frame_rate,avg_frame_rate:format=duration",
+      "-of", "json", filePath,
+    ]);
+    let out = "";
+    proc.stdout.on("data", (d) => (out += d.toString()));
+    proc.on("close", () => {
+      try {
+        const j = JSON.parse(out);
+        const s = (j.streams && j.streams[0]) || {};
+        const parseRate = (r) => {
+          if (!r || !/\d+\/\d+/.test(r)) return 0;
+          const [n, dn] = r.split("/").map(Number);
+          return dn ? n / dn : 0;
+        };
+        const fps = parseRate(s.avg_frame_rate) || parseRate(s.r_frame_rate) || 0;
+        resolve({
+          duration: parseFloat((j.format && j.format.duration) || "") || 0,
+          fps: Number.isFinite(fps) && fps > 0 ? fps : 0,
+          width: s.width || 0,
+          height: s.height || 0,
+        });
+      } catch {
+        resolve({ duration: 0, fps: 0, width: 0, height: 0 });
+      }
+    });
+    proc.on("error", () => resolve({ duration: 0, fps: 0, width: 0, height: 0 }));
+  });
+}
+
+// Build an annotated MP4 from a video buffer. The caller supplies an
+// `onFrame(buffer, index, total)` async callback that returns an annotated
+// JPEG buffer (or null/undefined to keep the frame untouched).
+//
+// We sample at most `maxFrames` frames evenly across the source so total
+// processing time stays bounded, then re-encode them at the same effective
+// playback rate so the output video has roughly the same duration as the
+// original. Audio is dropped (annotated video is for visual review only).
+export async function annotateVideo(videoBuffer, onFrame, opts = {}) {
+  await ensureDeps();
+  const maxFrames = Math.max(8, Math.min(180, opts.maxFrames || 90));
+  const targetFpsCap = Math.max(1, Math.min(15, opts.targetFpsCap || 6));
+
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "alxguard-vidann-"));
+  const inputPath = path.join(tmpDir, "input.bin");
+  const framesDir = path.join(tmpDir, "frames");
+  await fs.mkdir(framesDir, { recursive: true });
+  await fs.writeFile(inputPath, videoBuffer);
+  const outputPath = path.join(tmpDir, "out.mp4");
+
+  try {
+    const probed = await probeVideo(inputPath);
+    const duration = probed.duration || 0;
+    const srcFps = probed.fps || 24;
+
+    // Choose a sampling fps that respects both the per-frame cap and the
+    // total-frame cap, so a 60-second clip doesn't explode into 360 frames.
+    let targetFps = Math.min(srcFps, targetFpsCap);
+    if (duration > 0 && duration * targetFps > maxFrames) {
+      targetFps = Math.max(0.5, maxFrames / duration);
+    }
+
+    // Extract frames at the chosen fps.
+    await runFfmpeg([
+      "-i", inputPath,
+      "-vf", `fps=${targetFps.toFixed(3)}`,
+      "-q:v", "3",
+      "-y", path.join(framesDir, "f_%05d.jpg"),
+    ]);
+
+    const frameFiles = (await fs.readdir(framesDir))
+      .filter((f) => f.endsWith(".jpg"))
+      .sort();
+    if (!frameFiles.length) throw new Error("no frames extracted from video");
+
+    let annotatedCount = 0;
+    for (let i = 0; i < frameFiles.length; i++) {
+      const fp = path.join(framesDir, frameFiles[i]);
+      const buf = await fs.readFile(fp);
+      try {
+        const out = await onFrame(buf, i, frameFiles.length);
+        if (out && Buffer.isBuffer(out)) {
+          await fs.writeFile(fp, out);
+          annotatedCount++;
+        }
+      } catch (err) {
+        console.warn(`[vision] annotate frame ${i} failed: ${err.message?.slice(0, 200)}`);
+      }
+    }
+
+    // Re-encode at the same fps we sampled at — playback duration stays
+    // roughly equal to the source. yuv420p + faststart so Discord previews
+    // it inline.
+    await runFfmpeg([
+      "-framerate", targetFps.toFixed(3),
+      "-i", path.join(framesDir, "f_%05d.jpg"),
+      "-c:v", "libx264",
+      "-pix_fmt", "yuv420p",
+      "-preset", "veryfast",
+      "-crf", "26",
+      "-movflags", "+faststart",
+      "-an",
+      "-y", outputPath,
+    ]);
+    const outBuf = await fs.readFile(outputPath);
+    return {
+      buffer: outBuf,
+      frames: frameFiles.length,
+      annotated: annotatedCount,
+      fps: targetFps,
+      duration,
+    };
+  } finally {
+    fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 function runFfmpeg(args) {
