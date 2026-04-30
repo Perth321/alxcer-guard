@@ -51,44 +51,11 @@
       "times": 0
     },
     "946756535936233542": {
-      "count": 2,
-      "lastOffenseAt": 1777384410234,
-      "muteUntil": 0,
+      "count": 3,
+      "lastOffenseAt": 1777553302350,
+      "muteUntil": 1777556902350,
       "lastWord": "หี",
-      "lastSource": "chat",
-      "chat": {
-        "count": 3,
-        "lastAt": 1777446345749,
-        "history": [
-          {
-            "at": 1777442447808,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777442457140,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777446345749,
-            "severity": 7,
-            "matched": "ตี๊",
-            "reason": "ใช้คำหยาบคาย",
-            "excerpt": "เปลี่ยนชื่อ <@603182413660684321> เปลี่ยนเป็น กูตี๊",
-            "action": "timeout_failed",
-            "source": "ai"
-          }
-        ]
-      }
+      "lastSource": "voice"
     },
     "967120879689551873": {
       "count": 2,
