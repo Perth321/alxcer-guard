@@ -31,12 +31,6 @@ export const DEBUG_COMMAND = new SlashCommandBuilder()
   .setDMPermission(false)
   .toJSON();
 
-export const TRANSCRIBE_COMMAND = new SlashCommandBuilder()
-  .setName("transcribe")
-  .setDescription("ดูว่าใครพูดอะไรในห้องเสียง — เลือกวันได้จากเมนู")
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
-  .setDMPermission(false)
-  .toJSON();
 
 export const PRANK_COMMAND_DEFS = [
   { name: "rung", emoji: "🔔", desc: "เล่นเสียงกริ่งในห้องเสียง (เฉพาะแอดมิน)" },
@@ -57,8 +51,8 @@ export async function registerCommands(client) {
   const rest = new REST({ version: "10" }).setToken(client.token);
   const appId = client.application?.id ?? client.user.id;
   const guildId = client.config.guildId;
-  const body = [SETTING_COMMAND, DEBUG_COMMAND, TRANSCRIBE_COMMAND, ...PRANK_COMMANDS];
-  const list = ["setting", "debug", "transcribe", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
+  const body = [SETTING_COMMAND, DEBUG_COMMAND, ...PRANK_COMMANDS];
+  const list = ["setting", "debug", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
     .map((n) => "/" + n)
     .join(" ");
 
@@ -299,39 +293,7 @@ function buildTranscribeView(runtime, dayValue) {
   return { embeds: [embed], components: [row] };
 }
 
-export async function handleTranscribeCommand(interaction, runtime) {
-  if (!runtime.transcriptionAvailable()) {
-    await interaction.reply({
-      content:
-        "❌ ระบบถอดเสียงยังไม่พร้อมในรอบนี้ (Whisper อาจติดตั้งไม่สำเร็จ) — ดู log บน GitHub Actions",
-      ephemeral: true,
-    });
-    return;
-  }
-  const view = buildTranscribeView(runtime, "0");
-  await interaction.reply({ ...view, ephemeral: true });
-}
 
-export async function handleTranscribeComponent(interaction, runtime) {
-  if (!interaction.customId?.startsWith("transcribe:")) return false;
-  if (!interaction.isStringSelectMenu()) return false;
-  const action = interaction.customId.slice("transcribe:".length);
-  if (action !== "day") return false;
-
-  if (!runtime.transcriptionAvailable()) {
-    await interaction.update({
-      content: "❌ ระบบถอดเสียงยังไม่พร้อมในรอบนี้",
-      embeds: [],
-      components: [],
-    });
-    return true;
-  }
-
-  const dayValue = interaction.values[0];
-  const view = buildTranscribeView(runtime, dayValue);
-  await interaction.update(view);
-  return true;
-}
 
 function fmtChannel(id) {
   return id ? `<#${id}>` : "_ยังไม่ได้ตั้งค่า_";

@@ -1,36 +1,53 @@
-// OpenRouter (OpenAI-compatible) client used for: AI replies, AI moderation,
-// and admin agent tool-calling. No SDK — plain fetch.
+// AI provider: Gemini (primary) → OpenRouter (fallback)
+// Gemini is tried first across all tasks; OpenRouter kicks in when Gemini
+// quota is exhausted or all Gemini models fail.
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
-// Fallback chain. Primary first; we walk down on 429/5xx errors.
-// All chosen models support tool-calling and good Thai + English.
-const CHAT_FALLBACKS = (process.env.OPENROUTER_CHAT_MODELS ||
+// Gemini models — ordered smartest to fastest (used as primary provider)
+const GEMINI_CHAT_MODELS = (process.env.GEMINI_CHAT_MODELS ||
+  "gemini-2.5-pro-preview-06-05,gemini-2.5-flash-preview-05-20,gemini-2.0-flash,gemini-1.5-pro,gemini-1.5-flash"
+).split(",").map(s => s.trim()).filter(Boolean);
+
+const GEMINI_FAST_MODELS = (process.env.GEMINI_FAST_MODELS ||
+  "gemini-2.5-flash-preview-05-20,gemini-2.0-flash,gemini-1.5-flash"
+).split(",").map(s => s.trim()).filter(Boolean);
+
+const GEMINI_VISION_MODELS = (process.env.GEMINI_VISION_MODELS ||
+  "gemini-2.5-pro-preview-06-05,gemini-2.5-flash-preview-05-20,gemini-2.0-flash"
+).split(",").map(s => s.trim()).filter(Boolean);
+
+// OpenRouter fallback chains (used when Gemini is exhausted)
+const OPENROUTER_CHAT_FALLBACKS = (process.env.OPENROUTER_CHAT_MODELS ||
   "qwen/qwen3-next-80b-a3b-instruct:free,z-ai/glm-4.5-air:free,openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free,nvidia/nemotron-3-super-120b-a12b:free"
-).split(",").map((s) => s.trim()).filter(Boolean);
+).split(",").map(s => s.trim()).filter(Boolean);
 
-const FAST_FALLBACKS = (process.env.OPENROUTER_FAST_MODELS ||
+const OPENROUTER_FAST_FALLBACKS = (process.env.OPENROUTER_FAST_MODELS ||
   "qwen/qwen3-next-80b-a3b-instruct:free,openai/gpt-oss-20b:free,z-ai/glm-4.5-air:free,meta-llama/llama-3.3-70b-instruct:free"
-).split(",").map((s) => s.trim()).filter(Boolean);
+).split(",").map(s => s.trim()).filter(Boolean);
 
-// Vision-capable free models. We try Llama-4 multimodal first (best image
-// reasoning quality on the free tier), then Gemini, then Qwen-VL as a last
-// resort. Override via env if a model gets deprecated.
-const VISION_FALLBACKS = (process.env.OPENROUTER_VISION_MODELS ||
+const OPENROUTER_VISION_FALLBACKS = (process.env.OPENROUTER_VISION_MODELS ||
   "meta-llama/llama-4-maverick:free,meta-llama/llama-4-scout:free,google/gemini-2.0-flash-exp:free,qwen/qwen2.5-vl-72b-instruct:free,mistralai/mistral-small-3.2-24b-instruct:free"
-).split(",").map((s) => s.trim()).filter(Boolean);
+).split(",").map(s => s.trim()).filter(Boolean);
+
+// Keep back-compat for agent tool-calling (still goes through OpenRouter)
+const CHAT_FALLBACKS = OPENROUTER_CHAT_FALLBACKS;
+const FAST_FALLBACKS = OPENROUTER_FAST_FALLBACKS;
 
 export const MODELS = {
-  chat: CHAT_FALLBACKS[0],
-  fast: FAST_FALLBACKS[0],
-  vision: VISION_FALLBACKS[0],
+  chat: GEMINI_CHAT_MODELS[0] ?? OPENROUTER_CHAT_FALLBACKS[0],
+  fast: GEMINI_FAST_MODELS[0] ?? OPENROUTER_FAST_FALLBACKS[0],
+  vision: GEMINI_VISION_MODELS[0] ?? OPENROUTER_VISION_FALLBACKS[0],
 };
 
 const REQUEST_TIMEOUT_MS = 25_000;
 
 export function aiAvailable() {
-  return !!process.env.OPENROUTER_API_KEY;
+  return !!(process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY);
 }
+
+// ===== OPENROUTER =====
 
 async function callOnce({ model, messages, tools, tool_choice, max_tokens, temperature, response_format }) {
   const body = { model, messages, max_tokens, temperature };
@@ -78,26 +95,170 @@ async function callOnce({ model, messages, tools, tool_choice, max_tokens, tempe
 }
 
 async function callOpenRouter({ model, models, messages, tools, tool_choice, max_tokens = 800, temperature = 0.7, response_format }) {
-  if (!aiAvailable()) throw new Error("OPENROUTER_API_KEY missing");
+  if (!process.env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY missing");
   const chain = (models && models.length ? models : [model]).filter(Boolean);
   let lastErr;
   for (const m of chain) {
     try {
       const result = await callOnce({ model: m, messages, tools, tool_choice, max_tokens, temperature, response_format });
-      if (m !== chain[0]) console.log(`[ai] fell back to model: ${m}`);
+      if (m !== chain[0]) console.log(`[ai] fell back to OpenRouter model: ${m}`);
       return result;
     } catch (err) {
       lastErr = err;
       console.warn(`[ai] ${m} failed: ${err.message?.slice(0, 200)}`);
-      if (!err.retriable) {
-        // Non-retriable on this model — try next anyway since it might be a model-specific issue.
-      }
-      // brief jittered pause before next attempt to avoid hammering
       await new Promise((r) => setTimeout(r, 200 + Math.random() * 300));
     }
   }
   throw lastErr ?? new Error("OpenRouter: all models failed");
 }
+
+// ===== GEMINI =====
+
+async function convertMessagesToGemini(messages) {
+  const systemMsg = messages.find(m => m.role === "system");
+  const nonSystem = messages.filter(m => m.role !== "system");
+
+  const contents = [];
+  for (const msg of nonSystem) {
+    const role = msg.role === "assistant" ? "model" : "user";
+    let parts;
+
+    if (typeof msg.content === "string") {
+      parts = [{ text: msg.content || " " }];
+    } else if (Array.isArray(msg.content)) {
+      parts = [];
+      for (const part of msg.content) {
+        if (part.type === "text") {
+          parts.push({ text: part.text || " " });
+        } else if (part.type === "image_url") {
+          const url = part.image_url?.url || "";
+          if (url.startsWith("data:")) {
+            const [header, data] = url.split(",");
+            const mimeType = header.match(/data:([^;]+)/)?.[1] || "image/jpeg";
+            parts.push({ inlineData: { mimeType, data } });
+          } else {
+            try {
+              const imgRes = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+              const ab = await imgRes.arrayBuffer();
+              const mimeType = (imgRes.headers.get("content-type") || "image/jpeg").split(";")[0];
+              const data = Buffer.from(ab).toString("base64");
+              parts.push({ inlineData: { mimeType, data } });
+            } catch {
+              parts.push({ text: `[image: ${url}]` });
+            }
+          }
+        }
+      }
+      if (parts.length === 0) parts = [{ text: " " }];
+    } else {
+      parts = [{ text: " " }];
+    }
+
+    // Gemini requires alternating user/model roles; merge consecutive same-role
+    const last = contents[contents.length - 1];
+    if (last && last.role === role) {
+      last.parts.push(...parts);
+    } else {
+      contents.push({ role, parts });
+    }
+  }
+
+  return { contents, systemInstruction: systemMsg ? { parts: [{ text: typeof systemMsg.content === "string" ? systemMsg.content : (systemMsg.content?.[0]?.text ?? "") }] } : undefined };
+}
+
+async function callGemini({ model, messages, max_tokens = 800, temperature = 0.7, response_format }) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not set");
+
+  const { contents, systemInstruction } = await convertMessagesToGemini(messages);
+
+  const requestBody = {
+    contents,
+    generationConfig: {
+      maxOutputTokens: max_tokens,
+      temperature,
+      ...(response_format?.type === "json_object" ? { responseMimeType: "application/json" } : {}),
+    },
+    ...(systemInstruction ? { systemInstruction } : {}),
+    safetySettings: [
+      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+    ],
+  };
+
+  const url = `${GEMINI_BASE}/${model}:generateContent?key=${apiKey}`;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(t);
+  }
+
+  const text = await res.text();
+  if (!res.ok) {
+    const retriable = res.status === 429 || res.status === 503 || res.status >= 500;
+    const err = new Error(`Gemini ${res.status} (${model}): ${text.slice(0, 250)}`);
+    err.retriable = retriable;
+    err.status = res.status;
+    throw err;
+  }
+  let json;
+  try { json = JSON.parse(text); } catch { throw new Error(`Gemini non-JSON (${model})`); }
+
+  const content = json.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join("") ?? null;
+  if (!content) {
+    const reason = json.candidates?.[0]?.finishReason;
+    if (reason === "SAFETY") throw new Error(`Gemini safety block (${model})`);
+    throw new Error(`Gemini empty response (${model}): ${JSON.stringify(json).slice(0, 200)}`);
+  }
+  return { role: "assistant", content };
+}
+
+// ===== UNIFIED CALL: Gemini first → OpenRouter fallback =====
+// Note: tool-calling always goes through OpenRouter (Gemini tools need different format)
+
+async function callAI({ geminiModels, openrouterModels, messages, tools, tool_choice, max_tokens = 800, temperature = 0.7, response_format }) {
+  // Agent tool-calls: OpenRouter only (Gemini tool format differs)
+  if (tools && tools.length > 0) {
+    if (!process.env.OPENROUTER_API_KEY) throw new Error("Tool-calling requires OPENROUTER_API_KEY");
+    return callOpenRouter({ models: openrouterModels, messages, tools, tool_choice, max_tokens, temperature, response_format });
+  }
+
+  // Try Gemini first
+  if (process.env.GEMINI_API_KEY && geminiModels?.length) {
+    let lastErr;
+    for (const model of geminiModels) {
+      try {
+        const result = await callGemini({ model, messages, max_tokens, temperature, response_format });
+        if (model !== geminiModels[0]) console.log(`[ai] Gemini fell back to: ${model}`);
+        return result;
+      } catch (err) {
+        lastErr = err;
+        console.warn(`[ai] Gemini ${model} failed: ${err.message?.slice(0, 200)}`);
+        await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
+      }
+    }
+    console.warn("[ai] All Gemini models failed → falling back to OpenRouter");
+  }
+
+  // OpenRouter fallback
+  if (process.env.OPENROUTER_API_KEY && openrouterModels?.length) {
+    return callOpenRouter({ models: openrouterModels, messages, max_tokens, temperature, response_format });
+  }
+
+  throw new Error("No AI provider available (set GEMINI_API_KEY or OPENROUTER_API_KEY)");
+}
+
+// ===== PERSONAS =====
 
 const PERSONA = `You are "Alxcer Guard" — a sassy, witty Discord bot that hangs out in a small Thai-speaking server with English mixed in. You are the server's guardian: you keep order, but you also have a personality. You banter, joke, roast people back politely, and occasionally chime into conversations that interest you.
 
@@ -127,13 +288,18 @@ export async function generateReply({ history, systemExtra, max_tokens = 500, to
     { role: "system", content: PERSONA + (systemExtra ? `\n\n${systemExtra}` : "") },
     ...history,
   ];
-  return callOpenRouter({ models: CHAT_FALLBACKS, messages, max_tokens, temperature: 0.8, tools, tool_choice });
+  return callAI({
+    geminiModels: GEMINI_CHAT_MODELS,
+    openrouterModels: CHAT_FALLBACKS,
+    messages,
+    max_tokens,
+    temperature: 0.8,
+    tools,
+    tool_choice,
+  });
 }
 
 // ===== VISION REPLY (image / video frames) =====
-// imageUrls: an array of publicly fetchable image URLs (Discord CDN works).
-// userText: the chat content from the user (their question/comment).
-// detectionContext: optional Thai summary of YOLO detections to ground the reply.
 export async function generateVisionReply({
   imageUrls,
   userText,
@@ -156,8 +322,9 @@ export async function generateVisionReply({
     { role: "user", content: userContent },
   ];
 
-  return callOpenRouter({
-    models: VISION_FALLBACKS,
+  return callAI({
+    geminiModels: GEMINI_VISION_MODELS,
+    openrouterModels: OPENROUTER_VISION_FALLBACKS,
     messages,
     max_tokens,
     temperature: 0.7,
@@ -165,7 +332,7 @@ export async function generateVisionReply({
 }
 
 // ===== AI MODERATION =====
-const moderationCache = new Map(); // hash -> result, capped
+const moderationCache = new Map();
 const MOD_CACHE_MAX = 500;
 
 function hashStr(s) {
@@ -182,8 +349,9 @@ export async function aiModerate(text) {
   if (moderationCache.has(key)) return moderationCache.get(key);
 
   try {
-    const msg = await callOpenRouter({
-      models: FAST_FALLBACKS,
+    const msg = await callAI({
+      geminiModels: GEMINI_FAST_MODELS,
+      openrouterModels: FAST_FALLBACKS,
       messages: [
         { role: "system", content: MODERATOR_PERSONA },
         { role: "user", content: `Message:\n"""${trimmed.slice(0, 800)}"""` },
@@ -224,8 +392,9 @@ export async function shouldEngage(recentMessages) {
       .map((m) => `${m.author}: ${m.content}`)
       .join("\n")
       .slice(0, 1500);
-    const msg = await callOpenRouter({
-      models: FAST_FALLBACKS,
+    const msg = await callAI({
+      geminiModels: GEMINI_FAST_MODELS,
+      openrouterModels: FAST_FALLBACKS,
       messages: [
         {
           role: "system",

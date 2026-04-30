@@ -42,8 +42,6 @@ import {
   handleSettingCommand,
   handleSettingComponent,
   handleDebugCommand,
-  handleTranscribeCommand,
-  handleTranscribeComponent,
   handlePrankSound,
   isPrankCommand,
 } from "./commands.js";
@@ -2240,10 +2238,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await handleDebugCommand(interaction, runtime);
         return;
       }
-      if (interaction.commandName === "transcribe") {
-        await handleTranscribeCommand(interaction, runtime);
-        return;
-      }
       if (isPrankCommand(interaction.commandName)) {
         await handlePrankSound(interaction, runtime, interaction.commandName);
         return;
@@ -2255,11 +2249,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       interaction.isAnySelectMenu?.() ||
       interaction.isModalSubmit()
     ) {
-      const handledTranscribe = await handleTranscribeComponent(
-        interaction,
-        runtime,
-      );
-      if (handledTranscribe) return;
       const handled = await handleSettingComponent(interaction, runtime);
       if (handled) return;
     }
