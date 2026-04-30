@@ -24,7 +24,10 @@ const MODEL_DIR = path.resolve(process.cwd(), ".cache", "models");
 const MODEL_PATH = path.join(MODEL_DIR, "yolov5n.onnx");
 const MODEL_URL =
   process.env.YOLO_MODEL_URL ||
-  "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5n.onnx";
+  // v6.0 release ships the FP32 export (~7.5 MB). The v7.0 build is FP16,
+  // which onnxruntime-node 1.25's native binding refuses to accept (it
+  // rejects both Uint16Array and Float16Array buffers). Stick with FP32.
+  "https://github.com/ultralytics/yolov5/releases/download/v6.0/yolov5n.onnx";
 
 const INPUT_SIZE = 640;
 const SCORE_THRESHOLD = Number(process.env.YOLO_SCORE_THRESHOLD || 0.3);
@@ -228,18 +231,100 @@ function iou(a, b) {
   return union <= 0 ? 0 : inter / union;
 }
 
+// Convert a Float32Array → Uint16Array of IEEE-754 half-precision values
+// (so the data can be passed as a float16 ONNX tensor). Some YOLOv5 ONNX
+// builds (the ultralytics v7.0 release in particular) expect float16 input.
+function float32ArrayToFloat16(src) {
+  const out = new Uint16Array(src.length);
+  const f32 = new Float32Array(1);
+  const u32 = new Uint32Array(f32.buffer);
+  for (let i = 0; i < src.length; i++) {
+    f32[0] = src[i];
+    const x = u32[0];
+    const sign = (x >>> 16) & 0x8000;
+    let exp = ((x >>> 23) & 0xff) - 127 + 15;
+    const mant = x & 0x7fffff;
+    let half;
+    if (exp >= 31) {
+      // Inf or NaN
+      half = sign | 0x7c00 | (mant ? 0x200 : 0);
+    } else if (exp <= 0) {
+      if (exp < -10) {
+        half = sign;
+      } else {
+        const m = (mant | 0x800000) >> (1 - exp);
+        half = sign | (m >> 13);
+      }
+    } else {
+      half = sign | (exp << 10) | (mant >> 13);
+    }
+    out[i] = half;
+  }
+  return out;
+}
+
+// Convert a Uint16Array of float16 values back to a Float32Array.
+function float16ArrayToFloat32(src) {
+  const out = new Float32Array(src.length);
+  const f32 = new Float32Array(1);
+  const u32 = new Uint32Array(f32.buffer);
+  for (let i = 0; i < src.length; i++) {
+    const h = src[i];
+    const sign = (h & 0x8000) << 16;
+    const exp = (h & 0x7c00) >> 10;
+    const mant = h & 0x03ff;
+    let bits;
+    if (exp === 0) {
+      if (mant === 0) {
+        bits = sign;
+      } else {
+        // subnormal
+        let e = -1;
+        let m = mant;
+        do { e++; m <<= 1; } while ((m & 0x0400) === 0);
+        bits = sign | ((127 - 15 - e) << 23) | ((m & 0x03ff) << 13);
+      }
+    } else if (exp === 31) {
+      bits = sign | 0x7f800000 | (mant << 13);
+    } else {
+      bits = sign | ((exp + (127 - 15)) << 23) | (mant << 13);
+    }
+    u32[0] = bits;
+    out[i] = f32[0];
+  }
+  return out;
+}
+
 // Run object detection on an image buffer.
 // Returns { detections, width, height }.
 export async function detectObjects(imageBuffer) {
   const session = await getSession();
   const pre = await preprocess(imageBuffer);
-  const inputTensor = new ort.Tensor("float32", pre.tensor, [1, 3, INPUT_SIZE, INPUT_SIZE]);
   const inputName = session.inputNames[0];
-  const feeds = { [inputName]: inputTensor };
-  const out = await session.run(feeds);
+  const inputMeta = session.inputMetadata?.[0] || session.inputMetadata?.[inputName];
+  const inputType = inputMeta?.type || "float32";
+
+  let inputTensor;
+  if (inputType === "float16") {
+    const half = float32ArrayToFloat16(pre.tensor);
+    // Prefer native Float16Array (Node 24+); fall back to Uint16Array view
+    // for older runtimes that onnxruntime-node still accepts.
+    const data = (typeof globalThis.Float16Array !== "undefined")
+      ? new globalThis.Float16Array(half.buffer, half.byteOffset, half.length)
+      : half;
+    inputTensor = new ort.Tensor("float16", data, [1, 3, INPUT_SIZE, INPUT_SIZE]);
+  } else {
+    inputTensor = new ort.Tensor("float32", pre.tensor, [1, 3, INPUT_SIZE, INPUT_SIZE]);
+  }
+
+  const out = await session.run({ [inputName]: inputTensor });
   const outName = session.outputNames[0];
   const outTensor = out[outName];
-  const detections = postprocess(outTensor.data, outTensor.dims, pre);
+  let outData = outTensor.data;
+  if (outTensor.type === "float16") {
+    outData = float16ArrayToFloat32(outData);
+  }
+  const detections = postprocess(outData, outTensor.dims, pre);
   return { detections, width: pre.origW, height: pre.origH };
 }
 

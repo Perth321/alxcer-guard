@@ -58,7 +58,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bot/.cache/models
-          key: yolov5n-onnx-v1
+          key: yolov5n-onnx-v6.0-fp32
 
       - name: Install bot dependencies
         run: npm install --no-audit --no-fund
