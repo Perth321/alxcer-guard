@@ -54,6 +54,12 @@ jobs:
           path: bot/node_modules/nodejs-whisper/cpp/whisper.cpp/models
           key: whisper-medium-v1
 
+      - name: Cache YOLO model
+        uses: actions/cache@v4
+        with:
+          path: bot/.cache/models
+          key: yolov5n-onnx-v1
+
       - name: Install bot dependencies
         run: npm install --no-audit --no-fund
 

@@ -13,9 +13,17 @@ const FAST_FALLBACKS = (process.env.OPENROUTER_FAST_MODELS ||
   "qwen/qwen3-next-80b-a3b-instruct:free,openai/gpt-oss-20b:free,z-ai/glm-4.5-air:free,meta-llama/llama-3.3-70b-instruct:free"
 ).split(",").map((s) => s.trim()).filter(Boolean);
 
+// Vision-capable free models. We try Llama-4 multimodal first (best image
+// reasoning quality on the free tier), then Gemini, then Qwen-VL as a last
+// resort. Override via env if a model gets deprecated.
+const VISION_FALLBACKS = (process.env.OPENROUTER_VISION_MODELS ||
+  "meta-llama/llama-4-maverick:free,meta-llama/llama-4-scout:free,google/gemini-2.0-flash-exp:free,qwen/qwen2.5-vl-72b-instruct:free,mistralai/mistral-small-3.2-24b-instruct:free"
+).split(",").map((s) => s.trim()).filter(Boolean);
+
 export const MODELS = {
   chat: CHAT_FALLBACKS[0],
   fast: FAST_FALLBACKS[0],
+  vision: VISION_FALLBACKS[0],
 };
 
 const REQUEST_TIMEOUT_MS = 25_000;
@@ -120,6 +128,40 @@ export async function generateReply({ history, systemExtra, max_tokens = 500, to
     ...history,
   ];
   return callOpenRouter({ models: CHAT_FALLBACKS, messages, max_tokens, temperature: 0.8, tools, tool_choice });
+}
+
+// ===== VISION REPLY (image / video frames) =====
+// imageUrls: an array of publicly fetchable image URLs (Discord CDN works).
+// userText: the chat content from the user (their question/comment).
+// detectionContext: optional Thai summary of YOLO detections to ground the reply.
+export async function generateVisionReply({
+  imageUrls,
+  userText,
+  detectionContext,
+  systemExtra,
+  history = [],
+  max_tokens = 450,
+}) {
+  const persona = PERSONA + (systemExtra ? `\n\n${systemExtra}` : "");
+  const visionGuide = `You are looking at ${imageUrls.length === 1 ? "an image" : `${imageUrls.length} images (frames from a video or several images)`} the user just sent. Describe what you see in 2-4 short Thai sentences with personality — keep your "guard" voice. Mention specific objects, people, mood, anything noteworthy. If the user asked something specific, answer that. Don't list every single object robotically — speak naturally.${detectionContext ? `\n\n[YOLO detector saw]: ${detectionContext}\nUse this as a hint but trust your own eyes too.` : ""}`;
+
+  const userContent = [
+    { type: "text", text: userText || "(ผู้ใช้แค่ส่งภาพมาให้ดู — ตอบสั้นๆ ว่าเห็นอะไร)" },
+    ...imageUrls.map((url) => ({ type: "image_url", image_url: { url } })),
+  ];
+
+  const messages = [
+    { role: "system", content: persona + "\n\n" + visionGuide },
+    ...history,
+    { role: "user", content: userContent },
+  ];
+
+  return callOpenRouter({
+    models: VISION_FALLBACKS,
+    messages,
+    max_tokens,
+    temperature: 0.7,
+  });
 }
 
 // ===== AI MODERATION =====

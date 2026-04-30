@@ -81,7 +81,14 @@ import {
   recordOffense,
   formatHumanDuration,
 } from "./moderation.js";
-import { generateReply, shouldEngage, aiAvailable } from "./ai.js";
+import { generateReply, generateVisionReply, shouldEngage, aiAvailable } from "./ai.js";
+import {
+  detectObjects,
+  drawBoxes,
+  extractVideoFrames,
+  summarizeDetections,
+  thaiLabel,
+} from "./vision.js";
 import { isAdmin, runAgent } from "./agent.js";
 
 // Force-load every crypto candidate eagerly so @discordjs/voice's lazy loader
@@ -1415,10 +1422,38 @@ function isBotTriggered(msg) {
   if (msg.reference?.messageId) {
     // We can't easily resolve here without fetch; trust mention pings only
   }
-  // Keyword "guard" / "การ์ด" as a standalone word
-  const lower = (msg.content || "").toLowerCase();
-  if (/(?:^|\s)(guard|การ์ด|ก๊าด|gaurd)(?:[\s,.!?:]|$)/i.test(lower)) return "keyword";
+  const text = msg.content || "";
+  const lower = text.toLowerCase();
+  // 1) Standalone-word match (English uses ASCII word-boundary heuristic).
+  if (/(?:^|\s)(guard|gaurd)(?:[\s,.!?:]|$)/i.test(lower)) return "keyword";
+  // 2) Thai name — Thai script has no spaces, so allow it touching other Thai
+  //    words as long as it appears at the start of the message OR after a
+  //    non-letter character. e.g. "การ์ดดูภาพนี้ให้หน่อย" → triggers.
+  if (/(^|[^\u0E00-\u0E7Fa-zA-Z])(การ์ด|ก๊าด|กาด)/.test(text)) return "keyword";
   return null;
+}
+
+// Detect image / video attachments on a message.
+function collectMediaAttachments(msg) {
+  const images = [];
+  const videos = [];
+  for (const att of msg.attachments?.values?.() || []) {
+    const ct = (att.contentType || "").toLowerCase();
+    const name = (att.name || "").toLowerCase();
+    const isImage =
+      ct.startsWith("image/") ||
+      /\.(png|jpe?g|webp|gif|bmp)$/.test(name);
+    const isVideo =
+      ct.startsWith("video/") ||
+      /\.(mp4|mov|webm|mkv|avi)$/.test(name);
+    if (isImage) images.push({ url: att.url, name: att.name, size: att.size });
+    else if (isVideo) videos.push({ url: att.url, name: att.name, size: att.size });
+  }
+  // Discord also surfaces image embeds (e.g. pasted links). Treat as images.
+  for (const emb of msg.embeds || []) {
+    if (emb.image?.url) images.push({ url: emb.image.url, name: "embed", size: 0 });
+  }
+  return { images, videos };
 }
 
 async function handleProfanityChat(msg, detection) {
@@ -1512,6 +1547,129 @@ async function safeReply(msg, content) {
     } catch (err2) {
       console.warn("[reply] channel send also failed:", err2?.message);
       return false;
+    }
+  }
+}
+
+// Fetch a remote URL and return the body as a Buffer (with a size cap).
+async function fetchBuffer(url, maxBytes = 25 * 1024 * 1024) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`fetch ${url} → ${res.status}`);
+  const len = Number(res.headers.get("content-length") || 0);
+  if (len && len > maxBytes) throw new Error(`file too large (${len} > ${maxBytes})`);
+  const ab = await res.arrayBuffer();
+  if (ab.byteLength > maxBytes) throw new Error(`file too large after read`);
+  return Buffer.from(ab);
+}
+
+// Run YOLO + LLM vision on a message that has image / video attachments and
+// reply in chat with annotated images and a Thai description.
+async function handleVisionReply(msg, triggerReason, media) {
+  const channel = msg.channel;
+  await channel.sendTyping().catch(() => {});
+
+  const cleanText = (msg.content || "").replace(/<@!?\d+>/g, "").trim();
+  const annotatedAttachments = []; // { attachment: Buffer, name }
+  const detectionSummaries = [];   // string per asset
+  const visionImageUrls = [];      // urls passed to the LLM vision call (originals)
+
+  // ---- IMAGES ----
+  for (const img of media.images.slice(0, 4)) {
+    visionImageUrls.push(img.url);
+    try {
+      const buf = await fetchBuffer(img.url);
+      const { detections, width, height } = await detectObjects(buf);
+      const summary = summarizeDetections(detections);
+      detectionSummaries.push(`📷 ${img.name || "image"}: ${summary}`);
+      if (detections.length) {
+        const annotated = await drawBoxes(buf, detections, width, height);
+        annotatedAttachments.push({
+          attachment: annotated,
+          name: `yolo_${(img.name || "image").replace(/\.[^.]+$/, "")}.jpg`,
+        });
+      }
+    } catch (err) {
+      console.warn(`[vision] image processing failed: ${err.message?.slice(0, 200)}`);
+      detectionSummaries.push(`📷 ${img.name || "image"}: ประมวลผลภาพล้มเหลว`);
+    }
+  }
+
+  // ---- VIDEOS ----
+  for (const vid of media.videos.slice(0, 1)) {
+    try {
+      const buf = await fetchBuffer(vid.url, 50 * 1024 * 1024);
+      const frames = await extractVideoFrames(buf, 3);
+      const allClasses = new Map();
+      for (const [i, f] of frames.entries()) {
+        try {
+          const { detections, width, height } = await detectObjects(f.buffer);
+          for (const d of detections) {
+            allClasses.set(d.class, (allClasses.get(d.class) || 0) + 1);
+          }
+          if (detections.length && i === Math.floor(frames.length / 2)) {
+            // Annotate the middle frame and attach it.
+            const annotated = await drawBoxes(f.buffer, detections, width, height);
+            annotatedAttachments.push({
+              attachment: annotated,
+              name: `yolo_${(vid.name || "video").replace(/\.[^.]+$/, "")}_t${f.time.toFixed(1)}s.jpg`,
+            });
+            // Also feed the middle frame to the vision LLM as a data URL.
+            visionImageUrls.push(`data:image/jpeg;base64,${annotated.toString("base64")}`);
+          }
+        } catch (err) {
+          console.warn(`[vision] video frame YOLO failed: ${err.message?.slice(0, 200)}`);
+        }
+      }
+      const top = [...allClasses.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .map(([cls, n]) => `${thaiLabel(cls)} ${n}`)
+        .join(", ");
+      detectionSummaries.push(
+        `🎬 ${vid.name || "video"}: สุ่มดู ${frames.length} เฟรม → ${top || "ไม่เจอวัตถุที่รู้จัก"}`,
+      );
+    } catch (err) {
+      console.warn(`[vision] video processing failed: ${err.message?.slice(0, 200)}`);
+      detectionSummaries.push(`🎬 ${vid.name || "video"}: ประมวลผลวิดีโอล้มเหลว`);
+    }
+  }
+
+  // ---- ASK VISION-LLM TO DESCRIBE ----
+  let descriptionText = "";
+  if (visionImageUrls.length) {
+    try {
+      const reply = await generateVisionReply({
+        imageUrls: visionImageUrls.slice(0, 4),
+        userText: cleanText || undefined,
+        detectionContext: detectionSummaries.join(" | "),
+        systemExtra: `Trigger: ${triggerReason}. The user sent ${media.images.length} image(s) and ${media.videos.length} video(s).`,
+      });
+      descriptionText = (reply?.content || "").trim();
+    } catch (err) {
+      console.warn(`[vision] LLM describe failed: ${err.message?.slice(0, 200)}`);
+    }
+  }
+
+  // ---- COMPOSE FINAL REPLY ----
+  const parts = [];
+  if (descriptionText) parts.push(descriptionText);
+  if (detectionSummaries.length) {
+    parts.push("```\n🔎 YOLO detections\n" + detectionSummaries.join("\n") + "\n```");
+  }
+  const content = (parts.join("\n\n") || "ดูภาพไม่ออกแฮะ ลองอีกที").slice(0, 1900);
+
+  try {
+    await msg.reply({
+      content,
+      files: annotatedAttachments,
+      allowedMentions: { repliedUser: false },
+    });
+  } catch (err) {
+    console.warn(`[vision] reply send failed: ${err.message}`);
+    try {
+      await channel.send({ content, files: annotatedAttachments });
+    } catch {
+      await safeReply(msg, content);
     }
   }
 }
@@ -1689,6 +1847,18 @@ client.on(Events.MessageCreate, async (msg) => {
     // ===== NEW: AI reply when the bot is addressed =====
     const triggered = isBotTriggered(msg);
     if (triggered && aiAvailable()) {
+      // If the message has image / video attachments, route through the
+      // vision pipeline (YOLO + vision-LLM) instead of plain chat.
+      const media = collectMediaAttachments(msg);
+      if (media.images.length || media.videos.length) {
+        try {
+          await handleVisionReply(msg, triggered, media);
+        } catch (err) {
+          console.warn("[vision] handler crashed:", err?.message?.slice(0, 200));
+          await handleAgentOrChatReply(msg, triggered);
+        }
+        return;
+      }
       await handleAgentOrChatReply(msg, triggered);
       return;
     }
