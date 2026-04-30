@@ -1,27 +1,83 @@
 {
   "users": {
     "603182413660684321": {
-      "count": 13,
-      "lastOffenseAt": 1777561113949,
-      "muteUntil": 1777564713949,
+      "count": 6,
+      "lastOffenseAt": 1777441315567,
+      "muteUntil": 0,
+      "lastWord": "หี",
+      "lastSource": "chat",
+      "chat": {
+        "count": 4,
+        "lastAt": 1777551437138,
+        "history": [
+          {
+            "at": 1777483111839,
+            "severity": 7,
+            "matched": "สัส",
+            "reason": "ใช้คำต้องห้าม: \"สัส\"",
+            "excerpt": "กวนตีนไอสัส",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1777548365496,
+            "severity": 7,
+            "matched": "fuck",
+            "reason": "ใช้คำต้องห้าม: \"fuck\"",
+            "excerpt": "Gaurd what the fuck are you doing",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1777551356782,
+            "severity": 7,
+            "matched": "Dung roi",
+            "reason": "ใช้คำหยาบคาย",
+            "excerpt": "Dung roi",
+            "action": "timeout_failed",
+            "source": "ai"
+          },
+          {
+            "at": 1777551437138,
+            "severity": 6,
+            "matched": "เว้ย",
+            "reason": "ใช้คำหยาบ",
+            "excerpt": "มันคือภาษาเวียดนามเว้ย",
+            "action": "timeout_failed",
+            "source": "ai"
+          }
+        ]
+      },
+      "times": 0
+    },
+    "946756535936233542": {
+      "count": 3,
+      "lastOffenseAt": 1777553302350,
+      "muteUntil": 1777556902350,
       "lastWord": "หี",
       "lastSource": "voice"
     },
-    "946756535936233542": {
-      "count": 4,
-      "lastOffenseAt": 1777555462276,
-      "muteUntil": 0,
-      "lastWord": "หี",
-      "lastSource": "voice",
-      "times": 0
-    },
     "967120879689551873": {
-      "count": 3,
-      "lastOffenseAt": 1777557061103,
+      "count": 2,
+      "lastOffenseAt": 1777384379910,
       "muteUntil": 0,
       "lastWord": "หี",
-      "lastSource": "voice",
-      "times": 0
+      "lastSource": "chat",
+      "chat": {
+        "count": 1,
+        "lastAt": 1777544540699,
+        "history": [
+          {
+            "at": 1777544540699,
+            "severity": 6,
+            "matched": "อ้วน",
+            "reason": "ใช้คำหยาบคาย",
+            "excerpt": "อ้วน คิดถึงเค้าไหม",
+            "action": "timeout_failed",
+            "source": "ai"
+          }
+        ]
+      }
     },
     "1491387879648264347": {
       "chat": {
@@ -41,46 +97,33 @@
       }
     },
     "264669488035659778": {
+      "count": 1,
+      "lastOffenseAt": 1777562392088,
+      "muteUntil": 1777562452088,
+      "lastWord": "หี",
+      "lastSource": "voice"
+    },
+    "1489640817089052682": {
+      "count": 3,
+      "lastOffenseAt": 1777480032028,
+      "muteUntil": 0,
+      "lastWord": "หี",
+      "lastSource": "chat",
       "chat": {
-        "count": 3,
-        "lastAt": 1777446182156,
+        "count": 1,
+        "lastAt": 1777480033703,
         "history": [
           {
-            "at": 1777445962425,
-            "severity": 6,
-            "matched": "มึง",
-            "reason": "ใช้คำหยาบและดูถูก",
-            "excerpt": "มึงอย่าทำงานมั่วดิ เดวก้โดนฟ้องเหมือนเจ้านายมึงหรอก",
-            "action": "timeout_60s",
-            "source": "ai"
-          },
-          {
-            "at": 1777446001778,
-            "severity": 4,
-            "matched": "โดนแน่",
-            "reason": "ใช้คำหยาบ",
-            "excerpt": "โดนแน่",
-            "action": "timeout_300s",
-            "source": "ai"
-          },
-          {
-            "at": 1777446182156,
-            "severity": 4,
-            "matched": "มึง",
-            "reason": "ใช้คำหยาบคาย",
-            "excerpt": "มึงอย่าทำงานมั่ว",
-            "action": "timeout_1800s",
-            "source": "ai"
+            "at": 1777480033703,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "Alex (id: 603182413660684321) มีบันทึกการกระทำผิดแชท 9 ครั้ง ระดับความรุนแรง 7 ทั้งหมด  \n- “หี” (1 ครั้ง) → timeout ไม่สำเร็จ  \n- “แจนไก้” (1 ครั้ง) → timeout ไม่สำเร็จ  \n- “ควย” (2 ครั้ง) → timeout ไ",
+            "action": "timeout_failed",
+            "source": "local"
           }
         ]
       }
-    },
-    "1489640817089052682": {
-      "count": 4,
-      "lastOffenseAt": 1777559197818,
-      "muteUntil": 1777562797818,
-      "lastWord": "หี",
-      "lastSource": "voice"
     }
   }
 }
