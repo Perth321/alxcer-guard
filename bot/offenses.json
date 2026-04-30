@@ -5,7 +5,22 @@
       "lastOffenseAt": 1777557008121,
       "muteUntil": 1777560608121,
       "lastWord": "หี",
-      "lastSource": "voice"
+      "lastSource": "voice",
+      "chat": {
+        "count": 1,
+        "lastAt": 1777557203205,
+        "history": [
+          {
+            "at": 1777557203204,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควย",
+            "action": "timeout_failed",
+            "source": "local"
+          }
+        ]
+      }
     },
     "946756535936233542": {
       "count": 4,
