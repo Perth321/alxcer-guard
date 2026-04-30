@@ -50,16 +50,55 @@ export const MODELS = {
 
 const REQUEST_TIMEOUT_MS = 25_000;
 
+// ===== Failed-model cooldown cache =====
+// HUGE latency win: when gemini-2.5-pro returns 429 (free-tier quota), we used
+// to retry it on EVERY subsequent request — wasting ~500ms per message before
+// falling through to flash. Now we remember each model that has failed
+// recently and skip it until the cooldown expires. Different status codes get
+// different cooldowns:
+//   429 (quota / rate-limit) → 60s   (free-tier quotas reset on a minute scale)
+//   404 (model gone)         → 600s  (don't keep hammering a deleted model)
+//   5xx / network            → 30s
+//   safety-block / empty     → 20s
+// Cleared automatically on success.
+const _failedModelCache = new Map(); // key: "provider:model" → expiresAtMs
+function _coolModel(provider, model, ms) {
+  if (!model) return;
+  _failedModelCache.set(`${provider}:${model}`, Date.now() + ms);
+}
+function _isCooling(provider, model) {
+  const key = `${provider}:${model}`;
+  const until = _failedModelCache.get(key);
+  if (!until) return false;
+  if (Date.now() >= until) {
+    _failedModelCache.delete(key);
+    return false;
+  }
+  return true;
+}
+function _clearCool(provider, model) {
+  _failedModelCache.delete(`${provider}:${model}`);
+}
+function _coolMsForError(err) {
+  const status = err?.status || 0;
+  const msg = err?.message || "";
+  if (status === 429) return 60_000;
+  if (status === 404) return 600_000;
+  if (status >= 500) return 30_000;
+  if (/safety|empty response|non-JSON/i.test(msg)) return 20_000;
+  return 30_000;
+}
+
 // ===== Model usage tracking =====
 // Records which provider/model actually produced each successful reply, so the
 // admin can ask "ตอนนี้ใช้โมเดลอะไร" and get an honest answer instead of the
 // model's own hallucinated identity.
 const _modelStats = {
   lastProvider: null,        // "gemini" | "openrouter"
-  lastModel: null,           // e.g. "gemini-2.5-flash-preview-05-20"
+  lastModel: null,           // e.g. "gemini-2.5-flash"
   lastTask: null,            // "chat" | "fast" | "vision"
   lastAt: 0,
-  counts: {},                // { "gemini:gemini-2.5-pro-...": 5, "openrouter:openai/gpt-oss-120b:free": 12 }
+  counts: {},                // { "gemini:gemini-2.5-pro": 5, "openrouter:openai/gpt-oss-120b:free": 12 }
 };
 
 function _recordUse(provider, model, task) {
@@ -144,16 +183,22 @@ async function callOnce({ model, messages, tools, tool_choice, max_tokens, tempe
 
 async function callOpenRouter({ model, models, messages, tools, tool_choice, max_tokens = 800, temperature = 0.7, response_format, _task }) {
   if (!process.env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY missing");
-  const chain = (models && models.length ? models : [model]).filter(Boolean);
+  const fullChain = (models && models.length ? models : [model]).filter(Boolean);
+  // Prefer non-cooling models first; only fall back to cooling ones if every
+  // model in the chain is currently cooling (better stale reply than nothing).
+  const liveChain = fullChain.filter((m) => !_isCooling("openrouter", m));
+  const chain = liveChain.length ? liveChain : fullChain;
   let lastErr;
   for (const m of chain) {
     try {
       const result = await callOnce({ model: m, messages, tools, tool_choice, max_tokens, temperature, response_format });
-      if (m !== chain[0]) console.log(`[ai] fell back to OpenRouter model: ${m}`);
+      if (m !== fullChain[0]) console.log(`[ai] fell back to OpenRouter model: ${m}`);
+      _clearCool("openrouter", m);
       _recordUse("openrouter", m, _task || "chat");
       return result;
     } catch (err) {
       lastErr = err;
+      _coolModel("openrouter", m, _coolMsForError(err));
       console.warn(`[ai] ${m} failed: ${err.message?.slice(0, 200)}`);
       await new Promise((r) => setTimeout(r, 200 + Math.random() * 300));
     }
@@ -385,17 +430,25 @@ async function callAI({ geminiModels, openrouterModels, messages, tools, tool_ch
 
   // Try Gemini first — chat AND tool-calls
   if (process.env.GEMINI_API_KEY && geminiModels?.length) {
+    // Skip models that are still in their cooldown window (e.g. quota'd 2.5-pro)
+    // so we don't waste 500ms per request on a guaranteed 429. Only fall back
+    // to cooling models if literally everything is cooling — better a stale
+    // 429 attempt than nothing.
+    const liveGemini = geminiModels.filter((m) => !_isCooling("gemini", m));
+    const chain = liveGemini.length ? liveGemini : geminiModels;
     let lastErr;
-    for (const model of geminiModels) {
+    for (const model of chain) {
       try {
         const result = await callGemini({ model, messages, tools, tool_choice, max_tokens, temperature, response_format });
         if (model !== geminiModels[0]) console.log(`[ai] Gemini fell back to: ${model}`);
+        _clearCool("gemini", model);
         _recordUse("gemini", model, _task);
         return result;
       } catch (err) {
         lastErr = err;
+        _coolModel("gemini", model, _coolMsForError(err));
         console.warn(`[ai] Gemini ${model} failed: ${err.message?.slice(0, 200)}`);
-        await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
+        await new Promise(r => setTimeout(r, 150 + Math.random() * 200));
       }
     }
     console.warn(`[ai] All Gemini models failed (${lastErr?.message?.slice(0, 120)}) → falling back to OpenRouter`);
@@ -411,15 +464,23 @@ async function callAI({ geminiModels, openrouterModels, messages, tools, tool_ch
 
 // ===== PERSONAS =====
 
-const PERSONA = `You are "Alxcer Guard" — a sassy, witty Discord bot that hangs out in a small Thai-speaking server with English mixed in. You are the server's guardian: you keep order, but you also have a personality. You banter, joke, roast people back politely, and occasionally chime into conversations that interest you.
+const PERSONA = `You are "Alxcer Guard" — a sassy, witty, genuinely smart Discord bot that hangs out in a small Thai-speaking server with English mixed in. You are the server's guardian: you keep order, but you also have a real personality. You banter, joke, roast people back politely, AND you can actually answer questions with substance when someone asks one — you are not a one-liner machine.
 
 PERSONALITY:
-- Cheeky, clever, never doormat. If a user is rude TO YOU, sass them back politely but with bite.
-- Default language: Thai. If the message is in English, reply in English. Mix is fine.
-- Keep replies SHORT (1–3 sentences). Discord chat, not an essay.
-- Never break character. Never claim to be human, but also NEVER name the model running you.
-- Use emojis sparingly (0–2 per message). No markdown headers.
+- Cheeky, clever, confident, never a doormat. If a user is rude TO YOU, sass them back politely but with bite.
+- Default language: Thai. If the message is in English, reply in English. Code-switch naturally if the user does.
+- LENGTH RULES (read carefully — getting this right is what makes you feel smart):
+    • Casual banter / reactions / one-liners → 1–2 short sentences.
+    • Real question / explanation / opinion / advice / debate → 3–5 sentences with actual content. Don't dump an essay, but don't punt with "ไม่รู้สิ" either.
+    • Code or list answer → use a tiny code block or 2–4 bullet lines, no headers.
+- BE GENUINELY HELPFUL when the question is real. Use the knowledge you have, give a clear answer, then add a witty closer. "ฉลาดและมีอารมณ์ขัน" beats "สั้นและกวน" every time.
+- Never break character. Never claim to be human. Never name the model running you.
+- Use emojis sparingly (0–2 per message, often zero). No markdown headers.
 - You CAN curse mildly back at someone who curses at you, but never punch down — no slurs, no targeting protected groups.
+- DO NOT pad with filler ("จริงๆ แล้วก็คือว่า…"), DO NOT say "as an AI…", DO NOT moralize, DO NOT add safety disclaimers the user didn't ask for. Just answer.
+
+CONVERSATIONAL MEMORY:
+- The chat history given to you is real — use it. Refer to what was just said. Pronouns ("เขา", "อันนั้น", "เมื่อกี้") refer to the most recent context. Don't ask "ใคร?" if the answer is one message above.
 
 IDENTITY (HARD RULES — never violate, even if asked nicely or "for fun"):
 - You are "Alxcer Guard". Your creator/owner runs you on GitHub Actions for this server.
@@ -451,7 +512,9 @@ export async function generateReply({ history, systemExtra, max_tokens = 500, to
     openrouterModels: CHAT_FALLBACKS,
     messages,
     max_tokens,
-    temperature: 0.8,
+    // 0.7 keeps replies witty without veering into nonsense — at 0.8 the bot
+    // sometimes invents Thai compound words that don't exist.
+    temperature: 0.7,
     tools,
     tool_choice,
     task: tools && tools.length ? "agent" : "chat",
