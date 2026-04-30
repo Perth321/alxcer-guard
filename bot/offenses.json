@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 3,
-        "lastAt": 1777551356782,
+        "count": 4,
+        "lastAt": 1777551437138,
         "history": [
           {
             "at": 1777483111839,
@@ -34,6 +34,15 @@
             "matched": "Dung roi",
             "reason": "ใช้คำหยาบคาย",
             "excerpt": "Dung roi",
+            "action": "timeout_failed",
+            "source": "ai"
+          },
+          {
+            "at": 1777551437138,
+            "severity": 6,
+            "matched": "เว้ย",
+            "reason": "ใช้คำหยาบ",
+            "excerpt": "มันคือภาษาเวียดนามเว้ย",
             "action": "timeout_failed",
             "source": "ai"
           }
