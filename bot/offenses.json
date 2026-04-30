@@ -7,20 +7,11 @@
       "lastWord": "หี",
       "lastSource": "voice",
       "chat": {
-        "count": 1,
-        "lastAt": 1777557203205,
-        "history": [
-          {
-            "at": 1777557203204,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          }
-        ]
-      }
+        "count": 0,
+        "lastAt": 0,
+        "history": []
+      },
+      "times": 0
     },
     "946756535936233542": {
       "count": 4,
@@ -96,20 +87,11 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 1,
-        "lastAt": 1777480033703,
-        "history": [
-          {
-            "at": 1777480033703,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "Alex (id: 603182413660684321) มีบันทึกการกระทำผิดแชท 9 ครั้ง ระดับความรุนแรง 7 ทั้งหมด  \n- “หี” (1 ครั้ง) → timeout ไม่สำเร็จ  \n- “แจนไก้” (1 ครั้ง) → timeout ไม่สำเร็จ  \n- “ควย” (2 ครั้ง) → timeout ไ",
-            "action": "timeout_failed",
-            "source": "local"
-          }
-        ]
-      }
+        "count": 0,
+        "lastAt": 0,
+        "history": []
+      },
+      "times": 0
     }
   }
 }
