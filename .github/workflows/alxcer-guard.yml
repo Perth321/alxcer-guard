@@ -35,6 +35,12 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Install ffmpeg (required by @discordjs/voice for MP3 playback)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -n 1
+
       - name: Cache bot dependencies
         id: cache-deps
         uses: actions/cache@v4
