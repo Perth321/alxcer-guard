@@ -17,8 +17,11 @@ import { spawn } from "node:child_process";
 
 let ort = null;
 let sharp = null;
+let opentype = null;
 let _session = null;
 let _sessionLoading = null;
+let _font = null;
+let _fontLoading = null;
 
 const MODEL_DIR = path.resolve(process.cwd(), ".cache", "models");
 const MODEL_PATH = path.join(MODEL_DIR, "yolov5n.onnx");
@@ -28,6 +31,12 @@ const MODEL_URL =
   // which onnxruntime-node 1.25's native binding refuses to accept (it
   // rejects both Uint16Array and Float16Array buffers). Stick with FP32.
   "https://github.com/ultralytics/yolov5/releases/download/v6.0/yolov5n.onnx";
+
+const FONT_DIR = path.resolve(process.cwd(), ".cache", "fonts");
+const FONT_PATH = path.join(FONT_DIR, "Sarabun-Bold.ttf");
+const FONT_URL =
+  process.env.SARABUN_FONT_URL ||
+  "https://github.com/google/fonts/raw/main/ofl/sarabun/Sarabun-Bold.ttf";
 
 const INPUT_SIZE = 640;
 const SCORE_THRESHOLD = Number(process.env.YOLO_SCORE_THRESHOLD || 0.3);
@@ -89,6 +98,76 @@ async function ensureDeps() {
       throw new Error(`sharp not installed: ${err.message}`);
     }
   }
+  if (!opentype) {
+    try {
+      opentype = (await import("opentype.js")).default;
+    } catch (err) {
+      throw new Error(`opentype.js not installed: ${err.message}`);
+    }
+  }
+}
+
+async function ensureFont() {
+  if (existsSync(FONT_PATH)) return FONT_PATH;
+  if (!existsSync(FONT_DIR)) mkdirSync(FONT_DIR, { recursive: true });
+  console.log(`[vision] downloading Thai font from ${FONT_URL}`);
+  const res = await fetch(FONT_URL);
+  if (!res.ok) throw new Error(`Sarabun font download failed: ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  await fs.writeFile(FONT_PATH, buf);
+  console.log(`[vision] saved Sarabun font (${buf.length} bytes) → ${FONT_PATH}`);
+  return FONT_PATH;
+}
+
+// Get a parsed opentype font (with proper Thai glyphs) — cached after first call.
+async function getFont() {
+  if (_font) return _font;
+  if (_fontLoading) return _fontLoading;
+  _fontLoading = (async () => {
+    await ensureDeps();
+    const fp = await ensureFont();
+    const buf = await fs.readFile(fp);
+    const arrBuf = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    _font = opentype.parse(arrBuf);
+    return _font;
+  })();
+  try {
+    return await _fontLoading;
+  } finally {
+    _fontLoading = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Intent extraction — decide whether the user wants object DETECTION or
+// just a casual CHAT about the image.
+// ---------------------------------------------------------------------------
+//
+// DETECT keywords (Thai + EN) — anything that asks "what's in the image" /
+// "scan it" / "find objects" triggers YOLO + bounding boxes.
+//
+// CHAT (default) — when the user just wants the bot to look at the image
+// and chat about it, no boxes drawn, no YOLO inference (much faster + nicer).
+const DETECT_KEYWORDS_TH = [
+  "ตรวจ", "ตรวจจับ", "ตรวจสอบ", "วิเคราะห์", "สแกน",
+  "หาวัตถุ", "หาของ", "วัตถุ", "ของในรูป", "ของในภาพ",
+  "อะไรในรูป", "อะไรในภาพ", "มีอะไรในรูป", "มีอะไรในภาพ", "มีอะไรบ้าง",
+  "นับ", "นับคน", "วาดกรอบ", "วาด box", "วาดบ็อกซ์", "บ็อกซ์",
+];
+const DETECT_KEYWORDS_EN = [
+  "detect", "scan", "yolo", "bounding box", "bbox", "box it", "label",
+  "identify", "what.?s in", "what is in", "objects?", "count",
+];
+
+export function extractVisionIntent(text) {
+  const t = String(text || "").toLowerCase().trim();
+  if (!t) return "chat";
+  for (const k of DETECT_KEYWORDS_TH) if (t.includes(k)) return "detect";
+  for (const k of DETECT_KEYWORDS_EN) {
+    const re = new RegExp(`\\b${k}\\b`, "i");
+    if (re.test(t)) return "detect";
+  }
+  return "chat";
 }
 
 async function ensureModel() {
@@ -329,39 +408,58 @@ export async function detectObjects(imageBuffer) {
 }
 
 // Render bounding boxes onto an image and return a JPEG buffer.
+// Thai-aware labels are vectorised with opentype.js → SVG <path>, so the
+// final composite never depends on librsvg's font-handling capabilities.
 export async function drawBoxes(imageBuffer, detections, width, height) {
   await ensureDeps();
   if (!detections.length) return imageBuffer;
+
+  const font = await getFont();
 
   const colors = [
     "#FF3B30","#FF9500","#FFCC00","#34C759","#00C7BE","#30B0C7",
     "#007AFF","#5856D6","#AF52DE","#FF2D55","#A2845E","#8E8E93",
   ];
-  const fontSize = Math.max(14, Math.round(Math.min(width, height) / 40));
+  const fontSize = Math.max(16, Math.round(Math.min(width, height) / 36));
   const stroke = Math.max(2, Math.round(Math.min(width, height) / 300));
+  const padX = Math.round(fontSize * 0.35);
+  const padY = Math.round(fontSize * 0.25);
 
-  const rects = detections
-    .map((d, i) => {
-      const [x1, y1, x2, y2] = d.box;
-      const w = x2 - x1;
-      const h = y2 - y1;
-      const color = colors[d.classIndex % colors.length];
-      const label = `${thaiLabel(d.class)} ${(d.score * 100).toFixed(0)}%`;
-      const labelW = Math.max(60, label.length * fontSize * 0.55);
-      const labelH = fontSize + 6;
-      const tagY = Math.max(0, y1 - labelH);
-      return `
-        <rect x="${x1}" y="${y1}" width="${w}" height="${h}"
-          fill="none" stroke="${color}" stroke-width="${stroke}"/>
-        <rect x="${x1}" y="${tagY}" width="${labelW}" height="${labelH}"
-          fill="${color}" />
-        <text x="${x1 + 4}" y="${tagY + fontSize}" font-family="sans-serif"
-          font-size="${fontSize}" font-weight="bold" fill="white">${escapeXml(label)}</text>
-      `;
-    })
-    .join("\n");
+  const parts = detections.map((d) => {
+    const [x1, y1, x2, y2] = d.box;
+    const w = x2 - x1;
+    const h = y2 - y1;
+    const color = colors[d.classIndex % colors.length];
+    const label = `${thaiLabel(d.class)} ${(d.score * 100).toFixed(0)}%`;
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${rects}</svg>`;
+    // Measure the label using the actual font metrics so the background
+    // pill always matches the glyph width — no more "text overflows pill".
+    const advance = font.getAdvanceWidth(label, fontSize);
+    const labelW = Math.ceil(advance) + padX * 2;
+    const labelH = fontSize + padY * 2;
+
+    // Place the label pill above the box; flip below if it would clip the top.
+    let tagY = y1 - labelH;
+    if (tagY < 0) tagY = Math.min(height - labelH, y1 + 2);
+    const tagX = Math.max(0, Math.min(width - labelW, x1));
+
+    // Vectorise the text. Baseline ≈ tagY + padY + fontSize * 0.85.
+    const baseline = tagY + padY + Math.round(fontSize * 0.82);
+    const textPath = font.getPath(label, tagX + padX, baseline, fontSize);
+    textPath.fill = "white";
+    textPath.stroke = null;
+    const textSvg = textPath.toSVG();
+
+    return `
+      <rect x="${x1}" y="${y1}" width="${w}" height="${h}"
+        fill="none" stroke="${color}" stroke-width="${stroke}"/>
+      <rect x="${tagX}" y="${tagY}" width="${labelW}" height="${labelH}"
+        fill="${color}" rx="${Math.round(padY)}"/>
+      ${textSvg}
+    `;
+  });
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${parts.join("\n")}</svg>`;
   return await sharp(imageBuffer)
     .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
     .jpeg({ quality: 88 })

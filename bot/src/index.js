@@ -86,6 +86,7 @@ import {
   detectObjects,
   drawBoxes,
   extractVideoFrames,
+  extractVisionIntent,
   summarizeDetections,
   thaiLabel,
 } from "./vision.js";
@@ -1569,13 +1570,23 @@ async function handleVisionReply(msg, triggerReason, media) {
   await channel.sendTyping().catch(() => {});
 
   const cleanText = (msg.content || "").replace(/<@!?\d+>/g, "").trim();
+  // ── MODE PICK ────────────────────────────────────────────────────────────
+  // Two distinct flows:
+  //   • "detect" → run YOLO, draw boxes, show detection summary, brief LLM caption
+  //   • "chat"   → skip YOLO entirely, just let the vision LLM chat about it
+  // Default is chat (lighter, more conversational). Users opt-in to detection
+  // by saying things like "ตรวจ", "วิเคราะห์", "อะไรในรูป", "scan", "detect".
+  const mode = extractVisionIntent(cleanText);
+  console.log(`[vision] mode=${mode} (text="${cleanText.slice(0, 80)}")`);
+
   const annotatedAttachments = []; // { attachment: Buffer, name }
-  const detectionSummaries = [];   // string per asset
-  const visionImageUrls = [];      // urls passed to the LLM vision call (originals)
+  const detectionSummaries = [];   // string per asset (detect mode only)
+  const visionImageUrls = [];      // urls passed to the LLM vision call
 
   // ---- IMAGES ----
   for (const img of media.images.slice(0, 4)) {
     visionImageUrls.push(img.url);
+    if (mode !== "detect") continue;
     try {
       const buf = await fetchBuffer(img.url);
       const { detections, width, height } = await detectObjects(buf);
@@ -1590,7 +1601,7 @@ async function handleVisionReply(msg, triggerReason, media) {
       }
     } catch (err) {
       console.warn(`[vision] image processing failed: ${err.message?.slice(0, 200)}`);
-      detectionSummaries.push(`📷 ${img.name || "image"}: ประมวลผลภาพล้มเหลว`);
+      detectionSummaries.push(`📷 ${img.name || "image"}: ประมวลผลภาพล้มเหลว (${err.message?.slice(0, 80)})`);
     }
   }
 
@@ -1599,6 +1610,12 @@ async function handleVisionReply(msg, triggerReason, media) {
     try {
       const buf = await fetchBuffer(vid.url, 50 * 1024 * 1024);
       const frames = await extractVideoFrames(buf, 3);
+      // Always feed the middle frame to the vision LLM (so chat mode can talk about videos too).
+      const midFrame = frames[Math.floor(frames.length / 2)];
+      if (midFrame) {
+        visionImageUrls.push(`data:image/jpeg;base64,${midFrame.buffer.toString("base64")}`);
+      }
+      if (mode !== "detect") continue;
       const allClasses = new Map();
       for (const [i, f] of frames.entries()) {
         try {
@@ -1613,8 +1630,6 @@ async function handleVisionReply(msg, triggerReason, media) {
               attachment: annotated,
               name: `yolo_${(vid.name || "video").replace(/\.[^.]+$/, "")}_t${f.time.toFixed(1)}s.jpg`,
             });
-            // Also feed the middle frame to the vision LLM as a data URL.
-            visionImageUrls.push(`data:image/jpeg;base64,${annotated.toString("base64")}`);
           }
         } catch (err) {
           console.warn(`[vision] video frame YOLO failed: ${err.message?.slice(0, 200)}`);
@@ -1630,19 +1645,24 @@ async function handleVisionReply(msg, triggerReason, media) {
       );
     } catch (err) {
       console.warn(`[vision] video processing failed: ${err.message?.slice(0, 200)}`);
-      detectionSummaries.push(`🎬 ${vid.name || "video"}: ประมวลผลวิดีโอล้มเหลว`);
+      if (mode === "detect") {
+        detectionSummaries.push(`🎬 ${vid.name || "video"}: ประมวลผลวิดีโอล้มเหลว`);
+      }
     }
   }
 
-  // ---- ASK VISION-LLM TO DESCRIBE ----
+  // ---- ASK VISION-LLM TO DESCRIBE / CHAT ----
   let descriptionText = "";
   if (visionImageUrls.length) {
     try {
+      const systemExtra = mode === "detect"
+        ? `Trigger: ${triggerReason}. ผู้ใช้ขอให้วิเคราะห์/ตรวจวัตถุในสื่อ. มีผล YOLO แนบมาให้ — สรุปสิ่งที่เห็นแบบกระชับ ไม่ต้องอ่านผล YOLO ซ้ำเพราะระบบจะแสดงให้แล้ว`
+        : `Trigger: ${triggerReason}. ผู้ใช้ส่งสื่อมาคุยเล่น/ขอความเห็น ไม่ได้สั่งให้สแกน. ตอบคุยเล่น เป็นกันเอง สั้น กระชับ มีคาแรกเตอร์ ไม่ต้องลิสต์วัตถุแบบรายงาน`;
       const reply = await generateVisionReply({
         imageUrls: visionImageUrls.slice(0, 4),
         userText: cleanText || undefined,
-        detectionContext: detectionSummaries.join(" | "),
-        systemExtra: `Trigger: ${triggerReason}. The user sent ${media.images.length} image(s) and ${media.videos.length} video(s).`,
+        detectionContext: mode === "detect" ? detectionSummaries.join(" | ") : "",
+        systemExtra,
       });
       descriptionText = (reply?.content || "").trim();
     } catch (err) {
@@ -1653,10 +1673,13 @@ async function handleVisionReply(msg, triggerReason, media) {
   // ---- COMPOSE FINAL REPLY ----
   const parts = [];
   if (descriptionText) parts.push(descriptionText);
-  if (detectionSummaries.length) {
+  if (mode === "detect" && detectionSummaries.length) {
     parts.push("```\n🔎 YOLO detections\n" + detectionSummaries.join("\n") + "\n```");
   }
-  const content = (parts.join("\n\n") || "ดูภาพไม่ออกแฮะ ลองอีกที").slice(0, 1900);
+  const fallback = mode === "detect"
+    ? "วิเคราะห์ภาพไม่ออกแฮะ ลองอีกที"
+    : "ดูแล้วแต่นึกอะไรไม่ออก ลองพิมพ์อีกหน่อยสิ";
+  const content = (parts.join("\n\n") || fallback).slice(0, 1900);
 
   try {
     await msg.reply({
