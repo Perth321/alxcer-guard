@@ -2662,7 +2662,7 @@ async function handleAgentOrChatReply(msg, triggerReason) {
               .setColor(0xef4444)
               .setTitle("❌ OpenClaw เจอปัญหา")
               .setDescription(errSteps)
-              .setFooter({ text: `ล้มเหลวหลัง ${elapsed}s · ${(err?.message || "unknown").slice(0, 80)}` })],
+              .setFooter({ text: `ล้มเหลวหลัง ${elapsed}s · ${(err?.message || "unknown").slice(0, 200)}` })],
           }).catch(() => {});
         } catch {}
       }
