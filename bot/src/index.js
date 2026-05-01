@@ -79,7 +79,7 @@ import {
   recordOffense,
   formatHumanDuration,
 } from "./moderation.js";
-import { generateReply, generateVisionReply, shouldEngage, aiAvailable } from "./ai.js";
+import { generateReply, generateVisionReply, shouldEngage, aiAvailable, agentChat, getModelStatus } from "./ai.js";
 import {
   detectObjects,
   drawBoxes,
@@ -1938,6 +1938,29 @@ async function applyWordBan(guild, userId, word, source, transcript) {
 
 client.once(Events.ClientReady, async (c) => {
   console.log(`[ready] logged in as ${c.user.tag}`);
+
+  // ─── ทดสอบ AI providers ทันทีหลัง login ──────────────────────────
+  try {
+    const ms = getModelStatus();
+    console.log('[startup] AI keys:', JSON.stringify({
+      gemini: ms.geminiAvailable,
+      github: ms.githubAvailable,
+      openrouter: ms.openrouterAvailable,
+    }));
+    if (ms.geminiAvailable || ms.githubAvailable || ms.openrouterAvailable) {
+      const testReply = await agentChat([
+        { role: 'system', content: 'You are a test bot. Reply with exactly one word.' },
+        { role: 'user', content: 'ping' },
+      ], { max_tokens: 10 }).catch(err => ({ content: `[fail] ${err?.message?.slice(0, 80)}` }));
+      const ms2 = getModelStatus();
+      console.log(`[startup] AI test — provider=${ms2.lastProvider} model=${ms2.lastModel} reply=${(testReply?.content || '').trim().slice(0, 60)}`);
+    } else {
+      console.warn('[startup] ⚠️ No AI API key found — ระบบ AI จะไม่ทำงาน');
+    }
+  } catch (e) {
+    console.warn('[startup] AI test error:', e?.message?.slice(0, 100));
+  }
+  // ─────────────────────────────────────────────────────────────────
 
   try {
     await registerCommands(client);
