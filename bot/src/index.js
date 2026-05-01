@@ -79,7 +79,7 @@ import {
   recordOffense,
   formatHumanDuration,
 } from "./moderation.js";
-import { generateReply, generateVisionReply, shouldEngage, aiAvailable, agentChat } from "./ai.js";
+import { generateReply, generateVisionReply, shouldEngage, aiAvailable, agentChat, getModelStatus } from "./ai.js";
 import {
   detectObjects,
   drawBoxes,
@@ -102,7 +102,6 @@ import {
   formatClockBangkok,
 } from "./timers.js";
 import { synthesizeThai } from "./tts.js";
-import { getModelStatus } from "./ai.js";
 
 // Force-load every crypto candidate eagerly so @discordjs/voice's lazy loader
 // can pick whichever one is actually available, AND we can see in the boot log
