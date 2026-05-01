@@ -116,11 +116,11 @@ const OPENROUTER_VISION_FALLBACKS = (process.env.OPENROUTER_VISION_MODELS ||
 //   gpt-4o excluded: GitHub free tier 8k limit is too small for agent payload.
 //   Daily cycling: when a model hits its daily quota it is automatically skipped.
 export const AGENT_CHAIN = [
-  { p: "gemini",     m: "gemini-2.5-flash" },   // 🥇 500/day, 1M ctx, best for tools
-  { p: "gemini",     m: "gemini-2.0-flash" },   // 🥈 1500/day, reliable fallback
-  { p: "github",     m: "gpt-4.1" },            // 🥉 GitHub free, solid tool calling
-  { p: "gemini",     m: "gemini-2.5-pro" },     // 💎 smartest, 25/day (reserve)
-  { p: "github",     m: "gpt-4.1-mini" },       // ⚡ fast GitHub, 16k ctx
+  { p: "github",     m: "gpt-4.1-mini" },       // 🥇 2000/day quota, proven to work for chat+tools
+  { p: "gemini",     m: "gemini-2.0-flash" },   // 🥈 1500/day, large context handles big tool schema
+  { p: "github",     m: "gpt-4.1" },            // 🥉 1000/day, smarter GitHub model
+  { p: "gemini",     m: "gemini-2.5-flash" },   // 💡 500/day, best reasoning
+  { p: "gemini",     m: "gemini-2.5-pro" },     // 💎 25/day (reserve for complex tasks)
   { p: "openrouter", m: "meta-llama/llama-3.3-70b-instruct:free" }, // 🆓 last resort
 ];
 
@@ -634,6 +634,7 @@ async function callAI({ geminiModels, openrouterModels, githubModels, interleave
   }
 
   let lastErr;
+  const _errLog = [];
   for (const { p, m } of slotsToTry) {
     try {
       let result;
@@ -652,12 +653,16 @@ async function callAI({ geminiModels, openrouterModels, githubModels, interleave
       return result;
     } catch (err) {
       lastErr = err;
+      _errLog.push(`${p}/${m.split("/").pop().slice(0, 18)}: ${(err.message || "?").slice(0, 45)}`);
       _coolModel(p, m, _coolMsForError(err));
       console.warn(`[ai] ${p}:${m} failed: ${err.message?.slice(0, 200)}`);
       await new Promise(r => setTimeout(r, 80 + Math.random() * 70)); // fast retry
     }
   }
-  throw lastErr ?? new Error("All AI providers failed");
+  const _combinedMsg = `All AI failed · ${_errLog.join(" | ")}`;
+  const _finalErr = new Error(_combinedMsg);
+  _finalErr.status = lastErr?.status;
+  throw _finalErr;
 }
 
 // ─── PERSONAS ─────────────────────────────────────────────────────────────────
