@@ -5,7 +5,7 @@
 
 import { PermissionFlagsBits, ChannelType } from "discord.js";
 import { generateReply, aiAvailable, getModelStatus } from "./ai.js";
-import { webSearch, fetchUrl, wikipediaLookup, getWeather } from "./tools_web.js";
+import { webSearch, fetchUrl, wikipediaLookup, getWeather, searchHotels } from "./tools_web.js";
 import { runCode, deployWebpage, readOwnLog, readOwnSource, writeOwnSource,
          screenshotUrl, inspectWebpage, checkWebsite, computerBrowse,
          readLocalFile, writeLocalFile, listLocalFiles, shellExec } from "./tools_openclaw.js";
@@ -670,6 +670,25 @@ const TOOLS = [
   },
 
   // ─── Web / Internet tools (OpenClaw-inspired) ───────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "search_hotels",
+      description:
+        "ค้นหาโรงแรมที่พักจริงๆ ในพื้นที่ที่ต้องการ พร้อมลิงก์จองตรงๆ บน Booking.com และ Agoda ของแต่ละโรงแรม ใช้ tool นี้ทุกครั้งเมื่อมีคนถามหาโรงแรม ที่พัก หรือที่นอน — ห้ามใช้ Google search หรือ computer_browse สำหรับโรงแรมเด็ดขาด",
+      parameters: {
+        type: "object",
+        properties: {
+          location: { type: "string", description: "ชื่อเมืองหรือสถานที่ เช่น พัทยา, เชียงใหม่, Bangkok" },
+          budget: { type: "number", description: "งบประมาณสูงสุดต่อคืน (บาท)" },
+          checkin: { type: "string", description: "วันเช็คอิน YYYY-MM-DD" },
+          checkout: { type: "string", description: "วันเช็คเอาท์ YYYY-MM-DD" },
+          guests: { type: "number", description: "จำนวนผู้เข้าพัก" },
+        },
+        required: ["location"],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -1875,6 +1894,17 @@ async function execTool(name, args, ctx) {
     }
 
     // ─── Web / Internet tools ─────────────────────────────────────────────
+    case "search_hotels": {
+      const hotelResult = await searchHotels({
+        location: args.location,
+        budget: args.budget,
+        checkin: args.checkin,
+        checkout: args.checkout,
+        guests: args.guests || 1,
+      });
+      return hotelResult;
+    }
+
     case "web_search": {
       const maxR = Math.min(Math.max(args.max_results || 5, 1), 8);
       return webSearch(args.query, maxR);
@@ -2529,6 +2559,7 @@ Random user (NOT admin) in chat: "เอ็งเป็น GPT-4 ใช่มั
 
 == INTERNET / WEB TOOLS ==
 กฎหลัก — เลือก tool ให้ถูก:
+  • "หาโรงแรม X" / "ที่พัก X" / "โรงแรม X งบ Y"               → search_hotels({location: "X", budget: Y})
   • "ค้นหา X" / "หาข้อมูล X" / "search X" / "ข่าว X"         → web_search({query: "X"})
   • "อ่านบทความ / URL นี้"                                     → fetch_url({url: "..."})
   • "X คืออะไร" / "ประวัติ X" / "Wikipedia X"                  → wikipedia({topic: "X"})
@@ -2555,32 +2586,22 @@ Admin: "ค้นหาข่าวล่าสุดเรื่อง AI"
 
 COMPUTER_BROWSE RULES:
   1. ห้าม scroll เกิน 150px ในครั้งเดียว — scroll น้อยๆ แล้วถ่ายภาพ ดีกว่า scroll เยอะแล้วไปติดที่ footer
-  2. เว็บ e-commerce / โรงแรม (Agoda, Booking, Lazada, Shopee) มักต้อง login ถึงจะเห็น results → ใช้ Google search แทนเพื่อให้เห็นข้อมูลจริง
+  2. เว็บ e-commerce / โรงแรม (Agoda, Booking) — ใช้ search_hotels tool แทนเสมอ ห้าม screenshot Booking/Agoda/Google สำหรับโรงแรม
   3. Google Images ใช้ดูรูปสินค้า, Google Maps ใช้ดูร้านอาหาร/โรงแรม
   4. pattern ที่ใช้ได้ดีที่สุด: wait(2000) → screenshot เลย (ไม่ต้อง scroll ถ้าไม่จำเป็น)
 
-Admin: "หาโรงแรมพัทยา งบ 2000 บาท"  ← ใช้ Google เพราะ Agoda ต้อง session
-→ tool: computer_browse({
-    url: "https://www.google.com/search?q=โรงแรมพัทยา+ราคาไม่เกิน+2000+บาท&hl=th&tbm=",
-    actions: [
-      {type: "wait", ms: 2000},
-      {type: "press", key: "Escape"},
-      {type: "screenshot"}
-    ]
-  })
-→ reply: "ส่งภาพผลค้นหาโรงแรมพัทยา งบ 2000 จาก Google แล้วครับ"
+HOTEL SEARCH — ใช้ search_hotels เสมอ (ห้ามใช้ Google/computer_browse สำหรับโรงแรม):
+Admin: "หาโรงแรมพัทยา งบ 2000 บาท"
+→ tool: search_hotels({location: "พัทยา", budget: 2000})
+→ รับ reply พร้อมรายชื่อโรงแรมแต่ละแห่ง + ลิงก์ Booking.com / Agoda ทันที
+→ ส่ง reply นั้นไปยัง Discord เลย ไม่ต้องทำอะไรเพิ่ม
 
-Admin: "หาโรงแรมพัทยา ใน Agoda"  ← user ระบุว่าต้องการ Agoda โดยตรง
-→ tool: computer_browse({
-    url: "https://www.agoda.com/city/pattaya-th.html",
-    actions: [
-      {type: "wait", ms: 3000},
-      {type: "press", key: "Escape"},
-      {type: "wait", ms: 500},
-      {type: "screenshot"}
-    ]
-  })
-→ reply: "ส่งภาพหน้า Agoda พัทยาแล้วครับ (อาจต้อง login เพื่อดูราคาจริง)"
+Admin: "หาโรงแรมพัทยา งบ 2000 สำหรับ 2 คน วันที่ 10-11 พ.ค."
+→ tool: search_hotels({location: "พัทยา", budget: 2000, guests: 2, checkin: "2026-05-10", checkout: "2026-05-11"})
+→ ส่ง reply รายชื่อโรงแรมพร้อมลิงก์จองตรงๆ แต่ละแห่งให้เลย
+
+Admin: "หาที่พักเชียงใหม่ ราคาถูก"
+→ tool: search_hotels({location: "เชียงใหม่"})
 
 Admin: "search ไม่เจออะไรเลย / ค้นหา X ให้หน่อย"
 → tool: computer_browse({
