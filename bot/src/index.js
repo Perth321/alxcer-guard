@@ -2594,9 +2594,9 @@ async function handleAgentOrChatReply(msg, triggerReason) {
           authorId: author.id,
           offenses,
           persistOffenses: async () => persistOffenses(),
-          // Pass the last 50 messages so the agent has rich conversation
-          // memory — references like "ทำอีกที", "คนเดิม", "ห้องเดิม" work.
-          chatHistory: recent.slice(-50).map((m) => ({
+          // Pass last 15 messages (agent.js uses at most 10).
+          // Smaller slice keeps the agent payload under GitHub Models token limits.
+          chatHistory: recent.slice(-15).map((m) => ({
             author: m.author,
             authorId: m.authorId,
             content: m.content,
