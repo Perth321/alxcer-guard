@@ -18,26 +18,75 @@ const GH_BASE        = "https://models.inference.ai.azure.com";
 // ─── Gemini model lists ───────────────────────────────────────────────────────
 // Keep 2.5/2.0 as deep fallbacks — their quotas are separate from the 3.x pool.
 // ✅ Real confirmed Gemini models only (no fake 3.x series)
+// ─── Daily quota limits (conservative free-tier estimates) ──────────────────
+// When a model exhausts its daily quota it is skipped; the next in chain takes over.
+// Counts are tracked per UTC+7 calendar day and reset at midnight.
+const DAILY_QUOTAS = {
+  "gemini:gemini-2.5-pro":              25,   // Gemini free: ~25 RPD (experimental)
+  "gemini:gemini-2.5-flash":           500,   // Gemini free: 500 RPD
+  "gemini:gemini-2.0-flash":          1500,   // Gemini free: 1500 RPD
+  "gemini:gemini-1.5-pro":              50,   // Gemini free: 50 RPD
+  "gemini:gemini-1.5-flash":           500,   // Gemini free: 500 RPD
+  "github:gpt-4.1":                   1000,   // GitHub Models: very generous
+  "github:gpt-4.1-mini":              2000,   // GitHub Models: most generous
+  "github:gpt-4o":                     150,   // GitHub Models: lower limit
+  "github:Llama-3.3-70B-Instruct":    1000,
+  "github:Phi-4":                     1000,
+  "github:Phi-4-mini-instruct":       2000,
+};
+// Default for unlisted models: 300 for openrouter :free, 500 for others
+function _getDailyQuota(provider, model) {
+  const key = `${provider}:${model}`;
+  if (DAILY_QUOTAS[key] !== undefined) return DAILY_QUOTAS[key];
+  if (provider === "openrouter" && model.endsWith(":free")) return 200;
+  if (provider === "openrouter") return 500;
+  if (provider === "gemini")     return 300;
+  return 1000; // github or unknown
+}
+
+// ─── UTC+7 date string for daily-key grouping ─────────────────────────────
+function _todayTH() {
+  const d = new Date(Date.now() + 7 * 3600 * 1000);
+  return d.toISOString().slice(0, 10); // "YYYY-MM-DD"
+}
+
+// ─── Per-model, per-day usage counts (in-memory; resets on process restart) ─
+const _dailyUsage = new Map(); // "YYYY-MM-DD|provider:model" → count
+
+function _getDailyCount(provider, model) {
+  return _dailyUsage.get(`${_todayTH()}|${provider}:${model}`) || 0;
+}
+
+function _incDailyCount(provider, model) {
+  const today = _todayTH();
+  const key   = `${today}|${provider}:${model}`;
+  _dailyUsage.set(key, (_dailyUsage.get(key) || 0) + 1);
+  // Prune stale entries from previous days
+  for (const k of _dailyUsage.keys()) {
+    if (!k.startsWith(today)) _dailyUsage.delete(k);
+  }
+}
+
+function _isOverDailyLimit(provider, model) {
+  return _getDailyCount(provider, model) >= _getDailyQuota(provider, model);
+}
+
+// ─── Gemini model pools ────────────────────────────────────────────────────
 const GEMINI_CHAT_MODELS = (process.env.GEMINI_CHAT_MODELS ||
-  "gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-pro"
+  "gemini-2.5-flash,gemini-2.0-flash,gemini-2.5-pro,gemini-1.5-pro"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GEMINI_FAST_MODELS = (process.env.GEMINI_FAST_MODELS ||
-  "gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-flash,gemini-2.0-flash-lite"
+  "gemini-2.0-flash,gemini-2.5-flash,gemini-1.5-flash"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GEMINI_VISION_MODELS = (process.env.GEMINI_VISION_MODELS ||
-  "gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-pro"
+  "gemini-2.5-flash,gemini-2.0-flash,gemini-2.5-pro,gemini-1.5-pro"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
-// ─── GitHub Models chains ─────────────────────────────────────────────────────
-// All tested live 2026-05-01. Uses GITHUB_TOKEN (auto-injected by Actions).
-// OpenAI-branded models placed LAST to protect persona (they claim to be ChatGPT).
-// DeepSeek R1 outputs <think> blocks — stripped before returning.
-// ✅ GitHub Models = MOST RELIABLE (GITHUB_TOKEN always injected by Actions)
-// Primary pool — no rate limit burnout risk, always available
+// ─── GitHub Models pools ──────────────────────────────────────────────────
 const GH_CHAT_MODELS = (process.env.GH_CHAT_MODELS ||
-  "gpt-4.1-mini,Llama-3.3-70B-Instruct,Phi-4,gpt-4.1,gpt-4o"
+  "gpt-4.1-mini,gpt-4.1,Llama-3.3-70B-Instruct,Phi-4,gpt-4o"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GH_FAST_MODELS = (process.env.GH_FAST_MODELS ||
@@ -48,90 +97,49 @@ const GH_VISION_MODELS = (process.env.GH_VISION_MODELS ||
   "Llama-3.2-90B-Vision-Instruct,Phi-4-multimodal-instruct,gpt-4o"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
-// ─── OpenRouter fallback chains ───────────────────────────────────────────────
-// :free catalog refreshed 2026-04-30. OpenAI-branded models LAST.
-// ✅ Only confirmed :free OpenRouter models (verified 2026-05)
+// ─── OpenRouter fallback pools ─────────────────────────────────────────────
 const OPENROUTER_CHAT_FALLBACKS = (process.env.OPENROUTER_CHAT_MODELS ||
-  "meta-llama/llama-3.3-70b-instruct:free,deepseek/deepseek-r1-distill-llama-70b:free,google/gemma-3-27b-it:free,mistralai/mistral-nemo:free,qwen/qwq-32b:free"
-).split(",").map(s => s.trim()).filter(Boolean);
-
-const OPENROUTER_FAST_FALLBACKS = (process.env.OPENROUTER_FAST_MODELS ||
   "meta-llama/llama-3.3-70b-instruct:free,google/gemma-3-27b-it:free,mistralai/mistral-nemo:free"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
-const OPENROUTER_VISION_FALLBACKS = (process.env.OPENROUTER_VISION_MODELS ||
-  "meta-llama/llama-3.2-11b-vision-instruct:free,google/gemma-3-27b-it:free,mistralai/mistral-nemo:free"
+const OPENROUTER_FAST_FALLBACKS = (process.env.OPENROUTER_FAST_MODELS ||
+  "meta-llama/llama-3.1-8b-instruct:free,google/gemma-3-12b-it:free"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
-// Keep aliases for agent.js back-compat
-export const CHAT_FALLBACKS = OPENROUTER_CHAT_FALLBACKS;
-export const FAST_FALLBACKS  = OPENROUTER_FAST_FALLBACKS;
+const OPENROUTER_VISION_FALLBACKS = (process.env.OPENROUTER_VISION_MODELS ||
+  "meta-llama/llama-3.2-11b-vision-instruct:free"
+).split(",").map(s => s.trim()).filter(Boolean);
 
-// ─── INTERLEAVED priority chains ─────────────────────────────────────────────
-// Each entry: { p: "gemini"|"github"|"openrouter", m: modelId }
-// Spread load across three separate free quotas so no pool burns out alone.
-// OpenAI-branded models (gpt-*) placed after non-branded alternatives at same tier.
-function _buildInterleavedChain(geminiList, ghList, orList, keepOpenAILast = true) {
-  // Order: GitHub first (always available via GITHUB_TOKEN), then Gemini, then OpenRouter
-  const chain = [];
-  const maxLen = Math.max(geminiList.length, ghList.length, orList.length);
-  let gi = 0, ghi = 0, ori = 0;
-  for (let i = 0; i < maxLen; i++) {
-    if (ghi < ghList.length)    chain.push({ p: "github",      m: ghList[ghi++] });
-    if (gi < geminiList.length) chain.push({ p: "gemini",      m: geminiList[gi++] });
-    if (ori < orList.length)    chain.push({ p: "openrouter",  m: orList[ori++] });
-  }
-  if (!keepOpenAILast) return chain;
-  // Push gpt-4o (large OpenAI model) to the very end to protect persona.
-  // gpt-4.1-mini and gpt-4.1 stay in their natural position — PERSONA already
-  // hard-codes the identity rules and the admin model-reveal path, so persona
-  // leakage from those models is not a real risk.
-  const isOpenAIBrand = (entry) =>
-    (entry.p === "openrouter" && /gpt-oss/i.test(entry.m)) ||
-    (entry.p === "github"     && /^gpt-4o$/i.test(entry.m)); // only gpt-4o is last-resort
-  const front = chain.filter(e => !isOpenAIBrand(e));
-  const back  = chain.filter(e =>  isOpenAIBrand(e));
-  return [...front, ...back];
-}
-
-const INTERLEAVED_CHAT   = _buildInterleavedChain(GEMINI_CHAT_MODELS,   GH_CHAT_MODELS,   OPENROUTER_CHAT_FALLBACKS);
-const INTERLEAVED_FAST   = _buildInterleavedChain(GEMINI_FAST_MODELS,   GH_FAST_MODELS,   OPENROUTER_FAST_FALLBACKS);
-const INTERLEAVED_VISION = _buildInterleavedChain(GEMINI_VISION_MODELS,  GH_VISION_MODELS, OPENROUTER_VISION_FALLBACKS);
-
-// ─── TASK-SPECIFIC chains ──────────────────────────────────────────────────────
-// AGENT_CHAIN: models that reliably support structured tool/function calling
-// AND have sufficient context for the full agent payload (~10k tokens).
-// Ordered by: large context → tool reliability → availability.
-// - Gemini 2.5/2.0 flash: 1M context, solid tool support, free quota independent
-// - gpt-4.1-mini/gpt-4.1: GitHub free tier 16k limit — fits agent payload
-// - Llama-3.3-70B on OR: tool support OK, last resort
-// NOTE: gpt-4o is excluded — GitHub free tier caps it at 8k tokens which is
-//   too small for the agent payload (tools + snapshot + history ≈ 9-10k tokens).
+// ─── TASK-SPECIFIC chains ──────────────────────────────────────────────────
+// AGENT_CHAIN: models used for AI-agent tool-calling steps.
+//   Priority: smart + large context first, then reliable fallbacks.
+//   gpt-4o excluded: GitHub free tier 8k limit is too small for agent payload.
+//   Daily cycling: when a model hits its daily quota it is automatically skipped.
 export const AGENT_CHAIN = [
-  { p: "gemini",      m: "gemini-2.5-flash" },
-  { p: "gemini",      m: "gemini-2.0-flash" },
-  { p: "github",      m: "gpt-4.1-mini" },
-  { p: "github",      m: "gpt-4.1" },
-  { p: "gemini",      m: "gemini-2.5-pro" },
-  { p: "openrouter",  m: "meta-llama/llama-3.3-70b-instruct:free" },
+  { p: "gemini",     m: "gemini-2.5-flash" },   // 🥇 500/day, 1M ctx, best for tools
+  { p: "gemini",     m: "gemini-2.0-flash" },   // 🥈 1500/day, reliable fallback
+  { p: "github",     m: "gpt-4.1" },            // 🥉 GitHub free, solid tool calling
+  { p: "gemini",     m: "gemini-2.5-pro" },     // 💎 smartest, 25/day (reserve)
+  { p: "github",     m: "gpt-4.1-mini" },       // ⚡ fast GitHub, 16k ctx
+  { p: "openrouter", m: "meta-llama/llama-3.3-70b-instruct:free" }, // 🆓 last resort
 ];
 
-// LLM_CHAT_CHAIN: fast models for plain conversation (no tools, small context OK)
-// No tool schema payload → smaller context → faster, cheaper, more models viable.
+// LLM_CHAT_CHAIN: models used for plain LLM chat (no tool schema → smaller payload).
+//   Can use lighter/faster models since context is much smaller.
 export const LLM_CHAT_CHAIN = [
-  { p: "github",      m: "gpt-4.1-mini" },
-  { p: "gemini",      m: "gemini-2.0-flash" },
-  { p: "github",      m: "Llama-3.3-70B-Instruct" },
-  { p: "openrouter",  m: "meta-llama/llama-3.3-70b-instruct:free" },
-  { p: "github",      m: "Phi-4" },
-  { p: "gemini",      m: "gemini-2.5-flash" },
-  { p: "openrouter",  m: "google/gemma-3-27b-it:free" },
-  { p: "gemini",      m: "gemini-1.5-pro" },
-  { p: "openrouter",  m: "mistralai/mistral-nemo:free" },
-  { p: "github",      m: "gpt-4.1" },
+  { p: "github",     m: "gpt-4.1-mini" },       // ⚡ fast, 2000/day GitHub
+  { p: "gemini",     m: "gemini-2.0-flash" },   // 🔄 1500/day
+  { p: "github",     m: "gpt-4.1" },            // 🧠 smarter GitHub
+  { p: "gemini",     m: "gemini-2.5-flash" },   // 🧠 500/day
+  { p: "github",     m: "Llama-3.3-70B-Instruct" },
+  { p: "openrouter", m: "meta-llama/llama-3.3-70b-instruct:free" },
+  { p: "github",     m: "Phi-4" },
+  { p: "openrouter", m: "google/gemma-3-27b-it:free" },
+  { p: "gemini",     m: "gemini-2.5-pro" },     // 💎 save for when needed
+  { p: "openrouter", m: "mistralai/mistral-nemo:free" },
+  { p: "github",     m: "gpt-4o" },             // last resort
 ];
 
-export const MODELS = {
   chat:   INTERLEAVED_CHAT[0]?.m   ?? "gemini-3.1-pro",
   fast:   INTERLEAVED_FAST[0]?.m   ?? "gemini-3.1-flash",
   vision: INTERLEAVED_VISION[0]?.m ?? "gemini-3.1-pro",
@@ -180,6 +188,9 @@ function _recordUse(provider, model, task) {
   _modelStats.lastAt       = Date.now();
   const key = `${provider}:${model}`;
   _modelStats.counts[key] = (_modelStats.counts[key] || 0) + 1;
+  _incDailyCount(provider, model);
+}
+  _modelStats.counts[key] = (_modelStats.counts[key] || 0) + 1;
 }
 
 export function getModelStatus() {
@@ -188,16 +199,20 @@ export function getModelStatus() {
     .slice(0, 10)
     .map(([k, v]) => {
       const [provider, ...rest] = k.split(":");
-      return { provider, model: rest.join(":"), uses: v };
+      const model = rest.join(":");
+      const daily = _getDailyCount(provider, model);
+      const quota = _getDailyQuota(provider, model);
+      return { provider, model, uses: v, daily, quota };
     });
   return {
-    lastProvider:       _modelStats.lastProvider,
-    lastModel:          _modelStats.lastModel,
-    lastTask:           _modelStats.lastTask,
-    lastAt:             _modelStats.lastAt,
-    geminiAvailable:    !!process.env.GEMINI_API_KEY,
-    githubAvailable:    !!process.env.GITHUB_TOKEN,
-    openrouterAvailable:!!process.env.OPENROUTER_API_KEY,
+    lastProvider:        _modelStats.lastProvider,
+    lastModel:           _modelStats.lastModel,
+    lastTask:            _modelStats.lastTask,
+    lastAt:              _modelStats.lastAt,
+    geminiAvailable:     !!process.env.GEMINI_API_KEY,
+    githubAvailable:     !!process.env.GITHUB_TOKEN,
+    openrouterAvailable: !!process.env.OPENROUTER_API_KEY,
+    todayTH:             _todayTH(),
     top,
   };
 }
@@ -476,7 +491,7 @@ async function callGemini({ model, messages, tools, tool_choice, max_tokens = 80
     },
     ...(systemInstruction ? { systemInstruction } : {}),
     ...(geminiTools ? { tools: geminiTools } : {}),
-    ...(geminiTools && tool_choice
+    ...(geminiTools
       ? { toolConfig: { functionCallingConfig: { mode: tool_choice === "required" ? "ANY" : "AUTO" } } }
       : {}),
     safetySettings: [
@@ -568,8 +583,22 @@ async function callAI({ geminiModels, openrouterModels, githubModels, interleave
   if (available.length === 0) throw new Error("No AI provider available (set GEMINI_API_KEY, GITHUB_TOKEN, or OPENROUTER_API_KEY)");
 
   // Walk the chain — skip cooling slots, but keep a "coerced" copy as last resort
-  const liveSlots   = available.filter(({ p, m }) => !_isCooling(p, m));
-  const slotsToTry  = liveSlots.length ? liveSlots : available;
+  // Filter out models that are on cooldown OR over their daily quota.
+  // Daily cycling: if a slot is exhausted for today, automatically skip to next.
+  const liveSlots  = available.filter(({ p, m }) => !_isCooling(p, m) && !_isOverDailyLimit(p, m));
+  // If all live slots are over daily quota, try slots that aren't on cooldown (ignore quota)
+  const noopSlots  = liveSlots.length ? liveSlots : available.filter(({ p, m }) => !_isCooling(p, m));
+  // Absolute last resort: try anything that's available
+  const slotsToTry = noopSlots.length ? noopSlots : available;
+  if (liveSlots.length < available.length) {
+    const skipped = available.filter(({ p, m }) => _isOverDailyLimit(p, m) || _isCooling(p, m));
+    skipped.forEach(({ p, m }) => {
+      const reason = _isOverDailyLimit(p, m)
+        ? `daily limit ${_getDailyCount(p, m)}/${_getDailyQuota(p, m)}`
+        : `cooldown`;
+      console.log(`[ai] skip ${p}:${m} (${reason}) — cycling to next`);
+    });
+  }
 
   let lastErr;
   for (const { p, m } of slotsToTry) {
@@ -659,12 +688,16 @@ export async function chat(messages, { tools, tool_choice, max_tokens = 500, tem
 // Uses AGENT_CHAIN (Gemini 1M context first, then GitHub gpt-4.1-mini/gpt-4.1).
 // Lower temperature → more deterministic tool selection.
 // Does NOT prepend PERSONA — caller is responsible for system message.
+// agentChat: dedicated entry point for AI-agent tool-calling steps.
+// Uses AGENT_CHAIN (Gemini-2.5-flash first → gpt-4.1 → fallbacks).
+// Always passes tool_choice="auto" so Gemini sends toolConfig → reliable tool use.
+// Daily cycling: exhausted models are skipped automatically.
 export async function agentChat(messages, { tools, tool_choice, max_tokens = 700, temperature = 0.2 } = {}) {
   return callAI({
     interleavedChain: AGENT_CHAIN,
     messages,
     tools,
-    tool_choice,
+    tool_choice: tools?.length ? (tool_choice || "auto") : tool_choice,
     max_tokens,
     temperature,
     task: "agent",
@@ -729,17 +762,20 @@ export async function generateReply({ history, systemExtra, max_tokens = 500, to
     { role: "system", content: PERSONA + (systemExtra ? `\n\n${systemExtra}` : "") },
     ...history,
   ];
-  // Route to the right chain based on whether tools are needed:
-  // • With tools (admin agent path): AGENT_CHAIN — large context, reliable tool calls
-  // • Plain chat (no tools): LLM_CHAT_CHAIN — fast, lightweight, no tool overhead
-  const chain = tools?.length ? AGENT_CHAIN : LLM_CHAT_CHAIN;
+  // Route to task-specific chain:
+  // • Agent (with tools) → AGENT_CHAIN: Gemini-2.5-flash first (1M ctx), then GitHub gpt-4.1
+  // • Chat (no tools)   → LLM_CHAT_CHAIN: fast models, smaller payload
+  const chain    = tools?.length ? AGENT_CHAIN : LLM_CHAT_CHAIN;
+  const temp     = tools?.length ? 0.2 : 0.7;
+  // Always pass tool_choice="auto" when tools are provided so Gemini uses toolConfig
+  const tc       = tools?.length ? (tool_choice || "auto") : tool_choice;
   return callAI({
     interleavedChain: chain,
     messages,
     max_tokens,
-    temperature: tools?.length ? 0.3 : 0.7,
+    temperature: temp,
     tools,
-    tool_choice,
+    tool_choice: tc,
     task: tools?.length ? "agent" : "chat",
   });
 }
