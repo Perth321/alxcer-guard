@@ -121,7 +121,6 @@ export const AGENT_CHAIN = [
   { p: "github",     m: "gpt-4.1" },            // 🥉 1000/day, smarter GitHub model
   { p: "gemini",     m: "gemini-2.5-flash" },   // 💡 500/day, best reasoning
   { p: "gemini",     m: "gemini-2.5-pro" },     // 💎 25/day (reserve for complex tasks)
-  { p: "openrouter", m: "meta-llama/llama-3.3-70b-instruct:free" }, // 🆓 last resort
 ];
 
 // LLM_CHAT_CHAIN: models used for plain LLM chat (no tool schema → smaller payload).
