@@ -10,7 +10,6 @@ import {
   REST,
   Routes,
   SlashCommandBuilder,
-  StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
@@ -144,7 +143,17 @@ export async function handleDebugCommand(interaction, runtime) {
     ephemeral: true,
   });
 }
+
+function fmtChannel(id) {
+  return id ? `<#${id}>` : "_ยังไม่ตั้ง_";
+}
+
 export function buildSettingsView(config) {
+  const words = config.bannedWords ?? [];
+  const wordsDisplay = words.length
+    ? words.map((w) => `\`${w}\``).join(", ").slice(0, 512)
+    : "_ยังไม่มี_";
+
   const embed = new EmbedBuilder()
     .setColor(0x6366f1)
     .setTitle("⚙️ ตั้งค่า Alxcer Guard")
@@ -162,14 +171,46 @@ export function buildSettingsView(config) {
           : "_อัตโนมัติ (เลือกห้องที่มีคนมากสุด)_",
         inline: true,
       },
+      { name: "\u200b", value: "\u200b", inline: true },
       {
-        name: "⏱️ เวลาเตือน (วินาที)",
-        value: String(config.warningSeconds),
+        name: "⏱️ เตือนเมื่อเงียบ",
+        value: `${config.warningSeconds}s`,
         inline: true,
       },
       {
-        name: "🔇 เวลาปิดไมค์ (วินาที)",
-        value: String(config.muteSeconds),
+        name: "🔇 ปิดไมค์เมื่อเงียบ",
+        value: `${config.muteSeconds}s`,
+        inline: true,
+      },
+      { name: "\u200b", value: "\u200b", inline: true },
+      {
+        name: "⚖️ โทษครั้งแรก",
+        value: `${config.firstOffenseMuteSeconds}s`,
+        inline: true,
+      },
+      {
+        name: "⚖️ โทษซ้ำ",
+        value: `${config.repeatOffenseMuteSeconds}s`,
+        inline: true,
+      },
+      {
+        name: "🤖 ละเว้นบอท",
+        value: config.ignoreBots ? "✅ ใช่" : "❌ ไม่",
+        inline: true,
+      },
+      {
+        name: "🚫 คำต้องห้าม",
+        value: wordsDisplay,
+        inline: false,
+      },
+      {
+        name: "🔔 Wake Alarm — เสียงเพลง",
+        value: config.wakeMusicUrl ? `[ลิงก์](<${config.wakeMusicUrl}>)` : "_ใช้เสียงบี๊ปเริ่มต้น_",
+        inline: true,
+      },
+      {
+        name: "🗣️ Wake Alarm — ข้อความพูด",
+        value: config.wakeTtsText || "_ค่าเริ่มต้น_",
         inline: true,
       },
     );
@@ -193,15 +234,23 @@ export function buildSettingsView(config) {
   const buttons = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("setting:times")
-      .setLabel("ตั้งเวลาเตือน / ปิดไมค์")
+      .setLabel("⏱️ เวลา")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId("setting:offense")
+      .setLabel("⚖️ โทษ / คำต้องห้าม")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId("setting:wake")
+      .setLabel("🔔 Wake Alarm")
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId("setting:auto-voice")
-      .setLabel("ใช้ห้องเสียงอัตโนมัติ")
+      .setLabel("🔕 ห้องอัตโนมัติ")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("setting:refresh")
-      .setLabel("รีเฟรช")
+      .setLabel("🔄 รีเฟรช")
       .setStyle(ButtonStyle.Secondary),
   );
 
@@ -270,15 +319,16 @@ export async function handleSettingComponent(interaction, runtime) {
       return true;
     }
 
+    // ── Times modal ──────────────────────────────────────────────────────────
     if (action === "times" && interaction.isButton()) {
       const modal = new ModalBuilder()
         .setCustomId("setting:times-modal")
-        .setTitle("ตั้งเวลา (วินาที)")
+        .setTitle("⏱️ ตั้งเวลา (วินาที)")
         .addComponents(
           new ActionRowBuilder().addComponents(
             new TextInputBuilder()
               .setCustomId("warning")
-              .setLabel("เวลาเตือนเมื่อเงียบ (วินาที)")
+              .setLabel("เตือนเมื่อเงียบ (วินาที)")
               .setStyle(TextInputStyle.Short)
               .setValue(String(cfg.warningSeconds))
               .setRequired(true),
@@ -286,7 +336,7 @@ export async function handleSettingComponent(interaction, runtime) {
           new ActionRowBuilder().addComponents(
             new TextInputBuilder()
               .setCustomId("mute")
-              .setLabel("เวลาปิดไมค์เมื่อเงียบ (วินาที)")
+              .setLabel("ปิดไมค์เมื่อเงียบ (วินาที)")
               .setStyle(TextInputStyle.Short)
               .setValue(String(cfg.muteSeconds))
               .setRequired(true),
@@ -299,6 +349,10 @@ export async function handleSettingComponent(interaction, runtime) {
     if (id === "setting:times-modal" && interaction.isModalSubmit()) {
       const warning = Number(interaction.fields.getTextInputValue("warning"));
       const mute = Number(interaction.fields.getTextInputValue("mute"));
+      if (!Number.isFinite(warning) || !Number.isFinite(mute)) {
+        await interaction.reply({ content: "กรุณากรอกตัวเลขเท่านั้น", ephemeral: true });
+        return true;
+      }
       if (mute <= warning) {
         await interaction.reply({
           content: "เวลาปิดไมค์ต้องมากกว่าเวลาเตือน",
@@ -306,15 +360,125 @@ export async function handleSettingComponent(interaction, runtime) {
         });
         return true;
       }
-      const next = normalize({
-        ...cfg,
-        warningSeconds: warning,
-        muteSeconds: mute,
-      });
+      const next = normalize({ ...cfg, warningSeconds: warning, muteSeconds: mute });
       await persist(next);
       runtime.setConfig(next);
       await interaction.reply({
-        content: `บันทึกแล้ว: เตือน ${next.warningSeconds}s / ปิดไมค์ ${next.muteSeconds}s`,
+        content: `✅ บันทึกแล้ว: เตือน **${next.warningSeconds}s** / ปิดไมค์ **${next.muteSeconds}s**`,
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    // ── Offense + banned words modal ─────────────────────────────────────────
+    if (action === "offense" && interaction.isButton()) {
+      const modal = new ModalBuilder()
+        .setCustomId("setting:offense-modal")
+        .setTitle("⚖️ ตั้งค่าโทษ / คำต้องห้าม")
+        .addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("first")
+              .setLabel("โทษครั้งแรก — ปิดไมค์กี่วินาที")
+              .setStyle(TextInputStyle.Short)
+              .setValue(String(cfg.firstOffenseMuteSeconds))
+              .setRequired(true),
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("repeat")
+              .setLabel("โทษครั้งถัดไป — ปิดไมค์กี่วินาที")
+              .setStyle(TextInputStyle.Short)
+              .setValue(String(cfg.repeatOffenseMuteSeconds))
+              .setRequired(true),
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("words")
+              .setLabel("คำต้องห้าม (คั่นด้วยจุลภาค ',')")
+              .setStyle(TextInputStyle.Paragraph)
+              .setValue((cfg.bannedWords ?? []).join(", "))
+              .setRequired(false),
+          ),
+        );
+      await interaction.showModal(modal);
+      return true;
+    }
+
+    if (id === "setting:offense-modal" && interaction.isModalSubmit()) {
+      const first = Number(interaction.fields.getTextInputValue("first"));
+      const repeat = Number(interaction.fields.getTextInputValue("repeat"));
+      const rawWords = interaction.fields.getTextInputValue("words") || "";
+      if (!Number.isFinite(first) || !Number.isFinite(repeat)) {
+        await interaction.reply({ content: "กรุณากรอกตัวเลขเท่านั้นในช่องโทษ", ephemeral: true });
+        return true;
+      }
+      const words = rawWords
+        .split(",")
+        .map((w) => w.trim())
+        .filter(Boolean);
+      const next = normalize({
+        ...cfg,
+        firstOffenseMuteSeconds: first,
+        repeatOffenseMuteSeconds: repeat,
+        bannedWords: words,
+      });
+      await persist(next);
+      runtime.setConfig(next);
+      const wordsSummary = next.bannedWords.length
+        ? next.bannedWords.map((w) => `\`${w}\``).join(", ")
+        : "_ไม่มี_";
+      await interaction.reply({
+        content: `✅ บันทึกแล้ว:\n• โทษครั้งแรก **${next.firstOffenseMuteSeconds}s** / ครั้งถัดไป **${next.repeatOffenseMuteSeconds}s**\n• คำต้องห้าม: ${wordsSummary}`,
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    // ── Wake alarm modal ─────────────────────────────────────────────────────
+    if (action === "wake" && interaction.isButton()) {
+      const modal = new ModalBuilder()
+        .setCustomId("setting:wake-modal")
+        .setTitle("🔔 ตั้งค่า Wake Alarm")
+        .addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("musicUrl")
+              .setLabel("URL เสียงเพลงปลุก (MP3/OGG, ว่าง = เสียงบี๊ป)")
+              .setStyle(TextInputStyle.Short)
+              .setValue(cfg.wakeMusicUrl || "")
+              .setPlaceholder("https://example.com/music.mp3")
+              .setRequired(false),
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("ttsText")
+              .setLabel("ข้อความที่บอทพูดเพื่อปลุก")
+              .setStyle(TextInputStyle.Short)
+              .setValue(cfg.wakeTtsText || "")
+              .setPlaceholder("ขออนุญาตปลุกนะครับ ตื่นได้แล้วเด้อ")
+              .setRequired(false),
+          ),
+        );
+      await interaction.showModal(modal);
+      return true;
+    }
+
+    if (id === "setting:wake-modal" && interaction.isModalSubmit()) {
+      const musicUrl = interaction.fields.getTextInputValue("musicUrl").trim();
+      const ttsText = interaction.fields.getTextInputValue("ttsText").trim();
+      if (musicUrl && !/^https?:\/\//i.test(musicUrl)) {
+        await interaction.reply({
+          content: "URL เสียงต้องขึ้นต้นด้วย http:// หรือ https://",
+          ephemeral: true,
+        });
+        return true;
+      }
+      const next = normalize({ ...cfg, wakeMusicUrl: musicUrl, wakeTtsText: ttsText });
+      await persist(next);
+      runtime.setConfig(next);
+      await interaction.reply({
+        content: `✅ บันทึกแล้ว:\n• เสียงปลุก: ${next.wakeMusicUrl || "_ใช้บี๊ปเริ่มต้น_"}\n• ข้อความ: "${next.wakeTtsText}"`,
         ephemeral: true,
       });
       return true;
