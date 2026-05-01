@@ -171,31 +171,67 @@ export async function readOwnLog(lines = 100, filter = "") {
   const H = { Authorization: `token ${token}`, Accept: "application/vnd.github+json" };
 
   try {
+    // Fetch up to 5 recent runs — try each until we get readable log content.
+    // GitHub Actions does NOT stream real-time logs for in_progress runs via jobs logs_url.
     const runsRes = await fetch(
-      `https://api.github.com/repos/${repo}/actions/runs?per_page=2`,
+      `https://api.github.com/repos/${repo}/actions/runs?per_page=5`,
       { headers: H, signal: AbortSignal.timeout(TIMEOUT_MS) },
     );
     const runsData = await runsRes.json();
-    const run = (runsData.workflow_runs || [])[0];
-    if (!run) return { error: "No runs found" };
+    const allRuns = runsData.workflow_runs || [];
+    if (!allRuns.length) return { error: "No runs found" };
 
-    const jobsRes = await fetch(
-      `https://api.github.com/repos/${repo}/actions/runs/${run.id}/jobs`,
-      { headers: H, signal: AbortSignal.timeout(TIMEOUT_MS) },
-    );
-    const jobsData = await jobsRes.json();
-    const job = (jobsData.jobs || [])[0];
-    if (!job) return { error: "No jobs found" };
+    for (const run of allRuns.slice(0, 3)) {
+      const isActive = run.status === "in_progress" || run.status === "queued";
 
-    const logRes = await fetch(job.logs_url, {
-      headers: H, signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    if (!logRes.ok) return { error: `Log fetch failed: ${logRes.status}` };
+      const jobsRes = await fetch(
+        `https://api.github.com/repos/${repo}/actions/runs/${run.id}/jobs`,
+        { headers: H, signal: AbortSignal.timeout(TIMEOUT_MS) },
+      );
+      const jobsData = await jobsRes.json();
+      const job = (jobsData.jobs || [])[0];
+      if (!job) continue;
 
-    const raw = await logRes.text();
-    let logLines = raw.split("\n").filter(l => !filter || l.toLowerCase().includes(filter.toLowerCase()));
-    logLines = logLines.slice(-Math.min(lines, 300));
-    return { run_id: run.id, job: job.name, lines: logLines };
+      // Try to download the log text (follows redirect for completed runs)
+      let raw = "";
+      try {
+        const logRes = await fetch(job.logs_url, {
+          headers: H,
+          redirect: "follow",
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+        if (logRes.ok) raw = await logRes.text();
+      } catch {}
+
+      const allLines = raw.split("\n");
+      const hasContent = allLines.some(l => l.trim().length > 5);
+
+      if (hasContent) {
+        let logLines = allLines.filter(l => !filter || l.toLowerCase().includes(filter.toLowerCase()));
+        logLines = logLines.slice(-Math.min(lines, 300));
+        return {
+          run_id: run.id,
+          run_status: run.status,
+          job: job.name,
+          is_current_run: isActive,
+          lines: logLines,
+          note: isActive ? "run กำลังทำงานอยู่ — log อาจไม่สมบูรณ์" : undefined,
+        };
+      }
+
+      // Active run with no readable logs → tell the AI clearly
+      if (isActive) {
+        return {
+          run_id: run.id,
+          run_status: "in_progress",
+          job: job.name,
+          lines: [],
+          note: "GitHub Actions ไม่ส่ง real-time log ผ่าน API นี้สำหรับ run ที่กำลังรัน — ลองใช้ read_own_source เพื่อดูโค้ด หรือรอให้ run เสร็จก่อนค่อยดู log",
+        };
+      }
+    }
+
+    return { error: "ไม่พบ log ที่อ่านได้ในขณะนี้" };
   } catch (err) {
     return { error: err?.message || "readOwnLog failed" };
   }
