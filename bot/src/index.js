@@ -2451,6 +2451,83 @@ async function handleVisionReply(msg, triggerReason, media) {
   }
 }
 
+// ─── Real-time AI thinking embed ─────────────────────────────────────────────
+const TOOL_LABEL = {
+  // Web / OpenClaw
+  web_search:       "🔍 ค้นหาเว็บ",
+  fetch_url:        "📄 เปิด URL",
+  wikipedia:        "📚 Wikipedia",
+  get_weather:      "🌤️ ดูอากาศ",
+  run_code:         "💻 รันโค้ด",
+  deploy_webpage:   "🌐 Deploy เว็บ",
+  read_own_log:     "📋 อ่าน Log",
+  read_own_source:  "📁 อ่านซอร์ส",
+  write_own_source: "✍️ แก้โค้ด + Repush",
+  // Discord tools
+  voice_mute:        "🔇 ปิดไมค์",
+  voice_unmute:      "🎙️ เปิดไมค์",
+  voice_disconnect:  "🚪 เตะออก",
+  voice_move:        "🚀 ย้ายห้อง",
+  voice_mute_many:   "🔇 ปิดไมค์หลายคน",
+  voice_unmute_many: "🎙️ เปิดไมค์หลายคน",
+  set_timer:         "⏱️ ตั้งตัวจับเวลา",
+  set_alarm:         "⏰ ตั้งปลุก",
+  list_timers:       "📋 ดูตัวจับเวลา",
+  cancel_timer:      "❌ ยกเลิกตัวจับเวลา",
+  ban_user:          "🔨 แบน",
+  kick_user:         "👢 เตะ",
+  timeout_user:      "🕐 Timeout",
+  mute_user_for:     "🔇 ปิดไมค์ชั่วคราว",
+  send_dm:           "✉️ ส่ง DM",
+  lock_channel:      "🔒 ล็อคห้อง",
+  set_slowmode:      "🐢 Slowmode",
+  create_thread:     "🧵 สร้าง Thread",
+  resolve_user:      "🔎 หาข้อมูล User",
+  resolve_channel:   "🔎 หาข้อมูล Channel",
+  get_server_info:   "📊 ดู Server Info",
+  send_message:      "💬 ส่งข้อความ",
+  bulk_delete_messages: "🗑️ ลบข้อความ",
+  set_self_disconnect: "😴 Sleep Mode",
+  get_recent_messages: "💬 ดูประวัติแชท",
+};
+
+function buildThinkingEmbed(steps, startedAt) {
+  const elapsed = Math.round((Date.now() - startedAt) / 1000);
+  const lines = steps.map((s, i) => {
+    const label = TOOL_LABEL[s.tool] || `🔧 ${s.tool}`;
+    const isLast = i === steps.length - 1;
+    const icon = isLast ? "🔄" : "✅";
+    const preview = s.preview ? ` \`${s.preview}\`` : "";
+    return `${icon} **${label}**${preview}`;
+  });
+  return new EmbedBuilder()
+    .setColor(0x6366f1)
+    .setTitle("🤖 กำลังคิด...")
+    .setDescription(lines.join("\n") || "_เริ่มประมวลผล..._")
+    .setFooter({ text: `⏱️ ผ่านไป ${elapsed}s · OpenClaw AI Agent` });
+}
+
+// Simple arg preview for common tools (safe for Discord display)
+function toolArgPreview(toolName, args) {
+  if (!args || typeof args !== "object") return "";
+  switch (toolName) {
+    case "web_search":    return (args.query || "").slice(0, 40);
+    case "fetch_url":     return (args.url || "").slice(0, 40);
+    case "wikipedia":     return (args.topic || "").slice(0, 40);
+    case "get_weather":   return args.city || "";
+    case "run_code":      return args.language || "";
+    case "deploy_webpage":return args.filename || "";
+    case "read_own_source": return args.filepath || "";
+    case "write_own_source": return args.filepath || "";
+    case "read_own_log":  return args.filter ? `filter: ${args.filter}` : `${args.lines || 100} lines`;
+    case "voice_mute": case "voice_unmute": case "voice_disconnect": return "";
+    case "send_dm":       return "";
+    case "resolve_user":  return args.query || "";
+    case "resolve_channel": return args.query || "";
+    default: return "";
+  }
+}
+
 async function handleAgentOrChatReply(msg, triggerReason) {
   const author = msg.author;
   const channel = msg.channel;
@@ -2488,9 +2565,25 @@ async function handleAgentOrChatReply(msg, triggerReason) {
   let attemptedAgent = false;
   if (isAdmin(member)) {
     attemptedAgent = true;
+    // Real-time thinking display
+    let thinkingMsg = null;
+    const thinkingSteps = [];
+    const thinkingStartedAt = Date.now();
+    const onToolCall = async (toolName, args) => {
+      thinkingSteps.push({ tool: toolName, preview: toolArgPreview(toolName, args) });
+      const embed = buildThinkingEmbed(thinkingSteps, thinkingStartedAt);
+      try {
+        if (!thinkingMsg) {
+          thinkingMsg = await channel.send({ embeds: [embed] });
+        } else {
+          await thinkingMsg.edit({ embeds: [embed] });
+        }
+      } catch {}
+    };
     try {
       const result = await runAgent({
         userPrompt,
+        onToolCall,
         ctx: {
           guild,
           channel,
@@ -2509,6 +2602,11 @@ async function handleAgentOrChatReply(msg, triggerReason) {
           })),
         },
       });
+      // Delete thinking embed and show final answer
+      if (thinkingMsg) {
+        await thinkingMsg.delete().catch(() => {});
+        thinkingMsg = null;
+      }
       const trimmed = (result || "").trim();
       if (trimmed) {
         await safeReply(msg, trimmed);
@@ -2516,6 +2614,7 @@ async function handleAgentOrChatReply(msg, triggerReason) {
       }
       console.warn("[agent] returned empty — falling through to plain chat");
     } catch (err) {
+      if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
       console.warn("[agent] failed:", err?.message?.slice(0, 200));
     }
   }
