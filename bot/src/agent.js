@@ -2471,19 +2471,23 @@ export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
 
   const snapshot = await buildServerSnapshot(guild);
 
-  // Format recent chat (oldest → newest) so the agent has context for
-  // pronouns / continuations like "ทำอีกครั้ง", "คนเดิม", "ห้องเดิม".
+  // Format recent chat — keep to last 10 to reduce agent token count.
+  // Fewer messages = smaller payload = avoids 413 tokens_limit_reached on GitHub Models.
   let chatBlock = "";
   if (Array.isArray(chatHistory) && chatHistory.length) {
     const lines = chatHistory
-      .slice(-25)
+      .slice(-10)
       .map((m) => {
         const who = m.isBot ? "guard" : (m.author || "user");
         const idTag = !m.isBot && m.authorId ? ` (id: ${m.authorId})` : "";
-        return `${who}${idTag}: ${(m.content || "").slice(0, 400)}`;
+        return `${who}${idTag}: ${(m.content || "").slice(0, 300)}`;
       })
-      .join("\n");
-    chatBlock = `=== RECENT CHAT (this channel, oldest first) ===\n${lines}\n\n`;
+      .join("
+");
+    chatBlock = `=== RECENT CHAT (this channel, oldest first) ===
+${lines}
+
+`;
   }
 
   const messages = [
