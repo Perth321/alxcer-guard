@@ -116,8 +116,9 @@ export async function runCode(language, code, stdin = "") {
 
 // ─── deploy_webpage ────────────────────────────────────────────────────────────
 export async function deployWebpage(filename, html, description = "") {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) return { error: "GITHUB_TOKEN not available — cannot deploy" };
+  // GH_PAT has gist scope; GITHUB_TOKEN (Actions auto-token) cannot create Gists
+  const token = process.env.GH_PAT || process.env.GITHUB_TOKEN;
+  if (!token) return { error: "GH_PAT not set — cannot create Gist. Add GH_PAT secret to repo." };
 
   const fname = /\.html?$/i.test(filename) ? filename : `${filename}.html`;
 
