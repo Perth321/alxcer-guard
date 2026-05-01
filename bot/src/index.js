@@ -2569,19 +2569,18 @@ async function handleAgentOrChatReply(msg, triggerReason) {
   let attemptedAgent = false;
   if (isAdmin(member)) {
     attemptedAgent = true;
-    // Real-time thinking display
-    let thinkingMsg = null;
+    // Real-time thinking display — send embed immediately so user sees it from the start
     const thinkingSteps = [];
     const thinkingStartedAt = Date.now();
+    let thinkingMsg = null;
+    try {
+      thinkingMsg = await channel.send({ embeds: [buildThinkingEmbed([], thinkingStartedAt)] });
+    } catch {}
     const onToolCall = async (toolName, args) => {
       thinkingSteps.push({ tool: toolName, preview: toolArgPreview(toolName, args) });
-      const embed = buildThinkingEmbed(thinkingSteps, thinkingStartedAt);
+      if (!thinkingMsg) return; // send failed earlier, skip silently
       try {
-        if (!thinkingMsg) {
-          thinkingMsg = await channel.send({ embeds: [embed] });
-        } else {
-          await thinkingMsg.edit({ embeds: [embed] });
-        }
+        await thinkingMsg.edit({ embeds: [buildThinkingEmbed(thinkingSteps, thinkingStartedAt)] });
       } catch {}
     };
     try {
@@ -2629,7 +2628,21 @@ async function handleAgentOrChatReply(msg, triggerReason) {
       }
       console.warn("[agent] returned empty — falling through to plain chat");
     } catch (err) {
-      if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
+      if (thinkingMsg) {
+        try {
+          const errSteps = thinkingSteps.length
+            ? thinkingSteps.map(s => `✅ ${TOOL_LABEL[s.tool] || s.tool}`).join("\n")
+            : "_เริ่มประมวลผลแล้ว แต่ยังไม่ได้ใช้ tool_";
+          const elapsed = Math.round((Date.now() - thinkingStartedAt) / 1000);
+          await thinkingMsg.edit({
+            embeds: [new EmbedBuilder()
+              .setColor(0xef4444)
+              .setTitle("❌ OpenClaw เจอปัญหา")
+              .setDescription(errSteps)
+              .setFooter({ text: `ล้มเหลวหลัง ${elapsed}s · ${(err?.message || "unknown").slice(0, 80)}` })],
+          }).catch(() => {});
+        } catch {}
+      }
       console.warn("[agent] failed:", err?.message?.slice(0, 200));
     }
   }
