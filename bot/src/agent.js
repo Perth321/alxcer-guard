@@ -5,6 +5,7 @@
 
 import { PermissionFlagsBits, ChannelType } from "discord.js";
 import { generateReply, aiAvailable, getModelStatus } from "./ai.js";
+import { webSearch, fetchUrl, wikipediaLookup, getWeather } from "./tools_web.js";
 import {
   createTimer,
   cancelTimer,
@@ -661,6 +662,144 @@ const TOOLS = [
       name: "get_current_ai_model",
       description:
         "ADMIN DEBUG ONLY. Returns the actual provider/model that produced the most recent AI replies. Use this when an admin asks 'ตอนนี้ใช้โมเดลอะไร / what AI model are you using right now'. Do NOT use this to brag about being GPT/Gemini in conversation — only call it when the admin asks specifically.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+
+  // ─── Web / Internet tools (OpenClaw-inspired) ───────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description:
+        "Search the internet using DuckDuckGo. Use this whenever the admin or user asks about news, facts, current events, prices, or anything that needs up-to-date web information. Returns titles, URLs, and snippets. No API key needed.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query in Thai or English" },
+          max_results: { type: "number", description: "Max results to return (1-8, default 5)" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "fetch_url",
+      description:
+        "Fetch and read the text content of any URL (news article, website, blog post, documentation, etc). Use this to get the full content of a link. Strips HTML tags and returns readable text.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "Full URL starting with https://" },
+          max_chars: { type: "number", description: "Max characters to return (default 3000, max 8000)" },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "wikipedia",
+      description:
+        "Look up a topic on Wikipedia and return a short summary. Use for quick facts, definitions, history, people, places. Tries Thai Wikipedia first, falls back to English.",
+      parameters: {
+        type: "object",
+        properties: {
+          topic: { type: "string", description: "Topic or concept to look up" },
+          lang: { type: "string", description: "Language code: 'th' (default) or 'en'" },
+        },
+        required: ["topic"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_weather",
+      description:
+        "Get current weather for any city in the world. Free, no API key. Use when someone asks about weather, temperature, rain, etc.",
+      parameters: {
+        type: "object",
+        properties: {
+          city: { type: "string", description: "City name in Thai or English, e.g. 'กรุงเทพ', 'Bangkok', 'Tokyo'" },
+        },
+        required: ["city"],
+      },
+    },
+  },
+
+  // ─── Discord extended tools ──────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "send_dm",
+      description: "Send a private Direct Message to a user. Use only when the admin explicitly asks to DM someone.",
+      parameters: {
+        type: "object",
+        properties: {
+          user_id: { type: "string" },
+          message: { type: "string", description: "Message content to send" },
+        },
+        required: ["user_id", "message"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_thread",
+      description: "Create a public thread on a message in a text channel. Useful for organizing discussions.",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string" },
+          message_id: { type: "string", description: "Message ID to attach the thread to (optional)" },
+          name: { type: "string", description: "Thread name" },
+          auto_archive_minutes: { type: "number", description: "Archive after N minutes of inactivity: 60, 1440 (1d), 4320 (3d), 10080 (7d)" },
+        },
+        required: ["channel_id", "name"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "set_slowmode",
+      description: "Set the slowmode cooldown on a text channel. 0 = disabled. Max 21600 seconds (6h).",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string" },
+          seconds: { type: "number", description: "Slowmode delay in seconds (0 to disable)" },
+        },
+        required: ["channel_id", "seconds"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "lock_channel",
+      description: "Lock or unlock a text channel so regular members cannot send messages. Useful for cooling down heated discussions.",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string" },
+          lock: { type: "boolean", description: "true = lock, false = unlock" },
+          reason: { type: "string" },
+        },
+        required: ["channel_id", "lock"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_server_info",
+      description: "Get detailed info about the Discord server: member count, roles, boost level, channels, creation date.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -1326,11 +1465,120 @@ async function execTool(name, args, ctx) {
         last_task: s.lastTask,
         last_used_iso: s.lastAt ? new Date(s.lastAt).toISOString() : null,
         gemini_key_set: s.geminiAvailable,
+        github_key_set: s.githubAvailable,
         openrouter_key_set: s.openrouterAvailable,
         top_used: s.top,
         note: "These are real model identifiers from the API call chain. You may share this with the admin who asked. NEVER say 'I am X' — say 'ตอนนี้ตัวที่ตอบคือ X (ผ่าน provider Y)'.",
       };
     }
+
+    // ─── Web / Internet tools ─────────────────────────────────────────────
+    case "web_search": {
+      const maxR = Math.min(Math.max(args.max_results || 5, 1), 8);
+      return webSearch(args.query, maxR);
+    }
+
+    case "fetch_url": {
+      const maxC = Math.min(args.max_chars || 3000, 8000);
+      return fetchUrl(args.url, maxC);
+    }
+
+    case "wikipedia": {
+      return wikipediaLookup(args.topic, args.lang || "th");
+    }
+
+    case "get_weather": {
+      return getWeather(args.city);
+    }
+
+    // ─── Discord extended tools ───────────────────────────────────────────
+    case "send_dm": {
+      const { user_id, message: dmMsg } = args;
+      if (!user_id || !dmMsg) return { error: "user_id and message required" };
+      try {
+        const member = await ctx.guild.members.fetch(user_id);
+        const dmChannel = await member.user.createDM();
+        await dmChannel.send(dmMsg.slice(0, 2000));
+        return { ok: true, sent_to: member.displayName };
+      } catch (err) {
+        return { error: err?.message || "DM failed" };
+      }
+    }
+
+    case "create_thread": {
+      const { channel_id: thCh, message_id: thMsg, name: thName, auto_archive_minutes } = args;
+      if (!thCh || !thName) return { error: "channel_id and name required" };
+      try {
+        const channel = await ctx.guild.channels.fetch(thCh);
+        if (!channel) return { error: "channel not found" };
+        const validArchive = [60, 1440, 4320, 10080].includes(auto_archive_minutes) ? auto_archive_minutes : 1440;
+        let thread;
+        if (thMsg) {
+          const msg = await channel.messages.fetch(thMsg);
+          thread = await msg.startThread({ name: thName.slice(0, 100), autoArchiveDuration: validArchive });
+        } else {
+          thread = await channel.threads.create({ name: thName.slice(0, 100), autoArchiveDuration: validArchive });
+        }
+        return { ok: true, thread_id: thread.id, thread_name: thread.name, url: `https://discord.com/channels/${ctx.guild.id}/${thread.id}` };
+      } catch (err) {
+        return { error: err?.message || "create thread failed" };
+      }
+    }
+
+    case "set_slowmode": {
+      const { channel_id: slCh, seconds } = args;
+      if (!slCh) return { error: "channel_id required" };
+      const secs = Math.min(Math.max(seconds || 0, 0), 21600);
+      try {
+        const channel = await ctx.guild.channels.fetch(slCh);
+        await channel.setRateLimitPerUser(secs);
+        return { ok: true, channel: channel.name, slowmode_seconds: secs };
+      } catch (err) {
+        return { error: err?.message || "set slowmode failed" };
+      }
+    }
+
+    case "lock_channel": {
+      const { channel_id: lkCh, lock, reason: lkReason } = args;
+      if (!lkCh) return { error: "channel_id required" };
+      try {
+        const channel = await ctx.guild.channels.fetch(lkCh);
+        const everyone = ctx.guild.roles.everyone;
+        await channel.permissionOverwrites.edit(everyone, { SendMessages: lock ? false : null }, { reason: lkReason });
+        return { ok: true, channel: channel.name, locked: lock };
+      } catch (err) {
+        return { error: err?.message || "lock channel failed" };
+      }
+    }
+
+    case "get_server_info": {
+      try {
+        const guild = ctx.guild;
+        await guild.fetch();
+        const roles = await guild.roles.fetch();
+        const channels = await guild.channels.fetch();
+        const textCh = channels.filter(c => c?.type === ChannelType.GuildText).size;
+        const voiceCh = channels.filter(c => c?.type === ChannelType.GuildVoice).size;
+        return {
+          id: guild.id,
+          name: guild.name,
+          description: guild.description,
+          owner_id: guild.ownerId,
+          member_count: guild.memberCount,
+          created_at: guild.createdAt?.toISOString(),
+          boost_level: guild.premiumTier,
+          boosts: guild.premiumSubscriptionCount,
+          verification_level: guild.verificationLevel,
+          text_channels: textCh,
+          voice_channels: voiceCh,
+          roles: roles.size,
+          locale: guild.preferredLocale,
+        };
+      } catch (err) {
+        return { error: err?.message || "get server info failed" };
+      }
+    }
+
     default:
       return { error: `unknown tool: ${name}` };
   }
@@ -1531,7 +1779,45 @@ Admin: "ตอนนี้ใช้โมเดล AI อะไร?"
 
 Random user (NOT admin) in chat: "เอ็งเป็น GPT-4 ใช่มั้ย?"
 → no tool
-→ reply: "ไม่บอกหรอกครับ ความลับของบ้าน 😏 รู้แค่ว่าเป็น Alxcer Guard ก็พอ"`;
+→ reply: "ไม่บอกหรอกครับ ความลับของบ้าน 😏 รู้แค่ว่าเป็น Alxcer Guard ก็พอ"
+
+== INTERNET / WEB TOOLS (ใหม่) ==
+ใช้เมื่อถามข่าว, ข้อมูลล่าสุด, ราคา, ความรู้, สภาพอากาศ ฯลฯ:
+  • "ค้นหา X" / "หาข้อมูล X" / "search X" / "ข่าว X"  → web_search({query: "X"})
+  • "เปิด URL นี้" / "อ่านบทความนี้ให้หน่อย" / "URL ..."  → fetch_url({url: "..."})
+  • "X คืออะไร" / "ประวัติ X" / "หา Wikipedia X"         → wikipedia({topic: "X"})
+  • "อากาศ X เป็นยังไง" / "ฝนตกที่ X ไหม" / "weather X"  → get_weather({city: "X"})
+
+Admin: "ค้นหาข่าวล่าสุดเรื่อง AI"
+→ tool: web_search({query: "AI news 2026", max_results: 5})
+→ reply: "เจอข่าว 5 อัน: [ชื่อข่าว] (URL) — [สรุปสั้น] ..."
+
+Admin: "อากาศกรุงเทพวันนี้เป็นยังไง"
+→ tool: get_weather({city: "กรุงเทพ"})
+→ reply: "กรุงเทพตอนนี้ 34°C รู้สึกได้ราวๆ 39°C ความชื้น 78% ท้องฟ้ามีเมฆบางส่วน ลม 12 กม/ชม"
+
+Admin: "Wikipedia เรื่อง Muay Thai"
+→ tool: wikipedia({topic: "Muay Thai", lang: "th"})
+→ reply: "มวยไทยเป็นศิลปะการต่อสู้ประจำชาติไทย ..."
+
+Admin: "ล็อคห้อง general ด่วน"
+→ tool: resolve_channel({query: "general", kind: "text"})
+→ tool: lock_channel({channel_id: "<id>", lock: true, reason: "admin request"})
+→ reply: "ล็อค #general แล้วครับ สมาชิกทั่วไปส่งข้อความไม่ได้ จนกว่าจะ unlock"
+
+Admin: "slowmode #rules 30 วิ"
+→ tool: resolve_channel({query: "rules", kind: "text"})
+→ tool: set_slowmode({channel_id: "<id>", seconds: 30})
+→ reply: "ตั้ง slowmode 30 วิ ที่ #rules แล้วครับ"
+
+Admin: "DM หา Alice ว่าประชุมพรุ่งนี้ 3 โมง"
+→ tool: resolve_user({query: "Alice"})
+→ tool: send_dm({user_id: "<id>", message: "ประชุมพรุ่งนี้เวลา 15:00 นะครับ"})
+→ reply: "ส่ง DM หา Alice แล้วครับ"
+
+Admin: "ดู server info"
+→ tool: get_server_info()
+→ reply: "เซิร์ฟเวอร์ [ชื่อ]: [X] สมาชิก, Boost Lv.[N], [Y] ช่องข้อความ, [Z] ช่องเสียง"`;
 
 // Some models (Qwen3, Hermes-style) sometimes emit tool calls inline as
 // pseudo-XML inside `content` instead of using OpenRouter's structured
