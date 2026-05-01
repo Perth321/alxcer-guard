@@ -137,8 +137,8 @@
     },
     "1395239010720415898": {
       "chat": {
-        "count": 1,
-        "lastAt": 1777624188722,
+        "count": 2,
+        "lastAt": 1777624670714,
         "history": [
           {
             "at": 1777624188722,
@@ -148,6 +148,15 @@
             "excerpt": "มึงโดนกูแน่การ๋ด",
             "action": "timeout_failed",
             "source": "ai"
+          },
+          {
+            "at": 1777624670714,
+            "severity": 7,
+            "matched": "ดอกทอง",
+            "reason": "ใช้คำต้องห้าม: \"ดอกทอง\"",
+            "excerpt": "ดอกทองได้ไหม56655555",
+            "action": "timeout_failed",
+            "source": "local"
           }
         ]
       }
