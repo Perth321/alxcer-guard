@@ -179,3 +179,43 @@ export async function getWeather(city) {
     return { error: err?.message || "weather fetch failed" };
   }
 }
+
+// ─── Guard AI Hotel Search ─────────────────────────────────────────────────────
+// เรียก Guard AI API (OpenStreetMap + Overpass) ดึงโรงแรมจริงในพื้นที่
+// ส่งคืนรายชื่อโรงแรมแต่ละแห่งพร้อมลิงก์ Booking.com / Agoda + preview URL
+export async function searchHotels({ location, budget, checkin, checkout, guests = 1 }) {
+  const GUARD_API = "https://5e5b3295-7d1f-409b-9af8-893239a0279c-00-26fjm9tfs1kvk.spock.replit.dev/api/agent/chat";
+  try {
+    const parts = [`หาโรงแรม${location}`];
+    if (budget) parts.push(`งบ ${budget} บาท`);
+    if (guests && guests > 1) parts.push(`สำหรับ ${guests} คน`);
+    if (checkin && checkout) parts.push(`วันที่ ${checkin} ถึง ${checkout}`);
+    const message = parts.join(" ");
+
+    const res = await fetch(GUARD_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) throw new Error(`Guard API HTTP ${res.status}`);
+    const json = await res.json();
+    return {
+      ok: true,
+      reply: json.reply || "ไม่พบข้อมูลโรงแรม",
+      tools_used: json.tools_used || [],
+    };
+  } catch (err) {
+    // Fallback: return direct booking links
+    const today = new Date().toISOString().split("T")[0];
+    const tom = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+    const cin = checkin || today;
+    const cout = checkout || tom;
+    const bookingUrl = `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(location)}&checkin=${cin}&checkout=${cout}&group_adults=${guests || 1}&price_filter_currencycode=THB${budget ? `&price_to=${budget}` : ""}`;
+    return {
+      ok: false,
+      error: err?.message,
+      reply: `🏨 ค้นหาโรงแรมที่ ${location}:\n📌 Booking.com: ${bookingUrl}`,
+    };
+  }
+}
