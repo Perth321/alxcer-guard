@@ -1427,6 +1427,14 @@ async function attachReceiver(connection, channel) {
   audioBuffers.clear();
   receiverProven = false;
 
+  // Reset silence timers so users aren't unfairly muted after a reconnect
+  const _attachNow = Date.now();
+  for (const _s of userState.values()) {
+    _s.lastSpoke = _attachNow;
+    _s.warned = false;
+    _s.silentTicks = 0;
+  }
+
   receiver.speaking.on("start", (userId) => {
     lastSpeakingFlag = Date.now();
     const s = userState.get(userId);
@@ -1835,6 +1843,24 @@ async function restorePendingWordBans(guild) {
   }
 }
 
+
+async function clearStaleInactivityMutes(guild, channel) {
+  if (!channel) return;
+  for (const [, member] of channel.members) {
+    if (config.ignoreBots && member.user.bot) continue;
+    if (!member.voice.serverMute) continue;
+    if (wordBanTimers.has(member.id)) continue; // wordban mutes are intentional
+    try {
+      await member.voice.setMute(false, "Alxcer Guard: stale inactivity mute from previous run");
+      console.log(`[startup] cleared stale mute for ${member.user.tag}`);
+      const s = userState.get(member.id);
+      if (s) { s.muted = false; s.warned = false; s.lastSpoke = Date.now(); s.silentTicks = 0; }
+    } catch (err) {
+      console.warn(`[startup] unmute failed for ${member.user.tag}: ${err?.message}`);
+    }
+  }
+}
+
 function formatDuration(seconds) {
   if (seconds >= 3600) {
     const h = Math.round(seconds / 3600);
@@ -1952,6 +1978,13 @@ client.once(Events.ClientReady, async (c) => {
     await guild.members.fetch().catch(() => {});
     await reevaluateAndJoin(guild);
     await restorePendingWordBans(guild);
+    // Clear any stale server-mutes left over from a previous bot run
+    try {
+      const _ch = currentChannelId ? guild.channels.cache.get(currentChannelId) : null;
+      if (_ch) await clearStaleInactivityMutes(guild, _ch);
+    } catch (err) {
+      console.warn("[startup] clearStaleInactivityMutes failed:", err?.message);
+    }
     // Pre-load recent chat into the in-memory buffer so the agent has real
     // context on its very first interaction after a 6h restart.
     seedRecentFromGuild(guild).catch((err) =>
