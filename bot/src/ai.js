@@ -37,15 +37,15 @@ const GEMINI_VISION_MODELS = (process.env.GEMINI_VISION_MODELS ||
 // ✅ GitHub Models = MOST RELIABLE (GITHUB_TOKEN always injected by Actions)
 // Primary pool — no rate limit burnout risk, always available
 const GH_CHAT_MODELS = (process.env.GH_CHAT_MODELS ||
-  "openai/gpt-4.1-mini,meta/llama-3.3-70b-instruct,microsoft/phi-4,openai/gpt-4.1,openai/gpt-4o"
+  "gpt-4.1-mini,Llama-3.3-70B-Instruct,Phi-4,gpt-4.1,gpt-4o"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GH_FAST_MODELS = (process.env.GH_FAST_MODELS ||
-  "openai/gpt-4.1-mini,meta/llama-3.3-70b-instruct,microsoft/phi-4-mini-instruct,openai/gpt-4.1-nano"
+  "gpt-4.1-mini,Llama-3.3-70B-Instruct,Phi-4-mini-instruct,gpt-4.1-nano"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GH_VISION_MODELS = (process.env.GH_VISION_MODELS ||
-  "meta/llama-3.2-90b-vision-instruct,microsoft/phi-4-multimodal-instruct,openai/gpt-4o"
+  "Llama-3.2-90B-Vision-Instruct,Phi-4-multimodal-instruct,gpt-4o"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 // ─── OpenRouter fallback chains ───────────────────────────────────────────────
@@ -85,7 +85,7 @@ function _buildInterleavedChain(geminiList, ghList, orList, keepOpenAILast = tru
   // Move gpt-oss-* and gpt-4* GitHub models to the end to protect persona.
   const isOpenAIBrand = (entry) =>
     (entry.p === "openrouter" && /gpt-oss/i.test(entry.m)) ||
-    (entry.p === "github"     && /openai\//i.test(entry.m));
+    (entry.p === "github"     && /^gpt-/i.test(entry.m));
   const front = chain.filter(e => !isOpenAIBrand(e));
   const back  = chain.filter(e =>  isOpenAIBrand(e));
   return [...front, ...back];
