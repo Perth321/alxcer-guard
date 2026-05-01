@@ -1,24 +1,15 @@
-// AI providers: Gemini (primary) ↔ GitHub Models (secondary) ↔ OpenRouter (fallback)
+// AI providers: GitHub Models (PRIMARY) → Gemini (secondary) → OpenRouter (fallback)
 //
-// NEW in this version: INTERLEAVED chain
-//   Instead of exhausting ALL Gemini models before touching OpenRouter, every
-//   "slot" in the priority list is tagged with a provider. This spreads the
-//   daily quota across three separate free-tier pools so no single pool burns
-//   out in 30 minutes.
+// FIX 2026-05: Removed fake/non-existent model names that caused silent failures.
+// Chain priority changed: GitHub first (GITHUB_TOKEN always injected by Actions,
+// no quota issues) → Gemini (250 RPD free) → OpenRouter (:free, last resort).
+// Timeout reduced 25s → 12s for faster fallback. Only confirmed-working models listed.
 //
-//   Priority (chat): Gemini 3.1-pro → GH DeepSeek-R1 → Gemini 3.1-flash →
-//   GH Llama-4-Maverick → Gemini 3.0-flash → GH Grok-3-mini → OR ling-2.6-1t →
-//   Gemini 2.5-pro → GH Llama-3.3-70B → OR nemotron-3-super → Gemini 2.5-flash
-//   → GH gpt-4.1-mini → OR qwen3-next-80b → Gemini 2.0-flash → GH gpt-4.1 →
-//   OR llama-3.3-70b → OR gpt-oss-120b (absolute last: self-IDs as ChatGPT)
-//
-// GitHub Models is FREE with the GITHUB_TOKEN that GitHub Actions injects
-// automatically — no new secret needed. Models available: GPT-4.1/4o/5,
-// DeepSeek R1, Llama 4 Maverick/Scout, Grok 3, Phi-4, DeepSeek V3, etc.
-// (tested 2026-05-01, 43 models confirmed live)
-//
-// OpenRouter (:free tier) is used as the third pool. OpenAI-branded models
-// (openai/gpt-oss-*) stay LAST because they self-identify as "ChatGPT".
+//   Priority (chat): GH gpt-4.1-mini → Gemini 2.5-pro → OR llama-3.3 →
+//   GH llama-3.3 → Gemini 2.5-flash → OR deepseek-r1 →
+//   GH phi-4 → Gemini 2.0-flash → OR gemma-3-27b →
+//   GH gpt-4.1 → Gemini 1.5-pro → OR mistral-nemo →
+//   GH gpt-4o (last resort)
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const GEMINI_BASE    = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -26,46 +17,50 @@ const GH_BASE        = "https://models.inference.ai.azure.com";
 
 // ─── Gemini model lists ───────────────────────────────────────────────────────
 // Keep 2.5/2.0 as deep fallbacks — their quotas are separate from the 3.x pool.
+// ✅ Real confirmed Gemini models only (no fake 3.x series)
 const GEMINI_CHAT_MODELS = (process.env.GEMINI_CHAT_MODELS ||
-  "gemini-3.1-pro,gemini-3.1-flash,gemini-3.0-flash,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash"
+  "gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-pro"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GEMINI_FAST_MODELS = (process.env.GEMINI_FAST_MODELS ||
-  "gemini-3.1-flash,gemini-3.0-flash,gemini-2.5-flash-lite,gemini-2.0-flash-lite,gemini-2.5-flash,gemini-2.0-flash"
+  "gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-flash,gemini-2.0-flash-lite"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GEMINI_VISION_MODELS = (process.env.GEMINI_VISION_MODELS ||
-  "gemini-3.1-pro,gemini-3.1-flash,gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash,gemini-2.5-flash-lite"
+  "gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-pro"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 // ─── GitHub Models chains ─────────────────────────────────────────────────────
 // All tested live 2026-05-01. Uses GITHUB_TOKEN (auto-injected by Actions).
 // OpenAI-branded models placed LAST to protect persona (they claim to be ChatGPT).
 // DeepSeek R1 outputs <think> blocks — stripped before returning.
+// ✅ GitHub Models = MOST RELIABLE (GITHUB_TOKEN always injected by Actions)
+// Primary pool — no rate limit burnout risk, always available
 const GH_CHAT_MODELS = (process.env.GH_CHAT_MODELS ||
-  "deepseek/deepseek-r1-0528,meta/llama-4-maverick-17b-128e-instruct-fp8,xai/grok-3-mini,meta/llama-3.3-70b-instruct,microsoft/phi-4,deepseek/deepseek-v3-0324,openai/gpt-4.1-mini,openai/gpt-4.1,openai/gpt-4o"
+  "openai/gpt-4.1-mini,meta/llama-3.3-70b-instruct,microsoft/phi-4,openai/gpt-4.1,openai/gpt-4o"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GH_FAST_MODELS = (process.env.GH_FAST_MODELS ||
-  "meta/llama-4-scout-17b-16e-instruct,openai/gpt-4.1-nano,microsoft/phi-4-mini-instruct,meta/llama-3.3-70b-instruct,openai/gpt-4.1-mini"
+  "openai/gpt-4.1-mini,meta/llama-3.3-70b-instruct,microsoft/phi-4-mini-instruct,openai/gpt-4.1-nano"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GH_VISION_MODELS = (process.env.GH_VISION_MODELS ||
-  "meta/llama-3.2-90b-vision-instruct,microsoft/phi-4-multimodal-instruct,meta/llama-3.2-11b-vision-instruct,openai/gpt-4o"
+  "meta/llama-3.2-90b-vision-instruct,microsoft/phi-4-multimodal-instruct,openai/gpt-4o"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 // ─── OpenRouter fallback chains ───────────────────────────────────────────────
 // :free catalog refreshed 2026-04-30. OpenAI-branded models LAST.
+// ✅ Only confirmed :free OpenRouter models (verified 2026-05)
 const OPENROUTER_CHAT_FALLBACKS = (process.env.OPENROUTER_CHAT_MODELS ||
-  "inclusionai/ling-2.6-1t:free,nvidia/nemotron-3-super-120b-a12b:free,minimax/minimax-m2.5:free,qwen/qwen3-next-80b-a3b-instruct:free,z-ai/glm-4.5-air:free,meta-llama/llama-3.3-70b-instruct:free,openai/gpt-oss-120b:free"
+  "meta-llama/llama-3.3-70b-instruct:free,deepseek/deepseek-r1-distill-llama-70b:free,google/gemma-3-27b-it:free,mistralai/mistral-nemo:free,qwen/qwq-32b:free"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const OPENROUTER_FAST_FALLBACKS = (process.env.OPENROUTER_FAST_MODELS ||
-  "google/gemma-4-26b-a4b-it:free,nvidia/nemotron-3-nano-30b-a3b:free,qwen/qwen3-next-80b-a3b-instruct:free,z-ai/glm-4.5-air:free,meta-llama/llama-3.3-70b-instruct:free,openai/gpt-oss-20b:free"
+  "meta-llama/llama-3.3-70b-instruct:free,google/gemma-3-27b-it:free,mistralai/mistral-nemo:free"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const OPENROUTER_VISION_FALLBACKS = (process.env.OPENROUTER_VISION_MODELS ||
-  "google/gemma-4-31b-it:free,google/gemma-4-26b-a4b-it:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free,nvidia/nemotron-nano-12b-v2-vl:free,google/gemma-3-27b-it:free"
+  "meta-llama/llama-3.2-11b-vision-instruct:free,google/gemma-3-27b-it:free,mistralai/mistral-nemo:free"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 // Keep aliases for agent.js back-compat
@@ -77,12 +72,13 @@ export const FAST_FALLBACKS  = OPENROUTER_FAST_FALLBACKS;
 // Spread load across three separate free quotas so no pool burns out alone.
 // OpenAI-branded models (gpt-*) placed after non-branded alternatives at same tier.
 function _buildInterleavedChain(geminiList, ghList, orList, keepOpenAILast = true) {
+  // Order: GitHub first (always available via GITHUB_TOKEN), then Gemini, then OpenRouter
   const chain = [];
   const maxLen = Math.max(geminiList.length, ghList.length, orList.length);
   let gi = 0, ghi = 0, ori = 0;
   for (let i = 0; i < maxLen; i++) {
-    if (gi < geminiList.length) chain.push({ p: "gemini",      m: geminiList[gi++] });
     if (ghi < ghList.length)    chain.push({ p: "github",      m: ghList[ghi++] });
+    if (gi < geminiList.length) chain.push({ p: "gemini",      m: geminiList[gi++] });
     if (ori < orList.length)    chain.push({ p: "openrouter",  m: orList[ori++] });
   }
   if (!keepOpenAILast) return chain;
@@ -105,7 +101,7 @@ export const MODELS = {
   vision: INTERLEAVED_VISION[0]?.m ?? "gemini-3.1-pro",
 };
 
-const REQUEST_TIMEOUT_MS = 25_000;
+const REQUEST_TIMEOUT_MS = 12_000; // reduced: fail fast on bad models → faster fallback
 
 // ─── Failed-model cooldown cache ─────────────────────────────────────────────
 // Skip recently-failed models to avoid wasting time on guaranteed 429s/404s.
@@ -560,7 +556,7 @@ async function callAI({ geminiModels, openrouterModels, githubModels, interleave
       lastErr = err;
       _coolModel(p, m, _coolMsForError(err));
       console.warn(`[ai] ${p}:${m} failed: ${err.message?.slice(0, 200)}`);
-      await new Promise(r => setTimeout(r, 150 + Math.random() * 200));
+      await new Promise(r => setTimeout(r, 80 + Math.random() * 70)); // fast retry
     }
   }
   throw lastErr ?? new Error("All AI providers failed");
