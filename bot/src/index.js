@@ -2491,20 +2491,24 @@ const TOOL_LABEL = {
   get_recent_messages: "💬 ดูประวัติแชท",
 };
 
-function buildThinkingEmbed(steps, startedAt) {
+function buildThinkingEmbed(steps, startedAt, { done = false, modelTag = "" } = {}) {
   const elapsed = Math.round((Date.now() - startedAt) / 1000);
   const lines = steps.map((s, i) => {
     const label = TOOL_LABEL[s.tool] || `🔧 ${s.tool}`;
     const isLast = i === steps.length - 1;
-    const icon = isLast ? "🔄" : "✅";
+    const icon = done ? "✅" : (isLast ? "🔄" : "✅");
     const preview = s.preview ? ` \`${s.preview}\`` : "";
     return `${icon} **${label}**${preview}`;
   });
+  const modelPart = modelTag ? ` · ${modelTag}` : "";
+  const footerText = done
+    ? `✅ เสร็จแล้ว ใช้เวลา ${elapsed}s${modelPart}`
+    : `⏱️ ผ่านไป ${elapsed}s · OpenClaw AI Agent`;
   return new EmbedBuilder()
-    .setColor(0x6366f1)
-    .setTitle("🤖 กำลังคิด...")
+    .setColor(done ? 0x22c55e : 0x6366f1)
+    .setTitle(done ? "✅ OpenClaw เสร็จแล้ว" : "🤖 กำลังคิด...")
     .setDescription(lines.join("\n") || "_เริ่มประมวลผล..._")
-    .setFooter({ text: `⏱️ ผ่านไป ${elapsed}s · OpenClaw AI Agent` });
+    .setFooter({ text: footerText });
 }
 
 // Simple arg preview for common tools (safe for Discord display)
@@ -2602,14 +2606,25 @@ async function handleAgentOrChatReply(msg, triggerReason) {
           })),
         },
       });
-      // Delete thinking embed and show final answer
+      // Show thinking embed as "done" — keep it visible so user can see what was done
+      let modelTag = "";
+      try {
+        const ms = getModelStatus();
+        if (ms.lastProvider && ms.lastModel) {
+          const shortModel = ms.lastModel.replace(/^\.+\//, "").replace(/-preview-\d+-\d+$/, "");
+          modelTag = `${ms.lastProvider}: ${shortModel}`;
+        }
+      } catch {}
       if (thinkingMsg) {
-        await thinkingMsg.delete().catch(() => {});
+        const doneEmbed = buildThinkingEmbed(thinkingSteps, thinkingStartedAt, { done: true, modelTag });
+        await thinkingMsg.edit({ embeds: [doneEmbed] }).catch(() => {});
         thinkingMsg = null;
       }
       const trimmed = (result || "").trim();
+      // If no tools were used (no embed), append model info as a small text suffix
+      const engineSuffix = thinkingSteps.length === 0 && modelTag ? `\n-# 🤖 ${modelTag}` : "";
       if (trimmed) {
-        await safeReply(msg, trimmed);
+        await safeReply(msg, trimmed + engineSuffix);
         return;
       }
       console.warn("[agent] returned empty — falling through to plain chat");
