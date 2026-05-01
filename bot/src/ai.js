@@ -82,10 +82,13 @@ function _buildInterleavedChain(geminiList, ghList, orList, keepOpenAILast = tru
     if (ori < orList.length)    chain.push({ p: "openrouter",  m: orList[ori++] });
   }
   if (!keepOpenAILast) return chain;
-  // Move gpt-oss-* and gpt-4* GitHub models to the end to protect persona.
+  // Push gpt-4o (large OpenAI model) to the very end to protect persona.
+  // gpt-4.1-mini and gpt-4.1 stay in their natural position — PERSONA already
+  // hard-codes the identity rules and the admin model-reveal path, so persona
+  // leakage from those models is not a real risk.
   const isOpenAIBrand = (entry) =>
     (entry.p === "openrouter" && /gpt-oss/i.test(entry.m)) ||
-    (entry.p === "github"     && /^gpt-/i.test(entry.m));
+    (entry.p === "github"     && /^gpt-4o$/i.test(entry.m)); // only gpt-4o is last-resort
   const front = chain.filter(e => !isOpenAIBrand(e));
   const back  = chain.filter(e =>  isOpenAIBrand(e));
   return [...front, ...back];
