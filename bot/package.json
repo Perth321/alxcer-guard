@@ -19,7 +19,8 @@
     "opentype.js": "^1.3.5",
     "opusscript": "^0.0.8",
     "prism-media": "^1.3.5",
-    "sharp": "^0.33.5"
+    "sharp": "^0.33.5",
+    "xlsx": "^0.18.5"
   },
   "optionalDependencies": {
     "@discordjs/opus": "^0.10.0",

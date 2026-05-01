@@ -903,6 +903,146 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "get_audit_log",
+      description: "ดูประวัติ action ของคนในเซิฟเวอร์ (kick, ban, ลบข้อความ, แก้ channel, เปลี่ยน role ฯลฯ)",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: { type: "number", description: "จำนวน entries (default 20, max 100)" },
+          action: { type: "string", description: "kick | ban | unban | channel_create | channel_delete | channel_update | message_delete | member_update | role_create | role_delete | invite_create" },
+          user_id: { type: "string", description: "Filter by executor user ID (optional)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_channel",
+      description: "สร้าง text หรือ voice channel ใน Discord server",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "ชื่อ channel (ใส่ emoji ได้ เช่น 💬┃general)" },
+          type: { type: "string", description: "text | voice (default: text)" },
+          category_name: { type: "string", description: "ชื่อ category ที่จะใส่ (fuzzy match, optional)" },
+          topic: { type: "string", description: "Topic / คำอธิบาย channel" },
+          nsfw: { type: "boolean" },
+          slowmode: { type: "number", description: "Slowmode วินาที (0 = ปิด)" },
+        },
+        required: ["name"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit_channel",
+      description: "แก้ไข channel (ชื่อ, topic, slowmode, nsfw)",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string" },
+          name: { type: "string" },
+          topic: { type: "string" },
+          slowmode: { type: "number", description: "Slowmode วินาที" },
+          nsfw: { type: "boolean" },
+        },
+        required: ["channel_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_channel",
+      description: "ลบ channel ออกจาก server",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["channel_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_category",
+      description: "สร้าง category (folder) ใน Discord server",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          position: { type: "number", description: "Position (0 = top)" },
+        },
+        required: ["name"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "rebuild_server",
+      description: "จัดระเบียบ Discord server ใหม่ให้สวยงาม สร้าง categories + channels ตาม theme ที่เลือก",
+      parameters: {
+        type: "object",
+        properties: {
+          theme: { type: "string", description: "gaming | community | professional | anime | minimal" },
+          dry_run: { type: "boolean", description: "true = แสดงแผนแต่ไม่สร้างจริง" },
+        },
+        required: ["theme"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_file",
+      description: "สร้างไฟล์ (txt, csv, json, html, md, py, js ฯลฯ) และส่งเป็น attachment ใน Discord",
+      parameters: {
+        type: "object",
+        properties: {
+          filename: { type: "string", description: "ชื่อไฟล์พร้อมนามสกุล เช่น report.txt, data.csv" },
+          content: { type: "string", description: "เนื้อหาของไฟล์ทั้งหมด" },
+          channel_id: { type: "string", description: "Channel ID ที่จะส่ง (optional)" },
+          message: { type: "string", description: "ข้อความประกอบ" },
+        },
+        required: ["filename", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_excel",
+      description: "สร้างไฟล์ Excel (.xlsx) จากข้อมูลที่ระบุ แล้วส่งเป็น attachment ใน Discord",
+      parameters: {
+        type: "object",
+        properties: {
+          filename: { type: "string", description: "ชื่อไฟล์ เช่น report.xlsx" },
+          sheets: {
+            type: "array",
+            description: "Array ของ sheet [{name, data}] โดย data คือ 2D array (rows × cols)",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                data: { type: "array", description: "[[header1, header2], [row1col1, row1col2], ...]" },
+              },
+            },
+          },
+          channel_id: { type: "string" },
+        },
+        required: ["filename", "sheets"],
+      },
+    },
+  },
 ];
 
 // ===== Resolution helpers =====
@@ -1706,6 +1846,241 @@ async function execTool(name, args, ctx) {
       const { filepath, content, commit_message } = args;
       if (!filepath || !content) return { error: "filepath and content required" };
       return writeOwnSource(filepath, content, commit_message || "");
+    }
+
+    case "get_audit_log": {
+      const auditLimit = Math.min(100, Math.max(1, Number(args.limit) || 20));
+      const ACTION_MAP = {
+        kick: 20, ban: 22, unban: 23,
+        channel_create: 10, channel_update: 11, channel_delete: 12,
+        message_delete: 72, member_update: 24,
+        role_create: 30, role_delete: 32,
+        invite_create: 40, invite_delete: 42,
+        webhook_create: 50,
+      };
+      const fetchOpts = { limit: auditLimit };
+      if (args.action && ACTION_MAP[args.action] !== undefined) fetchOpts.type = ACTION_MAP[args.action];
+      if (args.user_id) {
+        try { fetchOpts.user = await guild.members.fetch(args.user_id).then((m) => m.user); } catch {}
+      }
+      const auditLog = await guild.fetchAuditLogs(fetchOpts);
+      const entries = [...auditLog.entries.values()].map((e) => ({
+        action: e.actionType,
+        executor: e.executor ? { id: e.executor.id, tag: e.executor.tag } : null,
+        target: e.target
+          ? { id: e.target.id ?? e.target, name: e.target.tag ?? e.target.name ?? String(e.target) }
+          : null,
+        reason: e.reason || null,
+        time: new Date(e.createdTimestamp).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
+        changes: (e.changes || []).slice(0, 6).map((c) => ({ key: c.key, from: c.old, to: c.new })),
+      }));
+      return { entries, count: entries.length };
+    }
+
+    case "create_channel": {
+      const chType =
+        (args.type || "text").toLowerCase() === "voice" ? ChannelType.GuildVoice : ChannelType.GuildText;
+      const createOpts = { name: args.name, type: chType };
+      if (args.topic && chType === ChannelType.GuildText) createOpts.topic = args.topic;
+      if (args.nsfw) createOpts.nsfw = true;
+      if (args.slowmode !== undefined) createOpts.rateLimitPerUser = Number(args.slowmode);
+      if (args.category_name) {
+        const cats = await guild.channels.fetch();
+        const cat = [...cats.values()].find(
+          (c) => c?.type === ChannelType.GuildCategory &&
+            c.name.toLowerCase().includes(args.category_name.toLowerCase()),
+        );
+        if (cat) createOpts.parent = cat.id;
+      }
+      const created = await guild.channels.create(createOpts);
+      return { ok: true, channel_id: created.id, name: created.name, type: args.type || "text" };
+    }
+
+    case "edit_channel": {
+      const editCh = await guild.channels.fetch(args.channel_id);
+      if (!editCh) return { error: "channel not found" };
+      const editData = {};
+      if (args.name !== undefined) editData.name = args.name;
+      if (args.topic !== undefined) editData.topic = args.topic;
+      if (args.slowmode !== undefined) editData.rateLimitPerUser = Number(args.slowmode);
+      if (args.nsfw !== undefined) editData.nsfw = Boolean(args.nsfw);
+      await editCh.edit(editData);
+      return { ok: true, channel_id: editCh.id, name: editCh.name };
+    }
+
+    case "delete_channel": {
+      const delCh = await guild.channels.fetch(args.channel_id);
+      if (!delCh) return { error: "channel not found" };
+      const delName = delCh.name;
+      await delCh.delete(args.reason || "Admin request");
+      return { ok: true, deleted: delName };
+    }
+
+    case "create_category": {
+      const newCat = await guild.channels.create({
+        name: args.name,
+        type: ChannelType.GuildCategory,
+        ...(args.position !== undefined ? { position: Number(args.position) } : {}),
+      });
+      return { ok: true, category_id: newCat.id, name: newCat.name };
+    }
+
+    case "rebuild_server": {
+      const THEMES = {
+        gaming: [
+          { cat: "📢 ประกาศ", chs: [
+            { n: "📣┃announcements", t: "ประกาศสำคัญจากทีมแอดมิน" },
+            { n: "📋┃กฎเซิฟ", t: "กฎกติกาของเซิฟเวอร์" },
+            { n: "🎉┃events", t: "กิจกรรมพิเศษ" },
+          ]},
+          { cat: "💬 ทั่วไป", chs: [
+            { n: "💬┃general", t: "คุยทั่วไปได้เลย" },
+            { n: "🤖┃bot-commands", t: "สั่งบอทที่นี่" },
+            { n: "😂┃memes", t: "มีม เฮฮา" },
+            { n: "📷┃media", t: "รูปภาพ วิดีโอ" },
+          ]},
+          { cat: "🎮 Gaming", chs: [
+            { n: "🎮┃gaming-chat", t: "คุยเรื่องเกมทุกอย่าง" },
+            { n: "🏆┃achievements", t: "โชว์ความสำเร็จในเกม" },
+            { n: "🎯┃lfg", t: "หาปาร์ตี้ หาคนเล่น" },
+            { n: "🛒┃trading", t: "ซื้อขายของในเกม" },
+          ]},
+          { cat: "🔊 Voice Channels", chs: [
+            { n: "🎮 Gaming Zone", v: true },
+            { n: "🎵 Chill Zone", v: true },
+            { n: "📞 Meeting Room", v: true },
+            { n: "🎤 Karaoke", v: true },
+          ]},
+          { cat: "⚙️ Admin Zone", chs: [
+            { n: "📋┃mod-log", t: "Log การ mod" },
+            { n: "🔧┃admin-only", t: "สำหรับแอดมินเท่านั้น" },
+          ]},
+        ],
+        community: [
+          { cat: "📌 Information", chs: [
+            { n: "👋┃welcome", t: "ยินดีต้อนรับ!" },
+            { n: "📋┃rules", t: "กฎของเรา" },
+            { n: "📢┃announcements", t: "ข่าวสาร อัปเดต" },
+          ]},
+          { cat: "💬 Community", chs: [
+            { n: "👥┃introductions", t: "แนะนำตัว" },
+            { n: "💬┃general", t: "คุยทุกเรื่อง" },
+            { n: "💡┃ideas", t: "ไอเดีย ข้อเสนอแนะ" },
+            { n: "🎨┃showcase", t: "โชว์ผลงาน" },
+          ]},
+          { cat: "🎵 Entertainment", chs: [
+            { n: "🎵┃music", t: "แชร์เพลง" },
+            { n: "📷┃photos", t: "รูปภาพสวยๆ" },
+          ]},
+          { cat: "🔊 Voice", chs: [
+            { n: "🗣️ Community Lounge", v: true },
+            { n: "🎵 Music Room", v: true },
+            { n: "🎮 Gaming Room", v: true },
+          ]},
+        ],
+        professional: [
+          { cat: "📌 General", chs: [
+            { n: "📢┃announcements", t: "ประกาศสำคัญ" },
+            { n: "💬┃general", t: "พูดคุยทั่วไป" },
+          ]},
+          { cat: "💼 Workspace", chs: [
+            { n: "📋┃projects", t: "อัปเดตสถานะโปรเจกต์" },
+            { n: "💡┃brainstorm", t: "ระดมสมอง" },
+            { n: "✅┃completed", t: "งานที่เสร็จแล้ว" },
+            { n: "🐛┃bugs", t: "รายงาน bugs" },
+          ]},
+          { cat: "📞 Meeting Rooms", chs: [
+            { n: "📞 Main Conference", v: true },
+            { n: "🎧 Team Alpha", v: true },
+            { n: "🎧 Team Beta", v: true },
+          ]},
+        ],
+        anime: [
+          { cat: "🌸 Welcome", chs: [
+            { n: "🌸┃ยินดีต้อนรับ", t: "ようこそ！ยินดีต้อนรับ" },
+            { n: "📋┃กฎ", t: "กฎกติกา" },
+            { n: "📢┃ประกาศ", t: "ประกาศสำคัญ" },
+          ]},
+          { cat: "💬 ห้องคุย", chs: [
+            { n: "💬┃ห้องทั่วไป", t: "คุยได้ทุกเรื่อง" },
+            { n: "🎌┃อนิเมะ", t: "คุยเรื่องอนิเมะ" },
+            { n: "📚┃มังงะ", t: "มังงะ ไลท์โนเวล" },
+            { n: "🎮┃เกม", t: "เกมอนิเมะ gacha" },
+            { n: "🖼️┃fanart", t: "แชร์ fanart สวยๆ" },
+          ]},
+          { cat: "🔊 Voice", chs: [
+            { n: "🌸 Sakura Lounge", v: true },
+            { n: "⚔️ Battle Room", v: true },
+            { n: "🎵 Weeb Music", v: true },
+          ]},
+        ],
+        minimal: [
+          { cat: "general", chs: [{ n: "announcements" }, { n: "chat" }, { n: "bot" }]},
+          { cat: "media", chs: [{ n: "photos" }, { n: "links" }]},
+          { cat: "voice", chs: [{ n: "lounge", v: true }, { n: "work", v: true }]},
+          { cat: "staff", chs: [{ n: "admin" }, { n: "logs" }]},
+        ],
+      };
+      const plan = THEMES[(args.theme || "gaming").toLowerCase()] || THEMES.gaming;
+      if (args.dry_run) {
+        const preview = plan.map((p) =>
+          "**" + p.cat + "**\n" + p.chs.map((c) => "  " + (c.v ? "🔊 " : "💬 ") + c.n).join("\n"),
+        ).join("\n\n");
+        return { dry_run: true, preview, total_channels: plan.reduce((s, p) => s + p.chs.length, 0) };
+      }
+      const result = { categories: [], channels: [] };
+      for (const section of plan) {
+        const catCh = await guild.channels.create({ name: section.cat, type: ChannelType.GuildCategory });
+        result.categories.push(section.cat);
+        for (const ch of section.chs) {
+          await guild.channels.create({
+            name: ch.n,
+            type: ch.v ? ChannelType.GuildVoice : ChannelType.GuildText,
+            parent: catCh.id,
+            ...(ch.t ? { topic: ch.t } : {}),
+          });
+          result.channels.push(ch.n);
+          await new Promise((r) => setTimeout(r, 700));
+        }
+      }
+      return { ok: true, theme: args.theme, ...result };
+    }
+
+    case "create_file": {
+      const { AttachmentBuilder } = await import("discord.js");
+      const targetCh = args.channel_id
+        ? await guild.channels.fetch(args.channel_id).catch(() => channel)
+        : channel;
+      const buf = Buffer.from(args.content ?? "", "utf8");
+      const att = new AttachmentBuilder(buf, { name: args.filename });
+      const EXT_EMOJI = { txt: "📄", csv: "📊", json: "🗂️", html: "🌐", md: "📝", py: "🐍", js: "📜", ts: "📘", sh: "⚙️", sql: "🗄️" };
+      const ext = (args.filename.split(".").pop() || "").toLowerCase();
+      const emoji = EXT_EMOJI[ext] || "📎";
+      await targetCh.send({ content: args.message || `${emoji} ไฟล์ **${args.filename}** ครับ`, files: [att] });
+      return { ok: true, filename: args.filename, bytes: buf.length };
+    }
+
+    case "create_excel": {
+      try {
+        const XLSX = (await import("xlsx")).default;
+        const wb = XLSX.utils.book_new();
+        for (const sheet of args.sheets || []) {
+          const ws = XLSX.utils.aoa_to_sheet(sheet.data || [[]]);
+          XLSX.utils.book_append_sheet(wb, ws, (sheet.name || "Sheet1").slice(0, 31));
+        }
+        const rawBuf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+        const buf = Buffer.isBuffer(rawBuf) ? rawBuf : Buffer.from(rawBuf);
+        const fname = args.filename.endsWith(".xlsx") ? args.filename : args.filename + ".xlsx";
+        const { AttachmentBuilder } = await import("discord.js");
+        const att = new AttachmentBuilder(buf, { name: fname });
+        const targetCh = args.channel_id
+          ? await guild.channels.fetch(args.channel_id).catch(() => channel)
+          : channel;
+        await targetCh.send({ content: `📊 Excel **${fname}** พร้อมแล้วครับ`, files: [att] });
+        return { ok: true, filename: fname, sheets: (args.sheets || []).length };
+      } catch (e) {
+        return { error: `create_excel: ${e?.message}` };
+      }
     }
 
     default:
