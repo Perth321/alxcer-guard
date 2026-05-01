@@ -27,7 +27,22 @@
       "lastOffenseAt": 1777570456485,
       "muteUntil": 0,
       "lastWord": "หี",
-      "lastSource": "voice"
+      "lastSource": "voice",
+      "chat": {
+        "count": 1,
+        "lastAt": 1777621310835,
+        "history": [
+          {
+            "at": 1777621310835,
+            "severity": 10,
+            "matched": "ไอ้เชี้ย",
+            "reason": "มีคำด่าและคำหยาบ",
+            "excerpt": "ไอ้เชี้ยยยยยยย62625252552525",
+            "action": "timeout_failed",
+            "source": "ai"
+          }
+        ]
+      }
     },
     "967120879689551873": {
       "count": 2,
