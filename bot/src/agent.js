@@ -1895,19 +1895,62 @@ async function execTool(name, args, ctx) {
 
     // ─── Web / Internet tools ─────────────────────────────────────────────
     case "search_hotels": {
-      const hotelResult = await searchHotels({
+      const hotelData = searchHotels({
         location: args.location,
         budget: args.budget,
         checkin: args.checkin,
         checkout: args.checkout,
         guests: args.guests || 1,
       });
-      return hotelResult;
+
+      // Screenshot our own preview page — no CAPTCHA, renders hotel cards perfectly
+      const shotResult = await screenshotUrl(hotelData.preview_url, {
+        width: 1200,
+        height: 900,
+        fullPage: true,
+      });
+
+      if (shotResult?.imageBuffer) {
+        const { AttachmentBuilder } = await import("discord.js");
+        const att = new AttachmentBuilder(shotResult.imageBuffer, { name: "hotels.png" });
+        const targetCh = ctx.msg?.channel || channel;
+        if (targetCh) {
+          const m = hotelData.meta || {};
+          const loc = args.location || m.location || "?";
+          const parts = [`🏨 **โรงแรมที่พักใน${loc}**`];
+          if (m.checkin && m.checkout) parts.push(`📅 ${m.checkin} → ${m.checkout}`);
+          if (m.budget) parts.push(`💰 ≤${Number(m.budget).toLocaleString()} บาท`);
+          if (m.guests > 1) parts.push(`👤 ${m.guests} คน`);
+          await targetCh.send({ content: parts.join("  "), files: [att] });
+        }
+        return { ok: true, action: "hotel_preview_screenshot_sent", location: args.location };
+      }
+
+      // Fallback if screenshot fails
+      return { ok: true, preview_url: hotelData.preview_url, reply: `🏨 ดูรายชื่อโรงแรม: ${hotelData.preview_url}` };
     }
 
     case "web_search": {
       const maxR = Math.min(Math.max(args.max_results || 5, 1), 8);
-      return webSearch(args.query, maxR);
+      const searchText = await webSearch(args.query, maxR);
+
+      // Screenshot Guard AI search preview page and send as image
+      const previewUrl = `https://5e5b3295-7d1f-409b-9af8-893239a0279c-00-26fjm9tfs1kvk.spock.replit.dev/api/search/preview?q=${encodeURIComponent(args.query)}`;
+      try {
+        const shotResult = await screenshotUrl(previewUrl, { width: 900, height: 700, fullPage: true });
+        if (shotResult?.imageBuffer) {
+          const { AttachmentBuilder } = await import("discord.js");
+          const att = new AttachmentBuilder(shotResult.imageBuffer, { name: "search.png" });
+          const targetCh = ctx.msg?.channel || channel;
+          if (targetCh) {
+            await targetCh.send({
+              content: `🔍 **ผลค้นหา: "${args.query}"**`,
+              files: [att],
+            });
+          }
+        }
+      } catch (_) { /* screenshot failed, fall through to text */ }
+      return searchText;
     }
 
     case "fetch_url": {
