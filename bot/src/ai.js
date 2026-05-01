@@ -140,9 +140,44 @@ export const LLM_CHAT_CHAIN = [
   { p: "github",     m: "gpt-4o" },             // last resort
 ];
 
-  chat:   INTERLEAVED_CHAT[0]?.m   ?? "gemini-3.1-pro",
-  fast:   INTERLEAVED_FAST[0]?.m   ?? "gemini-3.1-flash",
-  vision: INTERLEAVED_VISION[0]?.m ?? "gemini-3.1-pro",
+
+// ─── INTERLEAVED provider chains ─────────────────────────────────────────────
+// Interleave Gemini + GitHub + OpenRouter for maximum resilience across quotas.
+const INTERLEAVED_CHAT = [
+  { p: "github",     m: "gpt-4.1-mini" },
+  { p: "gemini",     m: "gemini-2.5-flash" },
+  { p: "openrouter", m: "meta-llama/llama-3.3-70b-instruct:free" },
+  { p: "github",     m: "gpt-4.1" },
+  { p: "gemini",     m: "gemini-2.0-flash" },
+  { p: "openrouter", m: "google/gemma-3-27b-it:free" },
+  { p: "github",     m: "Llama-3.3-70B-Instruct" },
+  { p: "gemini",     m: "gemini-2.5-pro" },
+  { p: "openrouter", m: "mistralai/mistral-nemo:free" },
+  { p: "github",     m: "gpt-4o" },
+];
+
+const INTERLEAVED_FAST = [
+  { p: "github",     m: "gpt-4.1-mini" },
+  { p: "gemini",     m: "gemini-2.0-flash" },
+  { p: "openrouter", m: "meta-llama/llama-3.1-8b-instruct:free" },
+  { p: "github",     m: "Phi-4-mini-instruct" },
+  { p: "gemini",     m: "gemini-2.5-flash" },
+  { p: "openrouter", m: "google/gemma-3-12b-it:free" },
+  { p: "github",     m: "Phi-4" },
+];
+
+const INTERLEAVED_VISION = [
+  { p: "gemini",     m: "gemini-2.5-flash" },
+  { p: "github",     m: "Llama-3.2-90B-Vision-Instruct" },
+  { p: "gemini",     m: "gemini-2.0-flash" },
+  { p: "github",     m: "gpt-4o" },
+  { p: "openrouter", m: "meta-llama/llama-3.2-11b-vision-instruct:free" },
+];
+
+export const MODEL_NAMES = {
+  chat:   INTERLEAVED_CHAT[0]?.m   ?? "gemini-2.0-flash",
+  fast:   INTERLEAVED_FAST[0]?.m   ?? "gemini-2.0-flash",
+  vision: INTERLEAVED_VISION[0]?.m ?? "gemini-2.5-flash",
 };
 
 const REQUEST_TIMEOUT_MS = 12_000; // reduced: fail fast on bad models → faster fallback
@@ -189,8 +224,6 @@ function _recordUse(provider, model, task) {
   const key = `${provider}:${model}`;
   _modelStats.counts[key] = (_modelStats.counts[key] || 0) + 1;
   _incDailyCount(provider, model);
-}
-  _modelStats.counts[key] = (_modelStats.counts[key] || 0) + 1;
 }
 
 export function getModelStatus() {
