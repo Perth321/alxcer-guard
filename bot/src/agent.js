@@ -4,7 +4,7 @@
 // names, choose the right tools, chain calls, and report back.
 
 import { PermissionFlagsBits, ChannelType } from "discord.js";
-import { generateReply, aiAvailable, getModelStatus } from "./ai.js";
+import { generateReply, agentChat, aiAvailable, getModelStatus } from "./ai.js";
 import { webSearch, fetchUrl, wikipediaLookup, getWeather } from "./tools_web.js";
 import { runCode, deployWebpage, readOwnLog, readOwnSource, writeOwnSource } from "./tools_openclaw.js";
 import {
@@ -2466,7 +2466,7 @@ function extractTextualToolCalls(content) {
 }
 
 export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
-  if (!aiAvailable()) return "AI ยังไม่พร้อม (OPENROUTER_API_KEY ไม่ได้ตั้ง)";
+  if (!aiAvailable()) return "AI ยังไม่พร้อม — ยังไม่ได้ตั้ง GEMINI_API_KEY, GITHUB_TOKEN หรือ OPENROUTER_API_KEY";
   const { authorTag, authorId, guild, chatHistory } = ctx;
 
   const snapshot = await buildServerSnapshot(guild);
@@ -2488,6 +2488,10 @@ export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
 
   const messages = [
     {
+      role: "system",
+      content: AGENT_SYSTEM,
+    },
+    {
       role: "user",
       content:
         `=== SERVER SNAPSHOT ===\n${JSON.stringify(snapshot)}\n\n` +
@@ -2498,9 +2502,7 @@ export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
   ];
 
   for (let step = 0; step < maxSteps; step++) {
-    const reply = await generateReply({
-      history: messages,
-      systemExtra: AGENT_SYSTEM,
+    const reply = await agentChat(messages, {
       tools: TOOLS,
       max_tokens: 700,
     });
