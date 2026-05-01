@@ -98,6 +98,39 @@ const INTERLEAVED_CHAT   = _buildInterleavedChain(GEMINI_CHAT_MODELS,   GH_CHAT_
 const INTERLEAVED_FAST   = _buildInterleavedChain(GEMINI_FAST_MODELS,   GH_FAST_MODELS,   OPENROUTER_FAST_FALLBACKS);
 const INTERLEAVED_VISION = _buildInterleavedChain(GEMINI_VISION_MODELS,  GH_VISION_MODELS, OPENROUTER_VISION_FALLBACKS);
 
+// ─── TASK-SPECIFIC chains ──────────────────────────────────────────────────────
+// AGENT_CHAIN: models that reliably support structured tool/function calling
+// AND have sufficient context for the full agent payload (~10k tokens).
+// Ordered by: large context → tool reliability → availability.
+// - Gemini 2.5/2.0 flash: 1M context, solid tool support, free quota independent
+// - gpt-4.1-mini/gpt-4.1: GitHub free tier 16k limit — fits agent payload
+// - Llama-3.3-70B on OR: tool support OK, last resort
+// NOTE: gpt-4o is excluded — GitHub free tier caps it at 8k tokens which is
+//   too small for the agent payload (tools + snapshot + history ≈ 9-10k tokens).
+export const AGENT_CHAIN = [
+  { p: gemini,      m: gemini-2.5-flash },
+  { p: gemini,      m: gemini-2.0-flash },
+  { p: github,      m: gpt-4.1-mini },
+  { p: github,      m: gpt-4.1 },
+  { p: gemini,      m: gemini-2.5-pro },
+  { p: openrouter,  m: meta-llama/llama-3.3-70b-instruct:free },
+];
+
+// LLM_CHAT_CHAIN: fast models for plain conversation (no tools, small context OK)
+// No tool schema payload → smaller context → faster, cheaper, more models viable.
+export const LLM_CHAT_CHAIN = [
+  { p: github,      m: gpt-4.1-mini },
+  { p: gemini,      m: gemini-2.0-flash },
+  { p: github,      m: Llama-3.3-70B-Instruct },
+  { p: openrouter,  m: meta-llama/llama-3.3-70b-instruct:free },
+  { p: github,      m: Phi-4 },
+  { p: gemini,      m: gemini-2.5-flash },
+  { p: openrouter,  m: google/gemma-3-27b-it:free },
+  { p: gemini,      m: gemini-1.5-pro },
+  { p: openrouter,  m: mistralai/mistral-nemo:free },
+  { p: github,      m: gpt-4.1 },
+];
+
 export const MODELS = {
   chat:   INTERLEAVED_CHAT[0]?.m   ?? "gemini-3.1-pro",
   fast:   INTERLEAVED_FAST[0]?.m   ?? "gemini-3.1-flash",
@@ -622,6 +655,22 @@ export async function chat(messages, { tools, tool_choice, max_tokens = 500, tem
   });
 }
 
+// agentChat: dedicated function for AI-agent tool-calling steps.
+// Uses AGENT_CHAIN (Gemini 1M context first, then GitHub gpt-4.1-mini/gpt-4.1).
+// Lower temperature → more deterministic tool selection.
+// Does NOT prepend PERSONA — caller is responsible for system message.
+export async function agentChat(messages, { tools, tool_choice, max_tokens = 700, temperature = 0.2 } = {}) {
+  return callAI({
+    interleavedChain: AGENT_CHAIN,
+    messages,
+    tools,
+    tool_choice,
+    max_tokens,
+    temperature,
+    task: "agent",
+  });
+}
+
 export async function moderate(text) {
   const result = await callAI({
     interleavedChain: INTERLEAVED_FAST,
@@ -680,11 +729,15 @@ export async function generateReply({ history, systemExtra, max_tokens = 500, to
     { role: "system", content: PERSONA + (systemExtra ? `\n\n${systemExtra}` : "") },
     ...history,
   ];
+  // Route to the right chain based on whether tools are needed:
+  // • With tools (admin agent path): AGENT_CHAIN — large context, reliable tool calls
+  // • Plain chat (no tools): LLM_CHAT_CHAIN — fast, lightweight, no tool overhead
+  const chain = tools?.length ? AGENT_CHAIN : LLM_CHAT_CHAIN;
   return callAI({
-    interleavedChain: INTERLEAVED_CHAT,
+    interleavedChain: chain,
     messages,
     max_tokens,
-    temperature: 0.7,
+    temperature: tools?.length ? 0.3 : 0.7,
     tools,
     tool_choice,
     task: tools?.length ? "agent" : "chat",
