@@ -79,7 +79,7 @@ import {
   recordOffense,
   formatHumanDuration,
 } from "./moderation.js";
-import { generateReply, generateVisionReply, shouldEngage, aiAvailable, agentChat, getModelStatus } from "./ai.js";
+import { generateReply, generateVisionReply, shouldEngage, aiAvailable, agentChat } from "./ai.js";
 import {
   detectObjects,
   drawBoxes,
@@ -1939,7 +1939,7 @@ async function applyWordBan(guild, userId, word, source, transcript) {
 client.once(Events.ClientReady, async (c) => {
   console.log(`[ready] logged in as ${c.user.tag}`);
 
-  // ─── ทดสอบ AI providers ทันทีหลัง login ──────────────────────────
+  // ─── ทดสอบ AI providers ทันทีหลัง login ─────────────────────────
   try {
     const ms = getModelStatus();
     console.log('[startup] AI keys:', JSON.stringify({
@@ -1949,7 +1949,7 @@ client.once(Events.ClientReady, async (c) => {
     }));
     if (ms.geminiAvailable || ms.githubAvailable || ms.openrouterAvailable) {
       const testReply = await agentChat([
-        { role: 'system', content: 'You are a test bot. Reply with exactly one word.' },
+        { role: 'system', content: 'Reply with one word only.' },
         { role: 'user', content: 'ping' },
       ], { max_tokens: 10 }).catch(err => ({ content: `[fail] ${err?.message?.slice(0, 80)}` }));
       const ms2 = getModelStatus();
