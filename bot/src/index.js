@@ -2651,19 +2651,8 @@ async function handleAgentOrChatReply(msg, triggerReason) {
       console.warn("[agent] returned empty — falling through to plain chat");
     } catch (err) {
       if (thinkingMsg) {
-        try {
-          const errSteps = thinkingSteps.length
-            ? thinkingSteps.map(s => `✅ ${TOOL_LABEL[s.tool] || s.tool}`).join("\n")
-            : "_เริ่มประมวลผลแล้ว แต่ยังไม่ได้ใช้ tool_";
-          const elapsed = Math.round((Date.now() - thinkingStartedAt) / 1000);
-          await thinkingMsg.edit({
-            embeds: [new EmbedBuilder()
-              .setColor(0xef4444)
-              .setTitle("❌ OpenClaw เจอปัญหา")
-              .setDescription(errSteps)
-              .setFooter({ text: `ล้มเหลวหลัง ${elapsed}s · ${(err?.message || "unknown").slice(0, 200)}` })],
-          }).catch(() => {});
-        } catch {}
+        try { await thinkingMsg.delete(); } catch {}
+        thinkingMsg = null;
       }
       console.warn("[agent] failed:", err?.message?.slice(0, 200));
     }
