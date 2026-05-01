@@ -79,7 +79,7 @@ import {
   recordOffense,
   formatHumanDuration,
 } from "./moderation.js";
-import { generateReply, generateVisionReply, shouldEngage, aiAvailable, agentChat, getModelStatus } from "./ai.js";
+import { generateReply, generateVisionReply, shouldEngage, aiAvailable } from "./ai.js";
 import {
   detectObjects,
   drawBoxes,
@@ -102,6 +102,7 @@ import {
   formatClockBangkok,
 } from "./timers.js";
 import { synthesizeThai } from "./tts.js";
+import { getModelStatus } from "./ai.js";
 
 // Force-load every crypto candidate eagerly so @discordjs/voice's lazy loader
 // can pick whichever one is actually available, AND we can see in the boot log
@@ -1938,29 +1939,6 @@ async function applyWordBan(guild, userId, word, source, transcript) {
 client.once(Events.ClientReady, async (c) => {
   console.log(`[ready] logged in as ${c.user.tag}`);
 
-  // ─── ทดสอบ AI providers ทันทีหลัง login ─────────────────────────
-  try {
-    const ms = getModelStatus();
-    console.log('[startup] AI keys:', JSON.stringify({
-      gemini: ms.geminiAvailable,
-      github: ms.githubAvailable,
-      openrouter: ms.openrouterAvailable,
-    }));
-    if (ms.geminiAvailable || ms.githubAvailable || ms.openrouterAvailable) {
-      const testReply = await agentChat([
-        { role: 'system', content: 'Reply with one word only.' },
-        { role: 'user', content: 'ping' },
-      ], { max_tokens: 10 }).catch(err => ({ content: `[fail] ${err?.message?.slice(0, 80)}` }));
-      const ms2 = getModelStatus();
-      console.log(`[startup] AI test — provider=${ms2.lastProvider} model=${ms2.lastModel} reply=${(testReply?.content || '').trim().slice(0, 60)}`);
-    } else {
-      console.warn('[startup] ⚠️ No AI API key found — ระบบ AI จะไม่ทำงาน');
-    }
-  } catch (e) {
-    console.warn('[startup] AI test error:', e?.message?.slice(0, 100));
-  }
-  // ─────────────────────────────────────────────────────────────────
-
   try {
     await registerCommands(client);
   } catch (err) {
@@ -2513,24 +2491,20 @@ const TOOL_LABEL = {
   get_recent_messages: "💬 ดูประวัติแชท",
 };
 
-function buildThinkingEmbed(steps, startedAt, { done = false, modelTag = "" } = {}) {
+function buildThinkingEmbed(steps, startedAt) {
   const elapsed = Math.round((Date.now() - startedAt) / 1000);
   const lines = steps.map((s, i) => {
     const label = TOOL_LABEL[s.tool] || `🔧 ${s.tool}`;
     const isLast = i === steps.length - 1;
-    const icon = done ? "✅" : (isLast ? "🔄" : "✅");
+    const icon = isLast ? "🔄" : "✅";
     const preview = s.preview ? ` \`${s.preview}\`` : "";
     return `${icon} **${label}**${preview}`;
   });
-  const modelPart = modelTag ? ` · ${modelTag}` : "";
-  const footerText = done
-    ? `✅ เสร็จแล้ว ใช้เวลา ${elapsed}s${modelPart}`
-    : `⏱️ ผ่านไป ${elapsed}s · OpenClaw AI Agent`;
   return new EmbedBuilder()
-    .setColor(done ? 0x22c55e : 0x6366f1)
-    .setTitle(done ? "✅ OpenClaw เสร็จแล้ว" : "🤖 กำลังคิด...")
+    .setColor(0x6366f1)
+    .setTitle("🤖 กำลังคิด...")
     .setDescription(lines.join("\n") || "_เริ่มประมวลผล..._")
-    .setFooter({ text: footerText });
+    .setFooter({ text: `⏱️ ผ่านไป ${elapsed}s · OpenClaw AI Agent` });
 }
 
 // Simple arg preview for common tools (safe for Discord display)
@@ -2591,18 +2565,19 @@ async function handleAgentOrChatReply(msg, triggerReason) {
   let attemptedAgent = false;
   if (isAdmin(member)) {
     attemptedAgent = true;
-    // Real-time thinking display — send embed immediately so user sees it from the start
+    // Real-time thinking display
+    let thinkingMsg = null;
     const thinkingSteps = [];
     const thinkingStartedAt = Date.now();
-    let thinkingMsg = null;
-    try {
-      thinkingMsg = await channel.send({ embeds: [buildThinkingEmbed([], thinkingStartedAt)] });
-    } catch {}
     const onToolCall = async (toolName, args) => {
       thinkingSteps.push({ tool: toolName, preview: toolArgPreview(toolName, args) });
-      if (!thinkingMsg) return; // send failed earlier, skip silently
+      const embed = buildThinkingEmbed(thinkingSteps, thinkingStartedAt);
       try {
-        await thinkingMsg.edit({ embeds: [buildThinkingEmbed(thinkingSteps, thinkingStartedAt)] });
+        if (!thinkingMsg) {
+          thinkingMsg = await channel.send({ embeds: [embed] });
+        } else {
+          await thinkingMsg.edit({ embeds: [embed] });
+        }
       } catch {}
     };
     try {
@@ -2616,9 +2591,9 @@ async function handleAgentOrChatReply(msg, triggerReason) {
           authorId: author.id,
           offenses,
           persistOffenses: async () => persistOffenses(),
-          // Pass last 15 messages (agent.js uses at most 10).
-          // Smaller slice keeps the agent payload under GitHub Models token limits.
-          chatHistory: recent.slice(-15).map((m) => ({
+          // Pass the last 50 messages so the agent has rich conversation
+          // memory — references like "ทำอีกที", "คนเดิม", "ห้องเดิม" work.
+          chatHistory: recent.slice(-50).map((m) => ({
             author: m.author,
             authorId: m.authorId,
             content: m.content,
@@ -2627,33 +2602,19 @@ async function handleAgentOrChatReply(msg, triggerReason) {
           })),
         },
       });
-      // Show thinking embed as "done" — keep it visible so user can see what was done
-      let modelTag = "";
-      try {
-        const ms = getModelStatus();
-        if (ms.lastProvider && ms.lastModel) {
-          const shortModel = ms.lastModel.replace(/^\.+\//, "").replace(/-preview-\d+-\d+$/, "");
-          modelTag = `${ms.lastProvider}: ${shortModel}`;
-        }
-      } catch {}
+      // Delete thinking embed and show final answer
       if (thinkingMsg) {
-        const doneEmbed = buildThinkingEmbed(thinkingSteps, thinkingStartedAt, { done: true, modelTag });
-        await thinkingMsg.edit({ embeds: [doneEmbed] }).catch(() => {});
+        await thinkingMsg.delete().catch(() => {});
         thinkingMsg = null;
       }
       const trimmed = (result || "").trim();
-      // If no tools were used (no embed), append model info as a small text suffix
-      const engineSuffix = thinkingSteps.length === 0 && modelTag ? `\n-# 🤖 ${modelTag}` : "";
       if (trimmed) {
-        await safeReply(msg, trimmed + engineSuffix);
+        await safeReply(msg, trimmed);
         return;
       }
       console.warn("[agent] returned empty — falling through to plain chat");
     } catch (err) {
-      if (thinkingMsg) {
-        try { await thinkingMsg.delete(); } catch {}
-        thinkingMsg = null;
-      }
+      if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
       console.warn("[agent] failed:", err?.message?.slice(0, 200));
     }
   }

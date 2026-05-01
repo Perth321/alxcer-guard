@@ -4,7 +4,7 @@
 // names, choose the right tools, chain calls, and report back.
 
 import { PermissionFlagsBits, ChannelType } from "discord.js";
-import { generateReply, agentChat, aiAvailable, getModelStatus } from "./ai.js";
+import { generateReply, aiAvailable, getModelStatus } from "./ai.js";
 import { webSearch, fetchUrl, wikipediaLookup, getWeather } from "./tools_web.js";
 import { runCode, deployWebpage, readOwnLog, readOwnSource, writeOwnSource } from "./tools_openclaw.js";
 import {
@@ -2466,31 +2466,27 @@ function extractTextualToolCalls(content) {
 }
 
 export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
-  if (!aiAvailable()) return "AI ยังไม่พร้อม — ยังไม่ได้ตั้ง GEMINI_API_KEY, GITHUB_TOKEN หรือ OPENROUTER_API_KEY";
+  if (!aiAvailable()) return "AI ยังไม่พร้อม (OPENROUTER_API_KEY ไม่ได้ตั้ง)";
   const { authorTag, authorId, guild, chatHistory } = ctx;
 
   const snapshot = await buildServerSnapshot(guild);
 
-  // Format recent chat — keep to last 10 to reduce agent token count.
-  // Fewer messages = smaller payload = avoids 413 tokens_limit_reached on GitHub Models.
+  // Format recent chat (oldest → newest) so the agent has context for
+  // pronouns / continuations like "ทำอีกครั้ง", "คนเดิม", "ห้องเดิม".
   let chatBlock = "";
   if (Array.isArray(chatHistory) && chatHistory.length) {
     const lines = chatHistory
-      .slice(-10)
+      .slice(-25)
       .map((m) => {
         const who = m.isBot ? "guard" : (m.author || "user");
         const idTag = !m.isBot && m.authorId ? ` (id: ${m.authorId})` : "";
-        return `${who}${idTag}: ${(m.content || "").slice(0, 300)}`;
+        return `${who}${idTag}: ${(m.content || "").slice(0, 400)}`;
       })
       .join("\n");
     chatBlock = `=== RECENT CHAT (this channel, oldest first) ===\n${lines}\n\n`;
   }
 
   const messages = [
-    {
-      role: "system",
-      content: AGENT_SYSTEM,
-    },
     {
       role: "user",
       content:
@@ -2502,7 +2498,9 @@ export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
   ];
 
   for (let step = 0; step < maxSteps; step++) {
-    const reply = await agentChat(messages, {
+    const reply = await generateReply({
+      history: messages,
+      systemExtra: AGENT_SYSTEM,
       tools: TOOLS,
       max_tokens: 700,
     });

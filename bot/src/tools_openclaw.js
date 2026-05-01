@@ -1,124 +1,88 @@
-// tools_openclaw.js — OpenClaw: local code execution + web deployment + self-awareness
-// run_code: executes code directly on the GitHub Actions Ubuntu runner (python3, node,
-//   go, rust, g++, java, ruby, php, bash, perl, lua, etc. — all pre-installed).
-//   No external API needed — runs LOCALLY and RELIABLY.
-// deploy_webpage: creates a GitHub Gist + htmlpreview.github.io URL.
+// tools_openclaw.js — OpenClaw: code execution, web deployment, self-awareness
+// All free, using GITHUB_TOKEN (auto-injected by GitHub Actions) for GitHub ops
+// and Piston API (emkc.org) for sandboxed code execution.
 
-import { exec as _exec } from "child_process";
-import { promisify } from "util";
-import { writeFile, unlink, mkdir, rm } from "fs/promises";
-import { join } from "path";
-import { tmpdir } from "os";
-
-const exec = promisify(_exec);
-const RUN_TIMEOUT_MS = 15_000;
 const TIMEOUT_MS = 30_000;
-const MAX_OUTPUT = 3000; // chars
+const PISTON_BASE = "https://emkc.org/api/v2/piston";
 
-// ─── Language config ──────────────────────────────────────────────────────────
+// ─── Piston language aliases ──────────────────────────────────────────────────
 const LANG_ALIAS = {
-  py: "python", python3: "python", python2: "python",
-  js: "javascript", ts: "typescript", nodejs: "javascript",
-  "c++": "cpp", "c#": "csharp", sh: "bash", shell: "bash",
-  rb: "ruby", rs: "rust", kt: "kotlin", cs: "csharp", golang: "go",
+  py: "python", python3: "python", js: "javascript", ts: "typescript",
+  "c++": "cpp", "c#": "csharp", sh: "bash", shell: "bash", rb: "ruby",
+  rs: "rust", kt: "kotlin", cs: "csharp",
 };
-
-const LANG_EXT = {
-  python: "py", javascript: "js", typescript: "ts", bash: "sh",
-  go: "go", rust: "rs", cpp: "cpp", c: "c", java: "java",
-  php: "php", ruby: "rb", kotlin: "kt", csharp: "cs",
-  perl: "pl", lua: "lua", r: "r", swift: "swift", scala: "scala",
-};
-
-// How to compile/run each language on Ubuntu (GitHub Actions runner)
-const LANG_RUN = {
-  python:     (f, d) => `python3 "${f}"`,
-  javascript: (f, d) => `node "${f}"`,
-  typescript: (f, d) => `npx --yes tsx "${f}" 2>&1 || ts-node --skipProject "${f}"`,
-  bash:       (f, d) => `bash "${f}"`,
-  go:         (f, d) => `cd "${d}" && go run main.go`,
-  rust:       (f, d) => `rustc -o "${d}/out" "${f}" 2>&1 && "${d}/out"`,
-  cpp:        (f, d) => `g++ -O2 -o "${d}/out" "${f}" 2>&1 && "${d}/out"`,
-  c:          (f, d) => `gcc -O2 -o "${d}/out" "${f}" 2>&1 && "${d}/out"`,
-  ruby:       (f, d) => `ruby "${f}"`,
-  php:        (f, d) => `php "${f}"`,
-  perl:       (f, d) => `perl "${f}"`,
-  lua:        (f, d) => `lua5.4 "${f}" 2>/dev/null || lua "${f}"`,
-  r:          (f, d) => `Rscript "${f}"`,
-  // Java: extract class name, compile + run
-  java:       null,
-  // Kotlin: might not be installed
-  kotlin:     (f, d) => `kotlinc "${f}" -include-runtime -d "${d}/out.jar" 2>&1 && java -jar "${d}/out.jar"`,
-  csharp:     (f, d) => `dotnet-script "${f}" 2>&1 || echo 'C# (dotnet-script) not available'`,
-  scala:      (f, d) => `scala "${f}"`,
-};
-
 function normalizeLang(l) {
-  const s = (l || "").toLowerCase().trim().replace(/[^a-z0-9#+]/g, "");
+  const s = (l || "").toLowerCase().trim();
   return LANG_ALIAS[s] || s;
 }
+function langExt(l) {
+  const map = {
+    python: "py", javascript: "js", typescript: "ts", bash: "sh",
+    go: "go", rust: "rs", cpp: "cpp", c: "c", java: "java",
+    php: "php", ruby: "rb", kotlin: "kt", csharp: "cs",
+  };
+  return map[l] || "txt";
+}
 
-// ─── run_code: Execute code LOCALLY on the Actions runner ────────────────────
+// ─── Run code via Piston (free sandboxed execution) ───────────────────────────
 export async function runCode(language, code, stdin = "") {
   const lang = normalizeLang(language);
-  const ext  = LANG_EXT[lang] || "txt";
-  const dir  = join(tmpdir(), "botcode_" + Date.now() + "_" + Math.random().toString(36).slice(2));
-  
   try {
-    await mkdir(dir, { recursive: true });
-    const file = join(dir, "main." + ext);
-    await writeFile(file, code, "utf8");
-    
-    // Build command
-    let cmd;
-    if (lang === "java") {
-      const cls = (code.match(/public\s+class\s+(\w+)/) || [])[1] || "Main";
-      const jf  = join(dir, cls + ".java");
-      await writeFile(jf, code, "utf8");
-      cmd = `javac "${jf}" -d "${dir}" 2>&1 && java -cp "${dir}" ${cls}`;
-    } else if (LANG_RUN[lang]) {
-      cmd = LANG_RUN[lang](file, dir);
-    } else {
-      return { error: `Language '${lang}' is not supported. Supported: python, javascript, typescript, bash, go, rust, cpp, c, ruby, php, perl, lua, r, java, kotlin` };
-    }
-    
-    // Prepend stdin if provided
-    if (stdin) {
-      const escaped = stdin.replace(/'/g, "'\''");
-      cmd = `echo '${escaped}' | (${cmd})`;
-    }
-    
-    const { stdout, stderr } = await exec(cmd, {
-      timeout: RUN_TIMEOUT_MS,
-      maxBuffer: 4 * 1024 * 1024,
-      cwd: dir,
+    const res = await fetch(`${PISTON_BASE}/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        language: lang,
+        version: "*",
+        files: [{ name: `main.${langExt(lang)}`, content: code }],
+        stdin: stdin || "",
+        run_timeout: 20000,
+        compile_timeout: 15000,
+        run_memory_limit: 134217728, // 128 MiB
+      }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-    
-    const out = (stdout || "").slice(0, MAX_OUTPUT);
-    const err = (stderr || "").slice(0, 800);
-    return {
-      language: lang,
-      output:   out,
-      stderr:   err || undefined,
-      note:     out.length >= MAX_OUTPUT ? "(output truncated)" : undefined,
-    };
-  } catch (e) {
-    if (e.killed || e.code === "ETIMEDOUT") {
-      return { error: `Timed out after ${RUN_TIMEOUT_MS / 1000}s`, language: lang };
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      if (res.status === 400) {
+        // Often means unsupported language — list available ones
+        const rtRes = await fetch(`${PISTON_BASE}/runtimes`, { signal: AbortSignal.timeout(8000) }).catch(() => null);
+        const rt = rtRes?.ok ? await rtRes.json().catch(() => []) : [];
+        const langs = rt.map((r) => r.language).join(", ");
+        return {
+          error: `Language "${lang}" not supported. Available: ${langs.slice(0, 500)}`,
+        };
+      }
+      return { error: `Piston ${res.status}: ${txt.slice(0, 200)}` };
     }
-    const out = (e.stdout || "").slice(0, MAX_OUTPUT);
-    const err = (e.stderr || e.message || "execution error").slice(0, 800);
-    return { language: lang, output: out || undefined, error: err };
-  } finally {
-    rm(dir, { recursive: true, force: true }).catch(() => {});
+
+    const data = await res.json();
+    const run = data.run ?? {};
+    const compile = data.compile ?? {};
+    const stdout = (run.stdout || "").slice(0, 3000);
+    const stderr = (run.stderr || compile.stderr || compile.output || "").slice(0, 1000);
+    const exitCode = run.code ?? compile.code ?? -1;
+    const timedOut = run.signal === "SIGKILL" || compile.signal === "SIGKILL";
+
+    return {
+      language: data.language,
+      version: data.version,
+      stdout: stdout || "(no output)",
+      stderr: stderr || undefined,
+      exit_code: exitCode,
+      timed_out: timedOut || undefined,
+      ok: !compile.stderr && exitCode === 0 && !timedOut,
+    };
+  } catch (err) {
+    return { error: err?.message || "code execution failed" };
   }
 }
 
-// ─── deploy_webpage ────────────────────────────────────────────────────────────
+// ─── Deploy HTML as GitHub Gist → htmlpreview.github.io URL ──────────────────
 export async function deployWebpage(filename, html, description = "") {
-  // GH_PAT has gist scope; GITHUB_TOKEN (Actions auto-token) cannot create Gists
-  const token = process.env.GH_PAT || process.env.GITHUB_TOKEN;
-  if (!token) return { error: "GH_PAT not set — cannot create Gist. Add GH_PAT secret to repo." };
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) return { error: "GITHUB_TOKEN not available — cannot deploy" };
 
   const fname = /\.html?$/i.test(filename) ? filename : `${filename}.html`;
 
@@ -144,17 +108,17 @@ export async function deployWebpage(filename, html, description = "") {
     }
 
     const gist = await res.json();
-    const rawUrl   = gist.files[fname]?.raw_url || "";
+    const rawUrl = gist.files[fname]?.raw_url || "";
     const previewUrl = rawUrl
       ? `https://htmlpreview.github.io/?${rawUrl}`
       : gist.html_url;
 
     return {
       ok: true,
-      gist_id:     gist.id,
-      gist_url:    gist.html_url,
+      gist_id: gist.id,
+      gist_url: gist.html_url,
       preview_url: previewUrl,
-      raw_url:     rawUrl,
+      raw_url: rawUrl,
       note: "เปิดดูได้ทันทีผ่าน htmlpreview.github.io — ไม่ต้อง login",
     };
   } catch (err) {
@@ -165,137 +129,164 @@ export async function deployWebpage(filename, html, description = "") {
 // ─── Read latest GitHub Actions log ──────────────────────────────────────────
 export async function readOwnLog(lines = 100, filter = "") {
   const token = process.env.GITHUB_TOKEN;
-  const repo  = process.env.GITHUB_REPOSITORY;
+  const repo = process.env.GITHUB_REPOSITORY;
   if (!token || !repo) return { error: "GITHUB_TOKEN / GITHUB_REPOSITORY not set" };
 
   const H = { Authorization: `token ${token}`, Accept: "application/vnd.github+json" };
 
   try {
-    // Fetch up to 5 recent runs — try each until we get readable log content.
-    // GitHub Actions does NOT stream real-time logs for in_progress runs via jobs logs_url.
     const runsRes = await fetch(
-      `https://api.github.com/repos/${repo}/actions/runs?per_page=5`,
+      `https://api.github.com/repos/${repo}/actions/runs?per_page=2`,
       { headers: H, signal: AbortSignal.timeout(TIMEOUT_MS) },
     );
     const runsData = await runsRes.json();
-    const allRuns = runsData.workflow_runs || [];
-    if (!allRuns.length) return { error: "No runs found" };
+    const run = runsData.workflow_runs?.[0];
+    if (!run) return { error: "ไม่พบ workflow runs" };
 
-    for (const run of allRuns.slice(0, 3)) {
-      const isActive = run.status === "in_progress" || run.status === "queued";
+    const jobsRes = await fetch(
+      `https://api.github.com/repos/${repo}/actions/runs/${run.id}/jobs`,
+      { headers: H, signal: AbortSignal.timeout(TIMEOUT_MS) },
+    );
+    const jobsData = await jobsRes.json();
+    const job = jobsData.jobs?.[0];
+    if (!job) return { error: "ไม่พบ jobs", run_status: run.status };
 
-      const jobsRes = await fetch(
-        `https://api.github.com/repos/${repo}/actions/runs/${run.id}/jobs`,
-        { headers: H, signal: AbortSignal.timeout(TIMEOUT_MS) },
-      );
-      const jobsData = await jobsRes.json();
-      const job = (jobsData.jobs || [])[0];
-      if (!job) continue;
+    const logRes = await fetch(
+      `https://api.github.com/repos/${repo}/actions/jobs/${job.id}/logs`,
+      { headers: H, redirect: "follow", signal: AbortSignal.timeout(TIMEOUT_MS) },
+    );
 
-      // Try to download the log text (follows redirect for completed runs)
-      let raw = "";
-      try {
-        const logRes = await fetch(job.logs_url, {
-          headers: H,
-          redirect: "follow",
-          signal: AbortSignal.timeout(TIMEOUT_MS),
-        });
-        if (logRes.ok) raw = await logRes.text();
-      } catch {}
+    const meta = {
+      run_id: run.id,
+      run_status: run.status,
+      run_conclusion: run.conclusion,
+      head_sha: run.head_sha?.slice(0, 8),
+      job_name: job.name,
+      job_status: job.status,
+      job_conclusion: job.conclusion,
+    };
 
-      const allLines = raw.split("\n");
-      const hasContent = allLines.some(l => l.trim().length > 5);
-
-      if (hasContent) {
-        let logLines = allLines.filter(l => !filter || l.toLowerCase().includes(filter.toLowerCase()));
-        logLines = logLines.slice(-Math.min(lines, 300));
-        return {
-          run_id: run.id,
-          run_status: run.status,
-          job: job.name,
-          is_current_run: isActive,
-          lines: logLines,
-          note: isActive ? "run กำลังทำงานอยู่ — log อาจไม่สมบูรณ์" : undefined,
-        };
-      }
-
-      // Active run with no readable logs → tell the AI clearly
-      if (isActive) {
-        return {
-          run_id: run.id,
-          run_status: "in_progress",
-          job: job.name,
-          lines: [],
-          note: "GitHub Actions ไม่ส่ง real-time log ผ่าน API นี้สำหรับ run ที่กำลังรัน — ลองใช้ read_own_source เพื่อดูโค้ด หรือรอให้ run เสร็จก่อนค่อยดู log",
-        };
-      }
+    if (!logRes.ok) {
+      return { ...meta, note: "Log not yet available (run still starting up)" };
     }
 
-    return { error: "ไม่พบ log ที่อ่านได้ในขณะนี้" };
+    let logLines = (await logRes.text()).split("\n");
+    if (filter) {
+      logLines = logLines.filter((l) =>
+        l.toLowerCase().includes(filter.toLowerCase()),
+      );
+    }
+    const maxLines = Math.min(Math.max(lines, 10), 300);
+    const sliced = logLines.slice(-maxLines);
+
+    return {
+      ...meta,
+      log_lines: sliced.length,
+      log: sliced.join("\n").slice(0, 6000),
+    };
   } catch (err) {
-    return { error: err?.message || "readOwnLog failed" };
+    return { error: err?.message || "log fetch failed" };
   }
 }
 
-// ─── Read own source file ────────────────────────────────────────────────────
+// ─── Read a source file from own GitHub repo ─────────────────────────────────
 export async function readOwnSource(filepath) {
   const token = process.env.GITHUB_TOKEN;
-  const repo  = process.env.GITHUB_REPOSITORY;
+  const repo = process.env.GITHUB_REPOSITORY;
+  const branch = process.env.GITHUB_REF_NAME || "main";
   if (!token || !repo) return { error: "GITHUB_TOKEN / GITHUB_REPOSITORY not set" };
-  if (!filepath?.startsWith("bot/")) return { error: "Only bot/* paths allowed" };
 
   try {
     const res = await fetch(
-      `https://api.github.com/repos/${repo}/contents/${filepath}`,
-      { headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(TIMEOUT_MS) },
+      `https://api.github.com/repos/${repo}/contents/${filepath}?ref=${branch}`,
+      {
+        headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      },
     );
-    if (!res.ok) return { error: `GitHub ${res.status}` };
-    const d = await res.json();
-    const content = Buffer.from(d.content, "base64").toString("utf8");
-    return { filepath, lines: content.split("\n").length, content };
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      return { error: e.message || `HTTP ${res.status}` };
+    }
+    const data = await res.json();
+    if (data.encoding !== "base64") return { error: "unexpected encoding" };
+    const content = Buffer.from(data.content.replace(/\n/g, ""), "base64").toString("utf8");
+    return {
+      filepath,
+      sha: data.sha,
+      size: data.size,
+      lines: content.split("\n").length,
+      content: content.slice(0, 8000),
+      truncated: content.length > 8000,
+    };
   } catch (err) {
-    return { error: err?.message || "readOwnSource failed" };
+    return { error: err?.message || "source read failed" };
   }
 }
 
-// ─── Write/patch own source (triggers redeploy) ──────────────────────────────
-export async function writeOwnSource(filepath, content, commitMessage = "") {
+// ─── Write a source file to own GitHub repo (self-healing) ───────────────────
+// Safety: only bot/src/* and bot/config.json are allowed; never workflow files.
+const SELF_WRITE_ALLOWED = ["bot/src/", "bot/config.json"];
+
+export async function writeOwnSource(filepath, content, commitMessage) {
   const token = process.env.GITHUB_TOKEN;
-  const repo  = process.env.GITHUB_REPOSITORY;
+  const repo = process.env.GITHUB_REPOSITORY;
+  const branch = process.env.GITHUB_REF_NAME || "main";
   if (!token || !repo) return { error: "GITHUB_TOKEN / GITHUB_REPOSITORY not set" };
-  if (!filepath?.startsWith("bot/src/")) return { error: "Only bot/src/* files allowed for safety" };
+
+  const allowed = SELF_WRITE_ALLOWED.some((p) => filepath.startsWith(p));
+  if (!allowed) {
+    return {
+      error: `ไม่อนุญาตให้แก้ไข ${filepath} — อนุญาตเฉพาะ bot/src/* และ bot/config.json เท่านั้น`,
+    };
+  }
+  // Block workflow file tampering even if named differently
+  if (filepath.includes(".github/") || filepath.endsWith(".yml") || filepath.endsWith(".yaml")) {
+    return { error: "ไม่อนุญาตให้แก้ไขไฟล์ workflow" };
+  }
+
+  const H = {
+    Authorization: `token ${token}`,
+    Accept: "application/vnd.github+json",
+    "Content-Type": "application/json",
+  };
 
   try {
-    // Get current SHA
-    const getRes = await fetch(
-      `https://api.github.com/repos/${repo}/contents/${filepath}`,
-      { headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(TIMEOUT_MS) },
+    // Get current SHA (required for updating existing files)
+    const infoRes = await fetch(
+      `https://api.github.com/repos/${repo}/contents/${filepath}?ref=${branch}`,
+      { headers: H, signal: AbortSignal.timeout(TIMEOUT_MS) },
     );
-    const existing = getRes.ok ? await getRes.json() : null;
-    const sha = existing?.sha;
+    let sha = null;
+    if (infoRes.ok) {
+      const info = await infoRes.json().catch(() => ({}));
+      sha = info.sha || null;
+    }
 
     const body = {
-      message: commitMessage || `fix: self-patch ${filepath} via agent`,
+      message: commitMessage?.slice(0, 200) || `fix: self-patch ${filepath}`,
       content: Buffer.from(content).toString("base64"),
+      branch,
     };
     if (sha) body.sha = sha;
 
     const putRes = await fetch(
       `https://api.github.com/repos/${repo}/contents/${filepath}`,
-      {
-        method: "PUT",
-        headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      },
+      { method: "PUT", headers: H, body: JSON.stringify(body), signal: AbortSignal.timeout(TIMEOUT_MS) },
     );
     if (!putRes.ok) {
       const e = await putRes.json().catch(() => ({}));
-      return { error: e.message || `GitHub ${putRes.status}` };
+      return { error: e.message || `HTTP ${putRes.status}` };
     }
-    const d = await putRes.json();
-    return { ok: true, commit: d.commit?.sha?.slice(0, 8), filepath, note: "Redeploy triggered automatically (new push → new run)" };
+    const result = await putRes.json();
+    return {
+      ok: true,
+      filepath,
+      commit_sha: result.commit?.sha?.slice(0, 8),
+      commit_url: result.commit?.html_url,
+      note: "บันทึกแล้ว — GitHub Actions จะรีสตาร์ทบอทอัตโนมัติภายใน ~30 วินาที",
+    };
   } catch (err) {
-    return { error: err?.message || "writeOwnSource failed" };
+    return { error: err?.message || "source write failed" };
   }
 }
