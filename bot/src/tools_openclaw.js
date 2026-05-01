@@ -582,7 +582,33 @@ export async function computerBrowse(url, actions = []) {
     await page.setViewport({ width: 1280, height: 800 });
     await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36");
 
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25_000 });
+    // Wait for network to settle (catches JS-rendered content like React/Vue/Angular)
+    try {
+      await page.goto(url, { waitUntil: "networkidle2", timeout: 30_000 });
+    } catch {
+      // networkidle2 timed out (heavy site) — still try to continue
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25_000 }).catch(() => {});
+    }
+
+    // Auto-dismiss popups: Escape closes most modals, cookie banners, date-pickers
+    await page.keyboard.press("Escape").catch(() => {});
+    await new Promise(r => setTimeout(r, 600));
+    // Second Escape for sites that stack popups
+    await page.keyboard.press("Escape").catch(() => {});
+    await new Promise(r => setTimeout(r, 400));
+
+    // Try to close common cookie banners / overlays by clicking close buttons
+    const closeSels = [
+      "[aria-label='close']", "[aria-label='Close']", ".modal-close", ".close-btn",
+      "[data-dismiss='modal']", ".cookie-accept", "#onetrust-accept-btn-handler",
+      "button[class*='close']", "button[class*='dismiss']",
+    ];
+    for (const sel of closeSels) {
+      try {
+        const el = await page.$(sel);
+        if (el) { await el.click(); await new Promise(r => setTimeout(r, 300)); break; }
+      } catch {}
+    }
 
     const steps = [];
 
@@ -629,7 +655,13 @@ export async function computerBrowse(url, actions = []) {
             break;
           }
           case "goto": {
-            await page.goto(action.url, { waitUntil: "domcontentloaded", timeout: 25_000 });
+            try {
+              await page.goto(action.url, { waitUntil: "networkidle2", timeout: 30_000 });
+            } catch {
+              await page.goto(action.url, { waitUntil: "domcontentloaded", timeout: 25_000 }).catch(() => {});
+            }
+            await page.keyboard.press("Escape").catch(() => {});
+            await new Promise(r => setTimeout(r, 500));
             const buf = await page.screenshot({ type: "png" });
             steps.push({ type: "goto", url: page.url(), ok: true, imageBuffer: buf });
             break;
