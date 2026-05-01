@@ -134,6 +134,23 @@
       "muteUntil": 0,
       "lastWord": "หี",
       "lastSource": "voice"
+    },
+    "1395239010720415898": {
+      "chat": {
+        "count": 1,
+        "lastAt": 1777624188722,
+        "history": [
+          {
+            "at": 1777624188722,
+            "severity": 7,
+            "matched": "มึง, กู",
+            "reason": "ใช้คำหยาบคายและข่มขู่",
+            "excerpt": "มึงโดนกูแน่การ๋ด",
+            "action": "timeout_failed",
+            "source": "ai"
+          }
+        ]
+      }
     }
   }
 }
