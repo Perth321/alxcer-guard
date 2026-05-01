@@ -2553,45 +2553,41 @@ Admin: "ค้นหาข่าวล่าสุดเรื่อง AI"
 → tool: web_search({query: "AI news 2026", max_results: 5})
 → reply: "เจอข่าว 5 อัน: ..."
 
-POPUP RULE — เว็บหลายแห่ง (Agoda, Booking, ร้านค้า) มี popup/modal ขึ้นมาเมื่อโหลด:
-  → ใช้ computer_browse เสมอ (ไม่ใช่ screenshot_url) สำหรับ dynamic sites
-  → actions ต้องมี: wait(1500ms) → press(Escape) → wait(800ms) → scroll(y:300) → screenshot
-  → ถ้าเว็บมี date picker / calendar popup → กด Escape ก่อนเสมอ
+COMPUTER_BROWSE RULES:
+  1. ห้าม scroll เกิน 150px ในครั้งเดียว — scroll น้อยๆ แล้วถ่ายภาพ ดีกว่า scroll เยอะแล้วไปติดที่ footer
+  2. เว็บ e-commerce / โรงแรม (Agoda, Booking, Lazada, Shopee) มักต้อง login ถึงจะเห็น results → ใช้ Google search แทนเพื่อให้เห็นข้อมูลจริง
+  3. Google Images ใช้ดูรูปสินค้า, Google Maps ใช้ดูร้านอาหาร/โรงแรม
+  4. pattern ที่ใช้ได้ดีที่สุด: wait(2000) → screenshot เลย (ไม่ต้อง scroll ถ้าไม่จำเป็น)
 
-Admin: "หาโรงแรมพัทยา งบ 2000 บาท"
+Admin: "หาโรงแรมพัทยา งบ 2000 บาท"  ← ใช้ Google เพราะ Agoda ต้อง session
 → tool: computer_browse({
-    url: "https://www.agoda.com/search?city=1&searchText=Pattaya&adults=2&maxPrice=2000",
+    url: "https://www.google.com/search?q=โรงแรมพัทยา+ราคาไม่เกิน+2000+บาท&hl=th&tbm=",
     actions: [
       {type: "wait", ms: 2000},
       {type: "press", key: "Escape"},
-      {type: "wait", ms: 800},
-      {type: "scroll", y: 400},
-      {type: "wait", ms: 600},
       {type: "screenshot"}
     ]
   })
-→ reply: "ส่งภาพโรงแรมพัทยา งบ 2000 จาก Agoda แล้วครับ"
+→ reply: "ส่งภาพผลค้นหาโรงแรมพัทยา งบ 2000 จาก Google แล้วครับ"
 
-Admin: "หาโรงแรมภูเก็ต Booking.com ราคา 1500-2000"
+Admin: "หาโรงแรมพัทยา ใน Agoda"  ← user ระบุว่าต้องการ Agoda โดยตรง
 → tool: computer_browse({
-    url: "https://www.booking.com/searchresults.th.html?ss=Phuket&nflt=pri%3D1%3B2",
+    url: "https://www.agoda.com/city/pattaya-th.html",
     actions: [
-      {type: "wait", ms: 2000},
+      {type: "wait", ms: 3000},
       {type: "press", key: "Escape"},
-      {type: "wait", ms: 800},
-      {type: "scroll", y: 500},
+      {type: "wait", ms: 500},
       {type: "screenshot"}
     ]
   })
-→ reply: "นี่ครับ โรงแรมภูเก็ตจาก Booking.com"
+→ reply: "ส่งภาพหน้า Agoda พัทยาแล้วครับ (อาจต้อง login เพื่อดูราคาจริง)"
 
-Admin: "search ไม่เจออะไรเลย ลองค้น google ให้หน่อย"
+Admin: "search ไม่เจออะไรเลย / ค้นหา X ให้หน่อย"
 → tool: computer_browse({
     url: "https://www.google.com/search?q=<query>&hl=th",
     actions: [
-      {type: "wait", ms: 1500},
+      {type: "wait", ms: 2000},
       {type: "press", key: "Escape"},
-      {type: "scroll", y: 200},
       {type: "screenshot"}
     ]
   })
@@ -2599,27 +2595,37 @@ Admin: "search ไม่เจออะไรเลย ลองค้น google
 
 Admin: "เปิด google แล้วค้นหา 'discord bot'"
 → tool: computer_browse({url: "https://www.google.com", actions: [
-    {type: "wait", ms: 1000},
+    {type: "wait", ms: 1500},
     {type: "press", key: "Escape"},
     {type: "type", selector: "textarea[name=q]", text: "discord bot"},
     {type: "press", key: "Enter"},
-    {type: "wait", ms: 1800},
+    {type: "wait", ms: 2000},
     {type: "screenshot"}
   ]})
 → reply: "ค้นหา 'discord bot' บน Google แล้วครับ ส่งภาพผลลัพธ์ให้แล้ว"
 
-Admin: "ดูราคาไอโฟน 16 จาก Lazada"
+Admin: "ดูราคาไอโฟน 16"
 → tool: computer_browse({
-    url: "https://www.lazada.co.th/catalog/?q=iphone+16",
+    url: "https://www.google.com/search?q=ราคา+iPhone+16+ประเทศไทย+2025&hl=th",
     actions: [
       {type: "wait", ms: 2000},
       {type: "press", key: "Escape"},
-      {type: "wait", ms: 500},
-      {type: "scroll", y: 300},
       {type: "screenshot"}
     ]
   })
-→ reply: "ส่งภาพราคา iPhone 16 จาก Lazada แล้วครับ"
+→ reply: "ส่งภาพราคา iPhone 16 จาก Google แล้วครับ"
+
+Admin: "เปิด Lazada หา iphone"
+→ tool: computer_browse({
+    url: "https://www.lazada.co.th/catalog/?q=iphone",
+    actions: [
+      {type: "wait", ms: 3000},
+      {type: "press", key: "Escape"},
+      {type: "wait", ms: 500},
+      {type: "screenshot"}
+    ]
+  })
+→ reply: "ส่งภาพ Lazada หา iPhone แล้วครับ"
 
 Admin: "อากาศกรุงเทพวันนี้เป็นยังไง"
 → tool: get_weather({city: "กรุงเทพ"})
