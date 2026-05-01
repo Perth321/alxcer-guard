@@ -36,8 +36,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 1,
-        "lastAt": 1777544540699,
+        "count": 2,
+        "lastAt": 1777621110118,
         "history": [
           {
             "at": 1777544540699,
@@ -45,6 +45,15 @@
             "matched": "อ้วน",
             "reason": "ใช้คำหยาบคาย",
             "excerpt": "อ้วน คิดถึงเค้าไหม",
+            "action": "timeout_failed",
+            "source": "ai"
+          },
+          {
+            "at": 1777621110118,
+            "severity": 7,
+            "matched": "หุบปาก",
+            "reason": "ใช้คำสั่งให้ปิดปากอย่างหยาบคาย",
+            "excerpt": "ทำไมโดนหุบปาก",
             "action": "timeout_failed",
             "source": "ai"
           }
