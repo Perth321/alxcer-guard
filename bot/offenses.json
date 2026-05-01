@@ -1,11 +1,26 @@
 {
   "users": {
     "603182413660684321": {
-      "count": 17,
-      "lastOffenseAt": 1777571582015,
-      "muteUntil": 0,
+      "count": 18,
+      "lastOffenseAt": 1777621073056,
+      "muteUntil": 1777624673056,
       "lastWord": "หี",
-      "lastSource": "voice"
+      "lastSource": "chat",
+      "chat": {
+        "count": 1,
+        "lastAt": 1777621073759,
+        "history": [
+          {
+            "at": 1777621073759,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "กวนตีน ไอเหี้ย",
+            "action": "timeout_failed",
+            "source": "local"
+          }
+        ]
+      }
     },
     "946756535936233542": {
       "count": 5,
