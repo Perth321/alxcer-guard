@@ -6,7 +6,9 @@
 import { PermissionFlagsBits, ChannelType } from "discord.js";
 import { generateReply, aiAvailable, getModelStatus } from "./ai.js";
 import { webSearch, fetchUrl, wikipediaLookup, getWeather } from "./tools_web.js";
-import { runCode, deployWebpage, readOwnLog, readOwnSource, writeOwnSource } from "./tools_openclaw.js";
+import { runCode, deployWebpage, readOwnLog, readOwnSource, writeOwnSource,
+         screenshotUrl, inspectWebpage, checkWebsite, computerBrowse,
+         readLocalFile, writeLocalFile, listLocalFiles, shellExec } from "./tools_openclaw.js";
 import {
   createTimer,
   cancelTimer,
@@ -1040,6 +1042,166 @@ const TOOLS = [
           channel_id: { type: "string" },
         },
         required: ["filename", "sheets"],
+      },
+    },
+  },
+
+  // ─── OpenClaw v2: Screenshot, Web Inspect, Computer Mode, Shell ──────────
+  {
+    type: "function",
+    function: {
+      name: "screenshot_url",
+      description:
+        "ถ่ายภาพ screenshot ของเว็บไซต์หรือ URL ใดก็ได้ และส่งเป็น รูปภาพ ใน Discord ทันที ใช้สำหรับดูหน้าเว็บ ตรวจสอบ design หรือยืนยัน layout",
+      parameters: {
+        type: "object",
+        properties: {
+          url:       { type: "string", description: "URL ที่ต้องการ screenshot (ต้องขึ้นต้นด้วย https://)" },
+          width:     { type: "number", description: "ความกว้าง viewport ในหน่วย px (default 1280)" },
+          height:    { type: "number", description: "ความสูง viewport ในหน่วย px (default 800)" },
+          full_page: { type: "boolean", description: "true = screenshot เต็มหน้า (scroll ยาว)" },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "inspect_webpage",
+      description:
+        "วิเคราะห์โครงสร้างเว็บไซต์แบบลึก: title, meta tags, headings (h1-h3), links (internal/external), forms, tech stack, word count, body preview. ดีกว่า fetch_url สำหรับงาน SEO / audit / reverse-engineer หน้าเว็บ",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL ที่ต้องการ inspect" },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_website",
+      description:
+        "ตรวจสอบสถานะเว็บไซต์: up/down, response time, HTTP status, redirect chain, SSL, server headers. ใช้สำหรับ uptime check หรือ debug ว่าเว็บมีปัญหาอะไร",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL หรือ domain เช่น 'google.com' หรือ 'https://example.com'" },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "computer_browse",
+      description:
+        "Computer mode — ควบคุม browser จริง (headless Chrome) บน GitHub Actions: เปิด URL, คลิก element, พิมพ์ข้อความ, run JavaScript, scroll, กรอก form และส่ง screenshot แต่ละขั้นเป็นรูปภาพใน Discord ทำให้เห็น 'AI ทำอะไรบนหน้าจอ' แบบ real-time",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL เริ่มต้น" },
+          actions: {
+            type: "array",
+            description: "ลำดับ action ที่ต้องการทำ (ถ้าไม่ระบุจะ screenshot URL เลย)",
+            items: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  description: "screenshot | click | type | fill_form | eval | goto | wait | scroll | get_text | hover | select | press",
+                },
+                selector: { type: "string", description: "CSS selector สำหรับ click/type/get_text/hover/select" },
+                text:     { type: "string", description: "ข้อความที่จะพิมพ์ (สำหรับ type)" },
+                js:       { type: "string", description: "JavaScript ที่จะ run (สำหรับ eval)" },
+                url:      { type: "string", description: "URL ที่จะไป (สำหรับ goto)" },
+                ms:       { type: "number", description: "มิลลิวินาทีที่จะรอ (สำหรับ wait)" },
+                x:        { type: "number", description: "scroll horizontal px" },
+                y:        { type: "number", description: "scroll vertical px" },
+                key:      { type: "string", description: "keyboard key เช่น Enter, Tab, Escape (สำหรับ press)" },
+                value:    { type: "string", description: "value สำหรับ <select> element" },
+                data:     {
+                  type: "array",
+                  description: "สำหรับ fill_form: [{selector, value}, ...]",
+                  items: {
+                    type: "object",
+                    properties: {
+                      selector: { type: "string" },
+                      value:    { type: "string" },
+                    },
+                  },
+                },
+                fullPage: { type: "boolean", description: "screenshot เต็มหน้าหรือเปล่า" },
+              },
+              required: ["type"],
+            },
+          },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "shell_exec",
+      description:
+        "รัน shell command บน GitHub Actions environment (Ubuntu Linux) ได้เลย เช่น: curl, wget, python3, node, jq, git, apt-get install, ffmpeg, convert ฯลฯ ผลลัพธ์ stdout/stderr จะถูกส่งกลับ ใช้สำหรับ: ดาวน์โหลดไฟล์, ประมวลผล data, install tools, ตรวจสอบ system",
+      parameters: {
+        type: "object",
+        properties: {
+          command:    { type: "string", description: "Shell command ที่ต้องการรัน" },
+          timeout_ms: { type: "number", description: "timeout ในมิลลิวินาที (default 30000, max 60000)" },
+        },
+        required: ["command"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_local_file",
+      description:
+        "อ่านไฟล์จาก filesystem ของ GitHub Actions environment เช่น /tmp/output.txt หรือไฟล์ที่ shell_exec สร้างไว้",
+      parameters: {
+        type: "object",
+        properties: {
+          filepath: { type: "string", description: "Path ของไฟล์ เช่น /tmp/data.json หรือ /tmp/result.txt" },
+        },
+        required: ["filepath"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "write_local_file",
+      description:
+        "เขียนไฟล์ไปยัง /tmp บน GitHub Actions — ใช้สร้างไฟล์ temp สำหรับ shell_exec หรือส่งเป็น attachment ใน Discord ด้วย create_file",
+      parameters: {
+        type: "object",
+        properties: {
+          filepath: { type: "string", description: "Path ไฟล์ (ต้องอยู่ใน /tmp เช่น /tmp/data.csv)" },
+          content:  { type: "string", description: "เนื้อหาของไฟล์" },
+        },
+        required: ["filepath", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_local_files",
+      description: "แสดงรายการไฟล์และโฟลเดอร์ใน path ที่ระบุ (default: /tmp)",
+      parameters: {
+        type: "object",
+        properties: {
+          dirpath: { type: "string", description: "Directory path เช่น /tmp หรือ . (default: /tmp)" },
+        },
       },
     },
   },
@@ -2083,6 +2245,86 @@ async function execTool(name, args, ctx) {
       }
     }
 
+
+    // ─── OpenClaw v2: Screenshot, Web Inspect, Computer Mode, Filesystem, Shell ──
+    case "screenshot_url": {
+      const result = await screenshotUrl(args.url, {
+        width: args.width, height: args.height, fullPage: args.full_page,
+      });
+      if (result.imageBuffer) {
+        const { AttachmentBuilder } = await import("discord.js");
+        const att = new AttachmentBuilder(result.imageBuffer, { name: "screenshot.png" });
+        const targetCh = ctx.msg?.channel || channel;
+        if (targetCh) {
+          await targetCh.send({
+            content: `📸 **Screenshot:** ${args.url}\n> ${result.page_title || ""}\n${result.width}×${result.height}px`,
+            files: [att],
+          });
+        }
+        return { ok: true, preview_url: result.preview_url, width: result.width, height: result.height, page_title: result.page_title };
+      }
+      return result;
+    }
+
+    case "inspect_webpage": {
+      return await inspectWebpage(args.url);
+    }
+
+    case "check_website": {
+      return await checkWebsite(args.url);
+    }
+
+    case "computer_browse": {
+      const result = await computerBrowse(args.url, args.actions || []);
+      if (result.ok && result.steps) {
+        const { AttachmentBuilder } = await import("discord.js");
+        const targetCh = ctx.msg?.channel || channel;
+        let shotNum = 0;
+        for (const step of result.steps) {
+          if (step.imageBuffer && targetCh) {
+            shotNum++;
+            const att = new AttachmentBuilder(step.imageBuffer, { name: `computer_${shotNum}.png` });
+            const label = step.type === "auto_screenshot"
+              ? `🖥️ หน้าจอปัจจุบัน`
+              : step.type === "click"   ? `🖱️ คลิก ${step.selector}`
+              : step.type === "scroll"  ? `📜 Scroll แล้ว`
+              : step.type === "goto"    ? `🔗 ไปที่ ${step.url}`
+              : step.type === "fill_form" ? `📝 กรอก form แล้ว`
+              : step.type === "hover"   ? `👆 Hover ${step.selector}`
+              : step.type === "press"   ? `⌨️ กด ${step.key}`
+              : `📷 Step ${shotNum}`;
+            await targetCh.send({ content: label, files: [att] });
+          }
+        }
+        // Return results without bulky buffers
+        return {
+          ok: true,
+          final_url: result.final_url,
+          steps: result.steps.map(s => {
+            const { imageBuffer, ...rest } = s;
+            return { ...rest, screenshot_sent: !!imageBuffer };
+          }),
+        };
+      }
+      return result;
+    }
+
+    case "shell_exec": {
+      return await shellExec(args.command, { timeout_ms: args.timeout_ms });
+    }
+
+    case "read_local_file": {
+      return await readLocalFile(args.filepath);
+    }
+
+    case "write_local_file": {
+      return await writeLocalFile(args.filepath, args.content);
+    }
+
+    case "list_local_files": {
+      return await listLocalFiles(args.dirpath || "/tmp");
+    }
+
     default:
       return { error: `unknown tool: ${name}` };
   }
@@ -2294,6 +2536,11 @@ Random user (NOT admin) in chat: "เอ็งเป็น GPT-4 ใช่มั
 
 Admin: "ค้นหาข่าวล่าสุดเรื่อง AI"
 → tool: web_search({query: "AI news 2026", max_results: 5})
+→ tool: screenshot_url({url: "https://google.com"})   ← ส่งภาพ Discord ทันที
+→ tool: inspect_webpage({url: "https://example.com"}) ← วิเคราะห์โครงสร้างเว็บ
+→ tool: check_website({url: "example.com"})           ← ตรวจ uptime/status
+→ tool: computer_browse({url: "https://google.com", actions: [{type:"type",selector:"input[name=q]",text:"discord"},{type:"press",key:"Enter"},{type:"screenshot"}]})
+→ tool: shell_exec({command: "curl -s https://api.ipify.org"})  ← รัน shell
 → reply: "เจอข่าว 5 อัน: [ชื่อข่าว] (URL) — [สรุปสั้น] ..."
 
 Admin: "อากาศกรุงเทพวันนี้เป็นยังไง"
