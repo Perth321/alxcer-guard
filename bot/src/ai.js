@@ -27,15 +27,15 @@ const GH_BASE        = "https://models.inference.ai.azure.com";
 // ─── Gemini model lists ───────────────────────────────────────────────────────
 // Keep 2.5/2.0 as deep fallbacks — their quotas are separate from the 3.x pool.
 const GEMINI_CHAT_MODELS = (process.env.GEMINI_CHAT_MODELS ||
-  "gemini-3.1-pro,gemini-3.1-flash,gemini-3.0-flash,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash"
+  "gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GEMINI_FAST_MODELS = (process.env.GEMINI_FAST_MODELS ||
-  "gemini-3.1-flash,gemini-3.0-flash,gemini-2.5-flash-lite,gemini-2.0-flash-lite,gemini-2.5-flash,gemini-2.0-flash"
+  "gemini-2.5-flash-lite,gemini-2.0-flash-lite,gemini-2.5-flash,gemini-2.0-flash"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GEMINI_VISION_MODELS = (process.env.GEMINI_VISION_MODELS ||
-  "gemini-3.1-pro,gemini-3.1-flash,gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash,gemini-2.5-flash-lite"
+  "gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash,gemini-2.5-flash-lite"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 // ─── GitHub Models chains ─────────────────────────────────────────────────────
@@ -43,11 +43,11 @@ const GEMINI_VISION_MODELS = (process.env.GEMINI_VISION_MODELS ||
 // OpenAI-branded models placed LAST to protect persona (they claim to be ChatGPT).
 // DeepSeek R1 outputs <think> blocks — stripped before returning.
 const GH_CHAT_MODELS = (process.env.GH_CHAT_MODELS ||
-  "deepseek/deepseek-r1-0528,meta/llama-4-maverick-17b-128e-instruct-fp8,xai/grok-3-mini,meta/llama-3.3-70b-instruct,microsoft/phi-4,deepseek/deepseek-v3-0324,openai/gpt-4.1-mini,openai/gpt-4.1,openai/gpt-4o"
+  "microsoft/phi-4,deepseek/deepseek-v3-0324,openai/gpt-4.1,openai/gpt-4o"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GH_FAST_MODELS = (process.env.GH_FAST_MODELS ||
-  "meta/llama-4-scout-17b-16e-instruct,openai/gpt-4.1-nano,microsoft/phi-4-mini-instruct,meta/llama-3.3-70b-instruct,openai/gpt-4.1-mini"
+  "microsoft/phi-4,deepseek/deepseek-v3-0324,openai/gpt-4.1,openai/gpt-4o"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GH_VISION_MODELS = (process.env.GH_VISION_MODELS ||
@@ -100,9 +100,9 @@ const INTERLEAVED_FAST   = _buildInterleavedChain(GEMINI_FAST_MODELS,   GH_FAST_
 const INTERLEAVED_VISION = _buildInterleavedChain(GEMINI_VISION_MODELS,  GH_VISION_MODELS, OPENROUTER_VISION_FALLBACKS);
 
 export const MODELS = {
-  chat:   INTERLEAVED_CHAT[0]?.m   ?? "gemini-3.1-pro",
-  fast:   INTERLEAVED_FAST[0]?.m   ?? "gemini-3.1-flash",
-  vision: INTERLEAVED_VISION[0]?.m ?? "gemini-3.1-pro",
+  chat:   INTERLEAVED_CHAT[0]?.m   ?? "gemini-2.5-pro",
+  fast:   INTERLEAVED_FAST[0]?.m   ?? "gemini-2.5-flash-lite",
+  vision: INTERLEAVED_VISION[0]?.m ?? "gemini-2.5-pro",
 };
 
 const REQUEST_TIMEOUT_MS = 25_000;
