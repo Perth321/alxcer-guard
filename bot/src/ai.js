@@ -108,27 +108,27 @@ const INTERLEAVED_VISION = _buildInterleavedChain(GEMINI_VISION_MODELS,  GH_VISI
 // NOTE: gpt-4o is excluded — GitHub free tier caps it at 8k tokens which is
 //   too small for the agent payload (tools + snapshot + history ≈ 9-10k tokens).
 export const AGENT_CHAIN = [
-  { p: gemini,      m: gemini-2.5-flash },
-  { p: gemini,      m: gemini-2.0-flash },
-  { p: github,      m: gpt-4.1-mini },
-  { p: github,      m: gpt-4.1 },
-  { p: gemini,      m: gemini-2.5-pro },
-  { p: openrouter,  m: meta-llama/llama-3.3-70b-instruct:free },
+  { p: "gemini",      m: "gemini-2.5-flash" },
+  { p: "gemini",      m: "gemini-2.0-flash" },
+  { p: "github",      m: "gpt-4.1-mini" },
+  { p: "github",      m: "gpt-4.1" },
+  { p: "gemini",      m: "gemini-2.5-pro" },
+  { p: "openrouter",  m: "meta-llama/llama-3.3-70b-instruct:free" },
 ];
 
 // LLM_CHAT_CHAIN: fast models for plain conversation (no tools, small context OK)
 // No tool schema payload → smaller context → faster, cheaper, more models viable.
 export const LLM_CHAT_CHAIN = [
-  { p: github,      m: gpt-4.1-mini },
-  { p: gemini,      m: gemini-2.0-flash },
-  { p: github,      m: Llama-3.3-70B-Instruct },
-  { p: openrouter,  m: meta-llama/llama-3.3-70b-instruct:free },
-  { p: github,      m: Phi-4 },
-  { p: gemini,      m: gemini-2.5-flash },
-  { p: openrouter,  m: google/gemma-3-27b-it:free },
-  { p: gemini,      m: gemini-1.5-pro },
-  { p: openrouter,  m: mistralai/mistral-nemo:free },
-  { p: github,      m: gpt-4.1 },
+  { p: "github",      m: "gpt-4.1-mini" },
+  { p: "gemini",      m: "gemini-2.0-flash" },
+  { p: "github",      m: "Llama-3.3-70B-Instruct" },
+  { p: "openrouter",  m: "meta-llama/llama-3.3-70b-instruct:free" },
+  { p: "github",      m: "Phi-4" },
+  { p: "gemini",      m: "gemini-2.5-flash" },
+  { p: "openrouter",  m: "google/gemma-3-27b-it:free" },
+  { p: "gemini",      m: "gemini-1.5-pro" },
+  { p: "openrouter",  m: "mistralai/mistral-nemo:free" },
+  { p: "github",      m: "gpt-4.1" },
 ];
 
 export const MODELS = {
