@@ -2482,12 +2482,8 @@ export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
         const idTag = !m.isBot && m.authorId ? ` (id: ${m.authorId})` : "";
         return `${who}${idTag}: ${(m.content || "").slice(0, 300)}`;
       })
-      .join("
-");
-    chatBlock = `=== RECENT CHAT (this channel, oldest first) ===
-${lines}
-
-`;
+      .join("\n");
+    chatBlock = `=== RECENT CHAT (this channel, oldest first) ===\n${lines}\n\n`;
   }
 
   const messages = [
