@@ -8,11 +8,26 @@
       "lastSource": "voice"
     },
     "946756535936233542": {
-      "count": 12,
-      "lastOffenseAt": 1777728607873,
-      "muteUntil": 1777732207873,
+      "count": 13,
+      "lastOffenseAt": 1777728757453,
+      "muteUntil": 1777732357453,
       "lastWord": "หี",
-      "lastSource": "voice"
+      "lastSource": "chat",
+      "chat": {
+        "count": 1,
+        "lastAt": 1777728758303,
+        "history": [
+          {
+            "at": 1777728758303,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "หีบมากมายหลายหีบยกหีบหนี\nหีบมากมีหนีหีบหนีบหนีหาย\nเห็นหนีหีบหนีบหนีกันมากมาย\nเห็นหีบหายหลายหีบหนีบหนีเอย",
+            "action": "timeout_failed",
+            "source": "local"
+          }
+        ]
+      }
     },
     "967120879689551873": {
       "count": 8,
