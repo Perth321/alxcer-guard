@@ -1374,6 +1374,7 @@ async function execTool(name, args, ctx) {
 
     case "voice_mute": {
       const m = await guild.members.fetch(args.user_id);
+      if (m.id === guild.client.user?.id) return { error: "ไม่สามารถปิดไมค์ตัวเองได้ — บอทไม่ควรถูก mute" };
       if (!m.voice?.channelId) return { error: "user is not in a voice channel" };
       await m.voice.setMute(true, args.reason || "Alxcer Guard agent");
       return { ok: true, user: m.displayName };
@@ -1385,6 +1386,7 @@ async function execTool(name, args, ctx) {
     }
     case "voice_deafen": {
       const m = await guild.members.fetch(args.user_id);
+      if (m.id === guild.client.user?.id) return { error: "ไม่สามารถ deafen ตัวเองได้" };
       if (!m.voice?.channelId) return { error: "user is not in a voice channel" };
       await m.voice.setDeaf(true, args.reason || "Alxcer Guard agent");
       return { ok: true, user: m.displayName };
@@ -1396,12 +1398,14 @@ async function execTool(name, args, ctx) {
     }
     case "voice_disconnect": {
       const m = await guild.members.fetch(args.user_id);
+      if (m.id === guild.client.user?.id) return { error: "ไม่สามารถ disconnect ตัวเองได้" };
       if (!m.voice?.channelId) return { error: "user is not in a voice channel" };
       await m.voice.disconnect(args.reason || "Alxcer Guard agent");
       return { ok: true, user: m.displayName };
     }
     case "voice_move": {
       const m = await guild.members.fetch(args.user_id);
+      if (m.id === guild.client.user?.id) return { error: "ไม่สามารถ move ตัวเองได้" };
       await m.voice.setChannel(args.channel_id, args.reason || "Alxcer Guard agent");
       return { ok: true, user: m.displayName, channel_id: args.channel_id };
     }
