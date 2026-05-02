@@ -1,292 +1,302 @@
-// screenshare.js — AI-driven live screen share in Discord voice/text channel
-// v2: smarter interactions — zoom, element highlight, scroll-to, annotate.
-// Uses puppeteer-core (headless Chrome) + sharp for image annotation.
+// screenshare.js v3 — Real Discord Go Live video streaming
+// Pipeline: Xvfb (virtual display) → Chrome (non-headless) → ffmpeg (x11grab→H264)
+//           → @dank074/discord-video-stream → Discord voice channel Go Live
+//
+// Users in the voice channel see a proper "Go Live" stream they can click to watch,
+// not just images posted in chat.
 
-import puppeteer from "puppeteer-core";
-import { execSync } from "child_process";
-import { AttachmentBuilder, EmbedBuilder } from "discord.js";
+import { Streamer, streamLivestreamVideo } from "@dank074/discord-video-stream";
+import { spawn, execSync, spawnSync } from "child_process";
+import { EmbedBuilder } from "discord.js";
 
-let _browser = null;
-let _page = null;
-let _intervalId = null;
+const DISPLAY_NUM = ":99";
+const VIEWPORT_W = 1280;
+const VIEWPORT_H = 720;
+const FPS = 30;
+
+let _streamer = null;
+let _xvfbProc = null;
+let _chromeProc = null;
+let _streamAbortController = null;
 let _currentUrl = "";
-let _targetChannel = null;
-let _liveMessage = null;
-let _updateCount = 0;
 let _startedAt = null;
-let _intervalMs = 8_000;
+let _guildId = null;
+let _channelId = null;
+let _notifyChannel = null;  // text channel to post status messages
+let _notifyMessage = null;
 
-const VIEWPORT = { width: 1280, height: 720 };
+// ── helpers ────────────────────────────────────────────────────────────────────
 
 function findChrome() {
-  const candidates = [
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/chromium",
-    "/snap/bin/chromium",
-    "/usr/bin/microsoft-edge",
-  ];
-  for (const c of candidates) {
-    try { execSync(`test -f "${c}"`); return c; } catch { /* skip */ }
+  for (const p of [
+    "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium-browser", "/usr/bin/chromium",
+  ]) {
+    try { execSync(`test -f "${p}"`); return p; } catch { /* skip */ }
   }
   return null;
 }
 
-export function isActive() { return _browser !== null; }
+function isXvfbRunning() {
+  try { execSync(`xdpyinfo -display ${DISPLAY_NUM}`, { stdio: "ignore" }); return true; }
+  catch { return false; }
+}
+
+async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function postStatus(text, color = 0x5865f2) {
+  if (!_notifyChannel) return;
+  const embed = new EmbedBuilder().setDescription(text).setColor(color).setTimestamp();
+  try {
+    if (_notifyMessage) {
+      await _notifyMessage.edit({ embeds: [embed] });
+    } else {
+      _notifyMessage = await _notifyChannel.send({ embeds: [embed] });
+    }
+  } catch { /* ignore */ }
+}
+
+// ── public API ─────────────────────────────────────────────────────────────────
+
+export function isActive() { return _streamer !== null; }
 
 export function getStatus() {
   if (!isActive()) return { active: false };
-  return { active: true, url: _currentUrl, updateCount: _updateCount,
-    startedAt: _startedAt?.toISOString(), intervalMs: _intervalMs };
+  return {
+    active: true,
+    url: _currentUrl,
+    guildId: _guildId,
+    channelId: _channelId,
+    startedAt: _startedAt?.toISOString(),
+  };
 }
 
-async function _sendEmbed({ buf, title, description, color = 0x5865f2 }) {
-  if (!_liveMessage) return;
-  try {
-    const att = new AttachmentBuilder(buf, { name: "screen.png" });
-    const embed = new EmbedBuilder()
-      .setTitle(title || `🖥️ ${_currentUrl.slice(0, 100)}`)
-      .setDescription(description || `อัปเดต #${_updateCount}`)
-      .setImage("attachment://screen.png")
-      .setColor(color)
-      .setFooter({ text: `เริ่มเมื่อ ${_startedAt?.toLocaleTimeString("th-TH")}` })
-      .setTimestamp();
-    await _liveMessage.edit({ embeds: [embed], files: [att] });
-  } catch (e) {
-    console.warn("[screenshare] embed error:", e.message);
-  }
-}
-
-async function _captureAndUpdate(label) {
-  if (!_page) return;
-  try {
-    const buf = await _page.screenshot({ type: "png" });
-    _updateCount++;
-    await _sendEmbed({ buf, description: label || `อัปเดตทุก ${_intervalMs / 1000}s · #${_updateCount}` });
-  } catch (e) {
-    console.warn("[screenshare] capture error:", e.message);
-  }
-}
-
-// ── Highlight elements by drawing colored borders via JS injection ─────────────
-async function _highlightElements(selectors, color = "#ff4444", durationMs = 3000) {
-  if (!_page) return;
-  await _page.evaluate((sels, col, dur) => {
-    const added = [];
-    for (const sel of sels) {
-      try {
-        const els = document.querySelectorAll(sel);
-        els.forEach(el => {
-          const orig = el.style.outline;
-          el.style.outline = `3px solid ${col}`;
-          el.style.outlineOffset = "2px";
-          added.push({ el, orig });
-        });
-      } catch {}
-    }
-    if (dur > 0) setTimeout(() => added.forEach(({ el, orig }) => { el.style.outline = orig; }), dur);
-  }, selectors, color, durationMs);
-}
-
-// ── Zoom into a bounding box area ─────────────────────────────────────────────
-async function _zoomToElement(selector) {
-  if (!_page) return null;
-  try {
-    const box = await _page.evaluate((sel) => {
-      const el = document.querySelector(sel);
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      return { x: r.left, y: r.top, width: r.width, height: r.height };
-    }, selector);
-    if (!box || box.width < 1) return null;
-    // Expand the clip area a bit
-    const pad = 20;
-    const clip = {
-      x: Math.max(0, box.x - pad),
-      y: Math.max(0, box.y - pad),
-      width: Math.min(1280, box.width + pad * 2),
-      height: Math.min(720, box.height + pad * 2),
-    };
-    const buf = await _page.screenshot({ type: "png", clip });
-    return buf;
-  } catch { return null; }
-}
-
-/** Start live screen sharing */
-export async function startScreenShare({ url, channel, intervalSeconds = 8 }) {
+/**
+ * Start a real Discord Go Live screen share.
+ * @param {object} opts
+ * @param {string}  opts.url            - URL to open in Chrome
+ * @param {object}  opts.client         - discord.js Client instance
+ * @param {string}  opts.guildId        - Guild ID
+ * @param {string}  opts.channelId      - Voice channel ID to stream into
+ * @param {object}  [opts.notifyChannel]- Text channel for status updates
+ */
+export async function startScreenShare({ url, client, guildId, channelId, notifyChannel }) {
   if (isActive()) await stopScreenShare();
+
   const chromePath = findChrome();
   if (!chromePath) return { error: "ไม่พบ Chrome — ต้องรันบน GitHub Actions (ubuntu-latest)" };
 
-  _intervalMs = Math.max(3, intervalSeconds) * 1000;
-  _startedAt = new Date();
-  _updateCount = 0;
   _currentUrl = url;
-  _targetChannel = channel;
+  _guildId = guildId;
+  _channelId = channelId;
+  _notifyChannel = notifyChannel || null;
+  _notifyMessage = null;
+  _startedAt = new Date();
 
-  try {
-    _browser = await puppeteer.launch({
-      executablePath: chromePath,
-      headless: "new",
-      args: ["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage",
-             "--disable-gpu","--disable-software-rasterizer","--window-size=1280,720"],
+  await postStatus(`🖥️ **กำลังเริ่ม screen share…**\n> URL: ${url}`, 0xfee75c);
+
+  // 1. Start Xvfb virtual display
+  if (!isXvfbRunning()) {
+    _xvfbProc = spawn("Xvfb", [DISPLAY_NUM, "-screen", "0", `${VIEWPORT_W}x${VIEWPORT_H}x24`], {
+      detached: false,
+      stdio: "ignore",
     });
-    _page = await _browser.newPage();
-    await _page.setViewport(VIEWPORT);
-    await _page.setUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
-    await _page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    _xvfbProc.on("error", e => console.warn("[screenshare] Xvfb error:", e.message));
+    await sleep(1200);
+  }
 
-    const buf = await _page.screenshot({ type: "png" });
-    _updateCount = 1;
-    const att = new AttachmentBuilder(buf, { name: "screen.png" });
-    const embed = new EmbedBuilder()
-      .setTitle(`🖥️ Screen Share เริ่มแล้ว`)
-      .setDescription(`กำลังดู: ${url.slice(0, 120)}\nอัปเดตทุก ${intervalSeconds}s`)
-      .setImage("attachment://screen.png")
-      .setColor(0x57f287)
-      .setFooter({ text: `เริ่มเมื่อ ${_startedAt.toLocaleTimeString("th-TH")}` })
-      .setTimestamp();
+  // 2. Open Chrome on the virtual display
+  _chromeProc = spawn(chromePath, [
+    `--display=${DISPLAY_NUM}`,
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-gpu",
+    "--disable-dev-shm-usage",
+    "--start-maximized",
+    `--window-size=${VIEWPORT_W},${VIEWPORT_H}`,
+    url,
+  ], { stdio: "ignore" });
+  _chromeProc.on("error", e => console.warn("[screenshare] Chrome error:", e.message));
+  await sleep(3000); // Wait for page to load
 
-    _liveMessage = await channel.send({ embeds: [embed], files: [att] });
-    _intervalId = setInterval(() => _captureAndUpdate(), _intervalMs);
-    return { ok: true, url, messageId: _liveMessage.id, intervalSeconds };
+  // 3. Join Discord voice channel via Streamer
+  try {
+    _streamer = new Streamer(client);
+    await _streamer.joinVoice(guildId, channelId);
+    await sleep(800);
+
+    // 4. Create Go Live stream (this shows "LIVE" badge to users)
+    const udp = await _streamer.createStream({
+      width: VIEWPORT_W,
+      height: VIEWPORT_H,
+      fps: FPS,
+      bitrateKbps: 3000,
+      maxBitrateKbps: 8000,
+      hardwareAcceleratedDecoding: false,
+      videoCodec: "H264",
+    });
+
+    // 5. Stream x11grab → H264 → Discord using ffmpeg
+    _streamAbortController = new AbortController();
+    const { signal } = _streamAbortController;
+
+    await postStatus(
+      `🔴 **Screen Share กำลัง Live อยู่**\n` +
+      `> กด **"ดู stream"** ในห้องเสียง **<#${channelId}>** เพื่อดู\n` +
+      `> URL: ${url}`,
+      0xed4245
+    );
+
+    // streamLivestreamVideo handles ffmpeg internally — point it at the x11grab device
+    const streamPromise = streamLivestreamVideo(
+      `${DISPLAY_NUM}.0`,   // x11grab input display
+      udp,
+      {
+        fps: FPS,
+        bitrateVideo: 3000,
+        videoCodec: "H264",
+        h26xPreset: "ultrafast",
+        // Tell the library this is a screen capture (x11grab)
+        inputFormat: "x11grab",
+        inputOptions: ["-video_size", `${VIEWPORT_W}x${VIEWPORT_H}`, "-framerate", String(FPS)],
+      }
+    ).catch(e => {
+      if (!signal.aborted) console.warn("[screenshare] stream ended:", e.message);
+    });
+
+    // Store promise for cleanup
+    _streamer._streamPromise = streamPromise;
+
+    return { ok: true, url, channelId, note: "Go Live stream started — users can click to watch" };
   } catch (e) {
     await _cleanup();
     return { error: e.message };
   }
 }
 
-/** Navigate to a new URL */
+/** Navigate Chrome to a new URL while streaming */
 export async function navigateTo(url) {
-  if (!_page) return { error: "ไม่มี screen share active" };
+  if (!_chromeProc) return { error: "ไม่มี screen share active" };
+  _currentUrl = url;
+  // Open new URL by spawning another chrome command (opens in same window)
+  const chromePath = findChrome();
+  spawn(chromePath, [
+    `--display=${DISPLAY_NUM}`,
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    url,
+  ], { stdio: "ignore" });
+  await sleep(2500);
+  await postStatus(`🔴 **Live** | ไปที่: ${url}`, 0xed4245);
+  return { ok: true, url };
+}
+
+/** Press a keyboard shortcut or key on the virtual display (xdotool) */
+export async function pressKey(key) {
   try {
-    _currentUrl = url;
-    await _page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    await _captureAndUpdate(`🔗 ไปที่ ${url}`);
-    return { ok: true, url };
+    execSync(`DISPLAY=${DISPLAY_NUM} xdotool key ${key}`, { stdio: "ignore" });
+    await sleep(400);
+    return { ok: true, key };
   } catch (e) { return { error: e.message }; }
 }
 
-/** Click an element and screenshot */
-export async function clickElement(selector) {
-  if (!_page) return { error: "ไม่มี screen share active" };
+/** Type text using xdotool on the virtual display */
+export async function typeText(text) {
   try {
-    await _highlightElements([selector], "#ff4444", 800);
-    await _page.click(selector);
-    await new Promise(r => setTimeout(r, 700));
-    await _captureAndUpdate(`🖱️ คลิก \`${selector}\``);
-    return { ok: true, selector };
+    execSync(`DISPLAY=${DISPLAY_NUM} xdotool type --clearmodifiers -- "${text.replace(/"/g, '\\"')}"`, { stdio: "ignore" });
+    await sleep(400);
+    return { ok: true, text };
   } catch (e) { return { error: e.message }; }
 }
 
-/** Type text into an element */
-export async function typeText(selector, text) {
-  if (!_page) return { error: "ไม่มี screen share active" };
+/** Click at x,y on the virtual display */
+export async function clickAt(x, y) {
   try {
-    await _page.click(selector);
-    await _page.type(selector, text, { delay: 40 });
-    await _captureAndUpdate(`⌨️ พิมพ์ใน \`${selector}\`: ${text}`);
-    return { ok: true, selector, text };
+    execSync(`DISPLAY=${DISPLAY_NUM} xdotool mousemove ${x} ${y} click 1`, { stdio: "ignore" });
+    await sleep(500);
+    return { ok: true, x, y };
   } catch (e) { return { error: e.message }; }
 }
 
-/** Scroll the page */
-export async function scrollPage(direction = "down", pixels = 600) {
-  if (!_page) return { error: "ไม่มี screen share active" };
-  try {
-    await _page.evaluate((dir, px) => window.scrollBy(0, dir === "down" ? px : -px), direction, pixels);
-    await new Promise(r => setTimeout(r, 300));
-    await _captureAndUpdate(`📜 Scroll ${direction} ${pixels}px`);
-    return { ok: true, direction, pixels };
-  } catch (e) { return { error: e.message }; }
+/** Zoom in/out using Ctrl+/Ctrl- in the browser */
+export async function zoomBrowser(direction = "in", steps = 2) {
+  const key = direction === "in" ? "ctrl+plus" : "ctrl+minus";
+  for (let i = 0; i < steps; i++) {
+    await pressKey(key);
+    await sleep(200);
+  }
+  return { ok: true, direction, steps };
 }
 
-/** Zoom into a CSS selector — crops + sends just that element */
-export async function zoomToElement(selector) {
-  if (!_page) return { error: "ไม่มี screen share active" };
-  try {
-    await _highlightElements([selector], "#4488ff", 2000);
-    await new Promise(r => setTimeout(r, 100));
-    const buf = await _zoomToElement(selector);
-    if (!buf) {
-      // Fall back to full screenshot if element not found
-      await _captureAndUpdate(`🔍 ซูมไม่เจอ \`${selector}\` — ส่งหน้าจอเต็ม`);
-      return { error: `ไม่พบ element: ${selector}` };
-    }
-    _updateCount++;
-    await _sendEmbed({ buf, description: `🔍 ซูมที่ \`${selector}\``, color: 0xfee75c });
-    return { ok: true, selector };
-  } catch (e) { return { error: e.message }; }
+/** Reset browser zoom to 100% */
+export async function resetZoom() {
+  await pressKey("ctrl+0");
+  await sleep(200);
+  return { ok: true };
 }
 
-/** Highlight one or more elements with a colored border and screenshot */
-export async function highlightElements(selectors, color = "#ff4444") {
-  if (!_page) return { error: "ไม่มี screen share active" };
-  const list = Array.isArray(selectors) ? selectors : [selectors];
-  try {
-    await _highlightElements(list, color, 5000);
-    await new Promise(r => setTimeout(r, 200));
-    await _captureAndUpdate(`🎯 ไฮไลต์: ${list.join(", ")}`);
-    return { ok: true, selectors: list };
-  } catch (e) { return { error: e.message }; }
+/** Scroll page up/down using keyboard */
+export async function scrollPage(direction = "down", steps = 3) {
+  const key = direction === "down" ? "Page_Down" : "Page_Up";
+  for (let i = 0; i < steps; i++) {
+    await pressKey(key);
+    await sleep(150);
+  }
+  return { ok: true, direction, steps };
 }
 
-/** Scroll so an element is in view, then screenshot */
-export async function scrollToElement(selector) {
-  if (!_page) return { error: "ไม่มี screen share active" };
-  try {
-    await _page.evaluate((sel) => {
-      const el = document.querySelector(sel);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, selector);
-    await new Promise(r => setTimeout(r, 600));
-    await _highlightElements([selector], "#00cc88", 3000);
-    await new Promise(r => setTimeout(r, 150));
-    await _captureAndUpdate(`🎯 เลื่อนไปที่ \`${selector}\``);
-    return { ok: true, selector };
-  } catch (e) { return { error: e.message }; }
-}
-
-/** Run arbitrary JS on the page (for power users) */
-export async function evalOnPage(code) {
-  if (!_page) return { error: "ไม่มี screen share active" };
-  try {
-    const result = await _page.evaluate(code);
-    await new Promise(r => setTimeout(r, 300));
-    await _captureAndUpdate(`⚡ eval: ${code.slice(0, 60)}`);
-    return { ok: true, result: String(result).slice(0, 500) };
-  } catch (e) { return { error: e.message }; }
-}
-
-/** Take an immediate snapshot without waiting for interval */
-export async function snapshotNow() {
-  if (!_page) return { error: "ไม่มี screen share active" };
-  await _captureAndUpdate("📸 Snapshot ทันที");
-  return { ok: true, updateCount: _updateCount };
+/** Search for text using Ctrl+F in browser */
+export async function findInPage(query) {
+  await pressKey("ctrl+f");
+  await sleep(500);
+  await typeText(query);
+  await sleep(300);
+  return { ok: true, query };
 }
 
 async function _cleanup() {
-  if (_intervalId) { clearInterval(_intervalId); _intervalId = null; }
-  if (_liveMessage) {
+  // Abort stream
+  if (_streamAbortController) {
+    _streamAbortController.abort();
+    _streamAbortController = null;
+  }
+  // Leave voice
+  if (_streamer) {
+    try { _streamer.leaveVoice(); } catch { /* ignore */ }
+    _streamer = null;
+  }
+  // Kill Chrome
+  if (_chromeProc) {
+    try { _chromeProc.kill("SIGTERM"); } catch { /* ignore */ }
+    _chromeProc = null;
+  }
+  // Kill Xvfb
+  if (_xvfbProc) {
+    try { _xvfbProc.kill("SIGTERM"); } catch { /* ignore */ }
+    _xvfbProc = null;
+  }
+  // Kill any leftover processes
+  try { execSync("pkill -f 'Xvfb :99' || true", { stdio: "ignore" }); } catch { /* ignore */ }
+  try { execSync("pkill -f 'google-chrome.*:99' || true", { stdio: "ignore" }); } catch { /* ignore */ }
+
+  // Update status message
+  if (_notifyMessage) {
     try {
-      await _liveMessage.edit({
-        embeds: [new EmbedBuilder().setTitle("🖥️ Screen Share — หยุดแล้ว")
-          .setDescription(`อัปเดตทั้งหมด ${_updateCount} ครั้ง`).setColor(0xed4245).setTimestamp()],
-        files: [],
+      await _notifyMessage.edit({
+        embeds: [new EmbedBuilder().setDescription("⏹️ **Screen Share หยุดแล้ว**").setColor(0x747f8d).setTimestamp()],
       });
     } catch { /* ignore */ }
-    _liveMessage = null;
+    _notifyMessage = null;
   }
-  if (_page) { try { await _page.close(); } catch {} _page = null; }
-  if (_browser) { try { await _browser.close(); } catch {} _browser = null; }
-  const count = _updateCount;
-  _currentUrl = ""; _targetChannel = null; _updateCount = 0; _startedAt = null;
-  return count;
+  _notifyChannel = null;
+  _currentUrl = "";
+  _startedAt = null;
+  _guildId = null;
+  _channelId = null;
 }
 
-/** Stop screen sharing */
+/** Stop the Go Live stream */
 export async function stopScreenShare() {
-  const totalUpdates = await _cleanup();
-  return { ok: true, totalUpdates };
+  await _cleanup();
+  return { ok: true };
 }

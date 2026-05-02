@@ -36,11 +36,15 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install ffmpeg (required by @discordjs/voice for MP3 playback)
+      - name: Install ffmpeg, Xvfb and display tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          sudo apt-get install -y --no-install-recommends ffmpeg xvfb xdotool x11-utils
           ffmpeg -version | head -n 1
+          Xvfb :99 -screen 0 1280x720x24 -ac &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+          sleep 1
+          echo "✅ Xvfb started on :99"
 
       - name: Cache bot dependencies
         id: cache-deps
