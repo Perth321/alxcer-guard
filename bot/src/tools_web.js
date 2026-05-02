@@ -7,7 +7,7 @@ const WEB_TIMEOUT_MS = 15_000;
 // ─── DuckDuckGo web search ────────────────────────────────────────────────────
 // Uses two complementary endpoints:
 //   1. api.duckduckgo.com JSON  — instant answers, abstract, related topics
-//   2. lite.duckduckgo.com HTML — real search result snippets (regex parsed)
+//   2. html.duckduckgo.com HTML — real search result snippets (regex parsed)
 // Returns top results with title, url, snippet.
 export async function webSearch(query, maxResults = 5) {
   const q = encodeURIComponent(query.trim());
@@ -19,7 +19,7 @@ export async function webSearch(query, maxResults = 5) {
   try {
     const res = await fetch(jsonUrl, {
       signal: AbortSignal.timeout(WEB_TIMEOUT_MS),
-      headers: { "User-Agent": "AlxcerGuardBot/1.0" },
+      headers: { "User-Agent": "AlxcerGuardBot/2.0" },
     });
     const json = await res.json();
     abstract = json.AbstractText || json.Answer || "";
@@ -29,32 +29,68 @@ export async function webSearch(query, maxResults = 5) {
       .map(t => ({ title: t.Text.slice(0, 80), url: t.FirstURL, snippet: t.Text.slice(0, 200) }));
   } catch { /* ignore */ }
 
-  // Phase 2: Real search snippets from DuckDuckGo Lite HTML
+  // Phase 2: Real search snippets — try html.duckduckgo.com (more stable than lite)
   let liteResults = [];
   try {
-    const liteUrl = `https://lite.duckduckgo.com/lite/?q=${q}`;
-    const res = await fetch(liteUrl, {
+    const htmlUrl = `https://html.duckduckgo.com/html/?q=${q}`;
+    const res = await fetch(htmlUrl, {
       signal: AbortSignal.timeout(WEB_TIMEOUT_MS),
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; AlxcerBot/1.0)",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "th,en;q=0.9",
       },
     });
     const html = await res.text();
-    // DuckDuckGo Lite HTML pattern: <a class="result-link" href="...">title</a> then <td class="result-snippet">snippet</td>
-    const linkRx   = /<a[^>]+class="result-link"[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
-    const snipRx   = /<td[^>]+class="result-snippet"[^>]*>([\s\S]*?)<\/td>/gi;
+
+    // DDG HTML structure: result links inside <a class="result__a"> with href,
+    // snippets inside <a class="result__snippet">
+    const titleRx = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([sS]*?)</a>/gi;
+    const snipRx  = /<a[^>]+class="result__snippet"[^>]*>([sS]*?)</a>/gi;
     const urls = [], titles = [], snips = [];
     let m;
-    while ((m = linkRx.exec(html)) && urls.length < maxResults) {
-      urls.push(m[1].trim());
-      titles.push(m[2].trim());
+    while ((m = titleRx.exec(html)) && urls.length < maxResults) {
+      const href = m[1].trim();
+      // DDG wraps URLs as /l/?kh=-1&uddg=<encoded-real-url> — decode if needed
+      const realUrl = (href.startsWith("/l/") || href.startsWith("//duckduckgo.com/l/"))
+        ? decodeURIComponent((href.match(/uddg=([^&]+)/) || [])[1] || "") || href
+        : href;
+      if (!realUrl.startsWith("http")) continue;
+      urls.push(realUrl);
+      titles.push(m[2].replace(/<[^>]+>/g, "").replace(/s+/g, " ").trim().slice(0, 120));
     }
     while ((m = snipRx.exec(html)) && snips.length < maxResults) {
-      snips.push(m[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim().slice(0, 300));
+      snips.push(m[1].replace(/<[^>]+>/g, "").replace(/s+/g, " ").trim().slice(0, 300));
     }
     for (let i = 0; i < urls.length; i++) {
       liteResults.push({ title: titles[i] || "—", url: urls[i], snippet: snips[i] || "" });
+    }
+
+    // Fallback: also try lite.duckduckgo.com if html variant returned nothing
+    if (!liteResults.length) {
+      const liteUrl = `https://lite.duckduckgo.com/lite/?q=${q}`;
+      const lRes = await fetch(liteUrl, {
+        signal: AbortSignal.timeout(WEB_TIMEOUT_MS),
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; AlxcerBot/2.0)",
+          "Accept-Language": "th,en;q=0.9",
+        },
+      });
+      const lHtml = await lRes.text();
+      // Multiple patterns to handle DDG Lite HTML structure changes over time
+      const lLinkRx = /<a[^>]+href="(https?:[^"]+)"[^>]*class="result-link"[^>]*>([^<]+)</a>|<a[^>]+class="result-link"[^>]+href="(https?:[^"]+)"[^>]*>([^<]+)</a>/gi;
+      const lSnipRx = /<td[^>]+class="result-snippet"[^>]*>([sS]*?)</td>/gi;
+      const lu = [], lt = [], ls = [];
+      while ((m = lLinkRx.exec(lHtml)) && lu.length < maxResults) {
+        lu.push((m[1] || m[3]).trim());
+        lt.push((m[2] || m[4]).trim());
+      }
+      while ((m = lSnipRx.exec(lHtml)) && ls.length < maxResults) {
+        ls.push(m[1].replace(/<[^>]+>/g, "").replace(/s+/g, " ").trim().slice(0, 300));
+      }
+      for (let i = 0; i < lu.length; i++) {
+        liteResults.push({ title: lt[i] || "—", url: lu[i], snippet: ls[i] || "" });
+      }
     }
   } catch { /* ignore */ }
 
@@ -72,7 +108,7 @@ export async function webSearch(query, maxResults = 5) {
 // ─── Fetch & extract text from URL ───────────────────────────────────────────
 // Strips HTML tags and returns clean readable text.
 export async function fetchUrl(url, maxChars = 3000) {
-  if (!/^https?:\/\//i.test(url)) return { error: "URL must start with http:// or https://" };
+  if (!/^https?:///i.test(url)) return { error: "URL must start with http:// or https://" };
   try {
     const res = await fetch(url, {
       signal: AbortSignal.timeout(WEB_TIMEOUT_MS),
@@ -86,14 +122,13 @@ export async function fetchUrl(url, maxChars = 3000) {
     const raw = await res.text();
     let text;
     if (ct.includes("text/html")) {
-      // Basic HTML→text conversion
       text = raw
-        .replace(/<script[\s\S]*?<\/script>/gi, "")
-        .replace(/<style[\s\S]*?<\/style>/gi, "")
+        .replace(/<script[sS]*?</script>/gi, "")
+        .replace(/<style[sS]*?</style>/gi, "")
         .replace(/<[^>]+>/g, " ")
         .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-        .replace(/&nbsp;/g, " ").replace(/&#\d+;/g, "")
-        .replace(/\s{2,}/g, " ")
+        .replace(/&nbsp;/g, " ").replace(/&#d+;/g, "")
+        .replace(/s{2,}/g, " ")
         .trim();
     } else {
       text = raw.trim();
@@ -121,7 +156,6 @@ export async function wikipediaLookup(topic, lang = "th") {
     const json = await res.json();
     const pages = Object.values(json.query?.pages || {});
     if (!pages.length || pages[0].missing !== undefined) {
-      // try English fallback
       const enUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${q}&prop=extracts&exintro=1&explaintext=1&exsentences=5&format=json&origin=*`;
       const enRes = await fetch(enUrl, { signal: AbortSignal.timeout(WEB_TIMEOUT_MS) });
       const enJson = await enRes.json();
@@ -141,14 +175,12 @@ export async function wikipediaLookup(topic, lang = "th") {
 // Geocodes city using Open-Meteo geocoding API, then fetches current weather.
 export async function getWeather(city) {
   try {
-    // Step 1: geocode
     const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=th&format=json`;
     const geoRes = await fetch(geoUrl, { signal: AbortSignal.timeout(WEB_TIMEOUT_MS) });
     const geoJson = await geoRes.json();
     const loc = geoJson.results?.[0];
     if (!loc) return { error: `ไม่พบเมือง "${city}"` };
 
-    // Step 2: fetch current weather
     const wxUrl = `https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code,apparent_temperature&wind_speed_unit=kmh&timezone=auto`;
     const wxRes = await fetch(wxUrl, { signal: AbortSignal.timeout(WEB_TIMEOUT_MS) });
     const wxJson = await wxRes.json();
@@ -180,26 +212,52 @@ export async function getWeather(city) {
   }
 }
 
-// ─── Guard AI Hotel Search ─────────────────────────────────────────────────────
-// สร้าง preview URL ของ Guard AI hotel page — bot จะ screenshot หน้านี้ แล้วส่งเป็นรูปใน Discord
-const GUARD_DOMAIN =
-  "https://5e5b3295-7d1f-409b-9af8-893239a0279c-00-26fjm9tfs1kvk.spock.replit.dev";
-
+// ─── Hotel Search ─────────────────────────────────────────────────────────────
+// Generates direct Booking.com + Agoda deep-links for a given location/dates.
+// NOTE: The previous version pointed at a hardcoded expired Replit dev URL
+// (https://5e5b3295-...spock.replit.dev) which caused all hotel searches to fail.
+// This version is fully self-contained — no external service needed.
 export function searchHotels({ location, budget, checkin, checkout, guests = 1 }) {
   const today = new Date().toISOString().split("T")[0];
-  const tom = new Date(Date.now() + 86400000).toISOString().split("T")[0];
-  const cin = checkin || today;
-  const cout = checkout || tom;
+  const tom   = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+  const cin   = checkin  || today;
+  const cout  = checkout || tom;
+  const g     = Number(guests) || 1;
 
-  const p = new URLSearchParams({ location, guests: String(guests) });
-  if (budget) p.set("budget", String(budget));
-  p.set("checkin", cin);
-  p.set("checkout", cout);
+  // Booking.com deep link
+  const bkParams = new URLSearchParams({
+    ss:           location,
+    checkin:      cin,
+    checkout:     cout,
+    group_adults: String(g),
+    no_rooms:     "1",
+    lang:         "th",
+  });
+  if (budget) bkParams.set("nflt", `price=THB-min-${budget}-1`);
+  const bookingUrl = `https://www.booking.com/search.html?${bkParams.toString()}`;
 
-  const preview_url = `${GUARD_DOMAIN}/api/hotels/preview?${p.toString()}`;
+  // Agoda deep link
+  const agParams = new URLSearchParams({
+    city:     location,
+    checkIn:  cin,
+    checkOut: cout,
+    adults:   String(g),
+    rooms:    "1",
+    currency: "THB",
+    language: "th-th",
+  });
+  if (budget) agParams.set("maxPrice", String(budget));
+  const agodaUrl = `https://www.agoda.com/search?${agParams.toString()}`;
+
   return {
     ok: true,
-    preview_url,
-    meta: { location, budget: budget || null, checkin: cin, checkout: cout, guests: Number(guests) },
+    location,
+    checkin:     cin,
+    checkout:    cout,
+    guests:      g,
+    budget:      budget || null,
+    booking_url: bookingUrl,
+    agoda_url:   agodaUrl,
+    message:     `ค้นหาที่พักใน ${location} (${cin} → ${cout}, ${g} คน)${budget ? `, งบไม่เกิน ${budget} บาท` : ""}: [Booking.com](${bookingUrl}) | [Agoda](${agodaUrl})`,
   };
 }
