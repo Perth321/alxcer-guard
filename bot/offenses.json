@@ -23,21 +23,21 @@
       }
     },
     "946756535936233542": {
-      "count": 7,
-      "lastOffenseAt": 1777717696001,
-      "muteUntil": 1777721296001,
+      "count": 8,
+      "lastOffenseAt": 1777717718141,
+      "muteUntil": 1777721318141,
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
         "count": 1,
-        "lastAt": 1777717696708,
+        "lastAt": 1777717718973,
         "history": [
           {
-            "at": 1777717696708,
+            "at": 1777717718973,
             "severity": 7,
             "matched": "หี",
             "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "ลองพูดคำว่าหีบมันก็แบน",
+            "excerpt": "พิมพ์หีบ",
             "action": "timeout_failed",
             "source": "local"
           }
