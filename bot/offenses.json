@@ -1,26 +1,11 @@
 {
   "users": {
     "603182413660684321": {
-      "count": 47,
-      "lastOffenseAt": 1777716847518,
-      "muteUntil": 1777720447518,
+      "count": 48,
+      "lastOffenseAt": 1777718425299,
+      "muteUntil": 1777722025299,
       "lastWord": "หี",
-      "lastSource": "voice",
-      "chat": {
-        "count": 1,
-        "lastAt": 1777717644123,
-        "history": [
-          {
-            "at": 1777717644123,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          }
-        ]
-      }
+      "lastSource": "voice"
     },
     "946756535936233542": {
       "count": 8,
