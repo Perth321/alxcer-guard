@@ -2561,7 +2561,7 @@ function toolArgPreview(toolName, args) {
   }
 }
 
-async function handleAgentOrChatReply(msg, triggerReason) {
+async function handleAgentOrChatReply(msg, triggerReason, media = null) {
   const author = msg.author;
   const channel = msg.channel;
   const guild = msg.guild;
@@ -2588,9 +2588,14 @@ async function handleAgentOrChatReply(msg, triggerReason) {
     });
   let cleanText = rawText.replace(/<@!?\d+>/g, "").trim();
   if (!cleanText) cleanText = "(empty mention)";
+  // Include image URLs if provided (for Claude Vision / image search)
+  const imageUrls = (media?.images || []).map((img) => img.url).filter(Boolean);
+  const imageSection = imageUrls.length
+    ? `\n\n[ภาพที่แนบมา ${imageUrls.length} รูป]:\n${imageUrls.map((u, i) => `รูปที่ ${i + 1}: ${u}`).join("\n")}\n\n[หมายเหตุ: ถ้าผู้ใช้ส่งรูปมาพร้อมคำถาม ให้ใช้ tool analyze_image เพื่อวิเคราะห์รูปและค้นหาข้อมูลที่เกี่ยวข้อง]`
+    : "";
   const userPrompt = mentionedUsers.length
-    ? `${cleanText}\n\n[mentioned users in this message]: ${mentionedUsers.map((m) => `${m.name} (id: ${m.id})`).join(", ")}`
-    : cleanText;
+    ? `${cleanText}\n\n[mentioned users in this message]: ${mentionedUsers.map((m) => `${m.name} (id: ${m.id})`).join(", ")}${imageSection}`
+    : `${cleanText}${imageSection}`;
 
   await channel.sendTyping().catch(() => {});
 
@@ -2762,7 +2767,14 @@ client.on(Events.MessageCreate, async (msg) => {
       // If the message has image / video attachments, route through the
       // vision pipeline (YOLO + vision-LLM) instead of plain chat.
       const media = collectMediaAttachments(msg);
+      const rawTextForRouting = (msg.content || "").replace(/<@!?\d+>/g, "").trim();
       if (media.images.length || media.videos.length) {
+        // If user has real text with images → route to agent (image search via Guard AI)
+        if (rawTextForRouting && rawTextForRouting.length > 2) {
+          await handleAgentOrChatReply(msg, triggered, media);
+          return;
+        }
+        // Otherwise use existing YOLO vision pipeline
         try {
           await handleVisionReply(msg, triggered, media);
         } catch (err) {
