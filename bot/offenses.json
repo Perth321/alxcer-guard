@@ -15,35 +15,11 @@
       "lastSource": "voice"
     },
     "967120879689551873": {
-      "count": 3,
-      "lastOffenseAt": 1777698065707,
-      "muteUntil": 0,
+      "count": 4,
+      "lastOffenseAt": 1777723310509,
+      "muteUntil": 1777726910509,
       "lastWord": "หี",
-      "lastSource": "voice",
-      "chat": {
-        "count": 2,
-        "lastAt": 1777717653360,
-        "history": [
-          {
-            "at": 1777717582376,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777717653360,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          }
-        ]
-      }
+      "lastSource": "voice"
     },
     "1491387879648264347": {
       "count": 1,
