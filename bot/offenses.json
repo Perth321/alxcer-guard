@@ -62,6 +62,13 @@
       "muteUntil": 0,
       "lastWord": "หี",
       "lastSource": "voice"
+    },
+    "1464586313444495503": {
+      "count": 1,
+      "lastOffenseAt": 1777715193940,
+      "muteUntil": 1777715253940,
+      "lastWord": "หี",
+      "lastSource": "voice"
     }
   }
 }
