@@ -78,4 +78,6 @@ jobs:
           DEEPGRAM_LANGUAGE: th
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: node src/index.js
+        run: |
+          set -o pipefail
+          node src/index.js 2>&1 | tee /tmp/bot_run.log
