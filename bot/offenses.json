@@ -8,26 +8,11 @@
       "lastSource": "voice"
     },
     "946756535936233542": {
-      "count": 5,
-      "lastOffenseAt": 1777570456485,
-      "muteUntil": 0,
+      "count": 6,
+      "lastOffenseAt": 1777704434462,
+      "muteUntil": 1777708034462,
       "lastWord": "หี",
-      "lastSource": "voice",
-      "chat": {
-        "count": 1,
-        "lastAt": 1777621310835,
-        "history": [
-          {
-            "at": 1777621310835,
-            "severity": 10,
-            "matched": "ไอ้เชี้ย",
-            "reason": "มีคำด่าและคำหยาบ",
-            "excerpt": "ไอ้เชี้ยยยยยยย62625252552525",
-            "action": "timeout_failed",
-            "source": "ai"
-          }
-        ]
-      }
+      "lastSource": "voice"
     },
     "967120879689551873": {
       "count": 3,
@@ -44,9 +29,9 @@
       "lastSource": "voice"
     },
     "264669488035659778": {
-      "count": 7,
-      "lastOffenseAt": 1777704400566,
-      "muteUntil": 1777708000566,
+      "count": 8,
+      "lastOffenseAt": 1777704431497,
+      "muteUntil": 1777708031497,
       "lastWord": "หี",
       "lastSource": "voice"
     },
