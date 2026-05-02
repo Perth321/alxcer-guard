@@ -131,9 +131,35 @@ export async function deployWebpage(filename, html, description = "") {
 
 // ─── Read latest GitHub Actions log ──────────────────────────────────────────
 export async function readOwnLog(lines = 100, filter = "") {
+  const maxLines = Math.min(Math.max(lines, 10), 500);
+
+  // ── Primary: local tee log written by the workflow while the job is running ──
+  // (GitHub Actions API only serves log blobs AFTER the job completes, so the
+  //  API path always returns BlobNotFound while the bot is alive. Reading the
+  //  local file is the only reliable way to get live output.)
+  const LOCAL_LOG = "/tmp/bot_run.log";
+  if (fs.existsSync(LOCAL_LOG)) {
+    try {
+      const raw = fs.readFileSync(LOCAL_LOG, "utf8");
+      let logLines = raw.split("\n");
+      if (filter) logLines = logLines.filter((l) => l.toLowerCase().includes(filter.toLowerCase()));
+      const sliced = logLines.slice(-maxLines);
+      return {
+        source: "local_file",
+        log_file: LOCAL_LOG,
+        total_lines: logLines.length,
+        returned_lines: sliced.length,
+        log: sliced.join("\n").slice(0, 8000),
+      };
+    } catch (err) {
+      // fall through to GitHub API if file read fails
+    }
+  }
+
+  // ── Fallback: GitHub Actions API (only works after the job finishes) ──
   const token = process.env.GITHUB_TOKEN;
   const repo = process.env.GITHUB_REPOSITORY;
-  if (!token || !repo) return { error: "GITHUB_TOKEN / GITHUB_REPOSITORY not set" };
+  if (!token || !repo) return { error: "GITHUB_TOKEN / GITHUB_REPOSITORY not set, and /tmp/bot_run.log not found" };
 
   const H = { Authorization: `token ${token}`, Accept: "application/vnd.github+json" };
 
@@ -162,14 +188,18 @@ export async function readOwnLog(lines = 100, filter = "") {
       job_status: job.status, job_conclusion: job.conclusion,
     };
 
-    if (!logRes.ok) return { ...meta, note: "Log not yet available (run still starting up)" };
+    // Log blob isn't available while the job is still in progress — this is a
+    // GitHub platform limitation; the file appears only after the job completes.
+    if (!logRes.ok) return {
+      ...meta,
+      note: "Log blob not available (job still running). /tmp/bot_run.log was not found — make sure the workflow pipes stdout with: node src/index.js 2>&1 | tee /tmp/bot_run.log",
+    };
 
     let logLines = (await logRes.text()).split("\n");
     if (filter) logLines = logLines.filter((l) => l.toLowerCase().includes(filter.toLowerCase()));
-    const maxLines = Math.min(Math.max(lines, 10), 300);
     const sliced = logLines.slice(-maxLines);
 
-    return { ...meta, log_lines: sliced.length, log: sliced.join("\n").slice(0, 6000) };
+    return { ...meta, source: "github_api", log_lines: sliced.length, log: sliced.join("\n").slice(0, 8000) };
   } catch (err) {
     return { error: err?.message || "log fetch failed" };
   }
