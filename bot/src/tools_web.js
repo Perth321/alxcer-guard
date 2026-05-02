@@ -8,7 +8,6 @@ const WEB_TIMEOUT_MS = 15_000;
 // Uses two complementary endpoints:
 //   1. api.duckduckgo.com JSON  — instant answers, abstract, related topics
 //   2. html.duckduckgo.com HTML — real search result snippets (regex parsed)
-// Returns top results with title, url, snippet.
 export async function webSearch(query, maxResults = 5) {
   const q = encodeURIComponent(query.trim());
 
@@ -24,12 +23,12 @@ export async function webSearch(query, maxResults = 5) {
     const json = await res.json();
     abstract = json.AbstractText || json.Answer || "";
     relatedTopics = (json.RelatedTopics || [])
-      .filter(t => t.Text && t.FirstURL)
+      .filter((t) => t.Text && t.FirstURL)
       .slice(0, 3)
-      .map(t => ({ title: t.Text.slice(0, 80), url: t.FirstURL, snippet: t.Text.slice(0, 200) }));
+      .map((t) => ({ title: t.Text.slice(0, 80), url: t.FirstURL, snippet: t.Text.slice(0, 200) }));
   } catch { /* ignore */ }
 
-  // Phase 2: Real search snippets — try html.duckduckgo.com (more stable than lite)
+  // Phase 2: Real search snippets — try html.duckduckgo.com
   let liteResults = [];
   try {
     const htmlUrl = `https://html.duckduckgo.com/html/?q=${q}`;
@@ -43,30 +42,28 @@ export async function webSearch(query, maxResults = 5) {
     });
     const html = await res.text();
 
-    // DDG HTML structure: result links inside <a class="result__a"> with href,
-    // snippets inside <a class="result__snippet">
-    const titleRx = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([sS]*?)</a>/gi;
-    const snipRx  = /<a[^>]+class="result__snippet"[^>]*>([sS]*?)</a>/gi;
+    // DDG HTML: links inside <a class="result__a">, snippets inside <a class="result__snippet">
+    const titleRx = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    const snipRx  = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
     const urls = [], titles = [], snips = [];
     let m;
     while ((m = titleRx.exec(html)) && urls.length < maxResults) {
       const href = m[1].trim();
-      // DDG wraps URLs as /l/?kh=-1&uddg=<encoded-real-url> — decode if needed
-      const realUrl = (href.startsWith("/l/") || href.startsWith("//duckduckgo.com/l/"))
-        ? decodeURIComponent((href.match(/uddg=([^&]+)/) || [])[1] || "") || href
-        : href;
+      // DDG wraps as /l/?uddg=<encoded-real-url> — decode if needed
+      const uddg = href.match(/uddg=([^&]+)/);
+      const realUrl = uddg ? decodeURIComponent(uddg[1]) : href;
       if (!realUrl.startsWith("http")) continue;
       urls.push(realUrl);
-      titles.push(m[2].replace(/<[^>]+>/g, "").replace(/s+/g, " ").trim().slice(0, 120));
+      titles.push(m[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim().slice(0, 120));
     }
     while ((m = snipRx.exec(html)) && snips.length < maxResults) {
-      snips.push(m[1].replace(/<[^>]+>/g, "").replace(/s+/g, " ").trim().slice(0, 300));
+      snips.push(m[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim().slice(0, 300));
     }
     for (let i = 0; i < urls.length; i++) {
       liteResults.push({ title: titles[i] || "—", url: urls[i], snippet: snips[i] || "" });
     }
 
-    // Fallback: also try lite.duckduckgo.com if html variant returned nothing
+    // Fallback: lite.duckduckgo.com if html variant returned nothing
     if (!liteResults.length) {
       const liteUrl = `https://lite.duckduckgo.com/lite/?q=${q}`;
       const lRes = await fetch(liteUrl, {
@@ -77,16 +74,15 @@ export async function webSearch(query, maxResults = 5) {
         },
       });
       const lHtml = await lRes.text();
-      // Multiple patterns to handle DDG Lite HTML structure changes over time
-      const lLinkRx = /<a[^>]+href="(https?:[^"]+)"[^>]*class="result-link"[^>]*>([^<]+)</a>|<a[^>]+class="result-link"[^>]+href="(https?:[^"]+)"[^>]*>([^<]+)</a>/gi;
-      const lSnipRx = /<td[^>]+class="result-snippet"[^>]*>([sS]*?)</td>/gi;
+      const lLinkRx = /<a[^>]+class="result-link"[^>]*href="(https?:[^"]+)"[^>]*>([^<]+)<\/a>|<a[^>]+href="(https?:[^"]+)"[^>]*class="result-link"[^>]*>([^<]+)<\/a>/gi;
+      const lSnipRx = /<td[^>]+class="result-snippet"[^>]*>([\s\S]*?)<\/td>/gi;
       const lu = [], lt = [], ls = [];
       while ((m = lLinkRx.exec(lHtml)) && lu.length < maxResults) {
         lu.push((m[1] || m[3]).trim());
         lt.push((m[2] || m[4]).trim());
       }
       while ((m = lSnipRx.exec(lHtml)) && ls.length < maxResults) {
-        ls.push(m[1].replace(/<[^>]+>/g, "").replace(/s+/g, " ").trim().slice(0, 300));
+        ls.push(m[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim().slice(0, 300));
       }
       for (let i = 0; i < lu.length; i++) {
         liteResults.push({ title: lt[i] || "—", url: lu[i], snippet: ls[i] || "" });
@@ -106,9 +102,8 @@ export async function webSearch(query, maxResults = 5) {
 }
 
 // ─── Fetch & extract text from URL ───────────────────────────────────────────
-// Strips HTML tags and returns clean readable text.
 export async function fetchUrl(url, maxChars = 3000) {
-  if (!/^https?:///i.test(url)) return { error: "URL must start with http:// or https://" };
+  if (!/^https?:\/\//i.test(url)) return { error: "URL must start with http:// or https://" };
   try {
     const res = await fetch(url, {
       signal: AbortSignal.timeout(WEB_TIMEOUT_MS),
@@ -123,12 +118,12 @@ export async function fetchUrl(url, maxChars = 3000) {
     let text;
     if (ct.includes("text/html")) {
       text = raw
-        .replace(/<script[sS]*?</script>/gi, "")
-        .replace(/<style[sS]*?</style>/gi, "")
+        .replace(/<script[\s\S]*?<\/script>/gi, "")
+        .replace(/<style[\s\S]*?<\/style>/gi, "")
         .replace(/<[^>]+>/g, " ")
         .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-        .replace(/&nbsp;/g, " ").replace(/&#d+;/g, "")
-        .replace(/s{2,}/g, " ")
+        .replace(/&nbsp;/g, " ").replace(/&#\d+;/g, "")
+        .replace(/\s{2,}/g, " ")
         .trim();
     } else {
       text = raw.trim();
@@ -147,7 +142,6 @@ export async function fetchUrl(url, maxChars = 3000) {
 }
 
 // ─── Wikipedia quick lookup ───────────────────────────────────────────────────
-// Uses Wikipedia's Action API — completely free, no key.
 export async function wikipediaLookup(topic, lang = "th") {
   try {
     const q = encodeURIComponent(topic.trim());
@@ -172,7 +166,6 @@ export async function wikipediaLookup(topic, lang = "th") {
 }
 
 // ─── Weather (OpenMeteo — completely free, no API key) ────────────────────────
-// Geocodes city using Open-Meteo geocoding API, then fetches current weather.
 export async function getWeather(city) {
   try {
     const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=th&format=json`;
@@ -214,9 +207,7 @@ export async function getWeather(city) {
 
 // ─── Hotel Search ─────────────────────────────────────────────────────────────
 // Generates direct Booking.com + Agoda deep-links for a given location/dates.
-// NOTE: The previous version pointed at a hardcoded expired Replit dev URL
-// (https://5e5b3295-...spock.replit.dev) which caused all hotel searches to fail.
-// This version is fully self-contained — no external service needed.
+// Fixed: previous version had a hardcoded expired Replit dev URL that caused 404s.
 export function searchHotels({ location, budget, checkin, checkout, guests = 1 }) {
   const today = new Date().toISOString().split("T")[0];
   const tom   = new Date(Date.now() + 86400000).toISOString().split("T")[0];
