@@ -37,21 +37,11 @@
       "lastSource": "voice"
     },
     "1491387879648264347": {
-      "chat": {
-        "count": 1,
-        "lastAt": 1777445914972,
-        "history": [
-          {
-            "at": 1777445914972,
-            "severity": 4,
-            "matched": "เห๊ย",
-            "reason": "ใช้คำหยาบและคำสบกาย",
-            "excerpt": "เห๊ย จำาน้าน้อง",
-            "action": "timeout_failed",
-            "source": "ai"
-          }
-        ]
-      }
+      "count": 1,
+      "lastOffenseAt": 1777702115321,
+      "muteUntil": 1777702175321,
+      "lastWord": "หี",
+      "lastSource": "voice"
     },
     "264669488035659778": {
       "count": 6,
