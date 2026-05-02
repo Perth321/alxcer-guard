@@ -10,6 +10,12 @@ import { runCode, deployWebpage, readOwnLog, readOwnSource, writeOwnSource,
          screenshotUrl, inspectWebpage, checkWebsite, computerBrowse,
          readLocalFile, writeLocalFile, listLocalFiles, shellExec } from "./tools_openclaw.js";
 import {
+  startScreenShare, stopScreenShare, navigateTo as screenShareNavigate,
+  clickElement as screenShareClick, typeText as screenShareType,
+  scrollPage as screenShareScroll, snapshotNow as screenShareSnapshot,
+  isActive as isScreenShareActive, getStatus as getScreenShareStatus,
+} from "./screenshare.js";
+import {
   createTimer,
   cancelTimer,
   getTimer,
@@ -1224,7 +1230,104 @@ const TOOLS = [
       },
     },
   },
-];
+  // --- Screen Share (live browser view posted in the Discord channel) ---
+  {
+    type: "function",
+    function: {
+      name: "screen_share_start",
+      description:
+        "เปิดแชร์จอ: เปิด URL ใน headless Chrome แล้วส่ง screenshot อัปเดตทุก N วินาทีในช่อง Discord นี้ — คนในห้องจะเห็น 'จอ' ของบอทแบบ near-realtime ใช้ได้บน GitHub Actions (ubuntu-latest) ที่มี Chrome ติดตั้งอยู่แล้ว",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL ที่ต้องการแสดง" },
+          interval_seconds: { type: "number", description: "ความถี่อัปเดต (วินาที, default 8, min 3)" },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "screen_share_navigate",
+      description: "ระหว่างแชร์จอ: ไปที่ URL ใหม่แล้วอัปเดตภาพทันที",
+      parameters: {
+        type: "object",
+        properties: { url: { type: "string" } },
+        required: ["url"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "screen_share_click",
+      description: "ระหว่างแชร์จอ: คลิก element ด้วย CSS selector แล้วอัปเดตภาพ",
+      parameters: {
+        type: "object",
+        properties: {
+          selector: { type: "string", description: "CSS selector เช่น 'button.submit' หรือ '#search'" },
+        },
+        required: ["selector"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "screen_share_type",
+      description: "ระหว่างแชร์จอ: คลิกแล้วพิมพ์ข้อความลงใน element แล้วอัปเดตภาพ",
+      parameters: {
+        type: "object",
+        properties: {
+          selector: { type: "string" },
+          text: { type: "string" },
+        },
+        required: ["selector", "text"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "screen_share_scroll",
+      description: "ระหว่างแชร์จอ: เลื่อนหน้าขึ้น/ลง แล้วอัปเดตภาพ",
+      parameters: {
+        type: "object",
+        properties: {
+          direction: { type: "string", enum: ["down", "up"] },
+          pixels: { type: "number", description: "จำนวนพิกเซล (default 600)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "screen_share_snapshot",
+      description: "ระหว่างแชร์จอ: ถ่าย screenshot ทันทีโดยไม่รอรอบอัปเดต",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "screen_share_stop",
+      description: "หยุดแชร์จอ ปิด browser และอัปเดต embed สุดท้าย",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "screen_share_status",
+      description: "ตรวจสอบสถานะการแชร์จอ: active หรือไม่ / URL ปัจจุบัน / จำนวนครั้งอัปเดต",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+
+];;
 
 // ===== Resolution helpers =====
 function normalize(s) {
@@ -2445,6 +2548,38 @@ async function execTool(name, args, ctx) {
     case "list_local_files": {
       return await listLocalFiles(args.dirpath || "/tmp");
     }
+
+    case "screen_share_start": {
+      const ch = ctx.msg?.channel || channel;
+      if (!ch) return { error: "ไม่พบช่องที่จะส่ง screen share" };
+      return await startScreenShare({
+        url: args.url,
+        channel: ch,
+        intervalSeconds: args.interval_seconds || 8,
+      });
+    }
+
+    case "screen_share_navigate":
+      return await screenShareNavigate(args.url);
+
+    case "screen_share_click":
+      return await screenShareClick(args.selector);
+
+    case "screen_share_type":
+      return await screenShareType(args.selector, args.text);
+
+    case "screen_share_scroll":
+      return await screenShareScroll(args.direction || "down", args.pixels || 600);
+
+    case "screen_share_snapshot":
+      return await screenShareSnapshot();
+
+    case "screen_share_stop":
+      return await stopScreenShare();
+
+    case "screen_share_status":
+      return getScreenShareStatus();
+
 
     default:
       return { error: `unknown tool: ${name}` };
