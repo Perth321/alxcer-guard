@@ -72,8 +72,8 @@
     },
     "1500061601129037927": {
       "chat": {
-        "count": 2,
-        "lastAt": 1777730188846,
+        "count": 3,
+        "lastAt": 1777730274366,
         "history": [
           {
             "at": 1777730165399,
@@ -90,6 +90,15 @@
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
             "excerpt": "แล้วเป็นควยไร",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1777730274366,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "แล้วเป็นควยไรละไอสัส",
             "action": "timeout_failed",
             "source": "local"
           }
