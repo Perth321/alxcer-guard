@@ -69,6 +69,23 @@
       "muteUntil": 0,
       "lastWord": "หี",
       "lastSource": "voice"
+    },
+    "1500061601129037927": {
+      "chat": {
+        "count": 1,
+        "lastAt": 1777730165400,
+        "history": [
+          {
+            "at": 1777730165399,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควย",
+            "action": "timeout_failed",
+            "source": "local"
+          }
+        ]
+      }
     }
   }
 }
