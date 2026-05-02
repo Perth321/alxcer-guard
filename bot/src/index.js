@@ -435,10 +435,14 @@ function newUserState(now) {
 
 function syncUserState(channel) {
   const now = Date.now();
+  const selfId = channel.client?.user?.id;
   for (const [, member] of channel.members) {
+    if (selfId && member.id === selfId) continue; // Always exclude bot itself
     if (config.ignoreBots && member.user.bot) continue;
     if (!userState.has(member.id)) {
-      userState.set(member.id, newUserState(now));
+      const s = newUserState(now);
+      s.muted = member.voice?.serverMute ?? false; // Sync actual Discord mute state on join
+      userState.set(member.id, s);
     }
   }
 }
@@ -1476,7 +1480,9 @@ async function checkInactivity(guild) {
 
   const now = Date.now();
 
+  const _selfId = channel.client?.user?.id;
   for (const [, member] of channel.members) {
+    if (_selfId && member.id === _selfId) continue; // Always exclude bot itself
     if (config.ignoreBots && member.user.bot) continue;
     if (!userState.has(member.id)) {
       userState.set(member.id, newUserState(now));
@@ -1743,6 +1749,21 @@ async function reevaluateAndJoin(guild) {
 
     syncUserState(target);
     receiverHealthLogged = false;
+
+    // On fresh join: release server-mutes left over from a previous bot session.
+    // After a repush/restart the bot loses in-memory state but Discord keeps mutes.
+    // We clear them so users aren't permanently stuck muted across restarts.
+    for (const [, member] of target.members) {
+      if (member.user.bot) continue;
+      if (member.voice?.serverMute) {
+        member.voice.setMute(false, "Alxcer Guard: clearing stale mutes from previous session")
+          .catch(() => {});
+        const _s = userState.get(member.id);
+        if (_s) { _s.muted = false; _s.lastSpoke = Date.now(); _s.warned = false; _s.silentTicks = 0; }
+        console.log(`[restart-unmute] cleared stale mute for ${member.user.tag}`);
+      }
+    }
+
     await attachReceiver(connection, target);
     console.log(`[voice] monitoring #${target.name}`);
 
