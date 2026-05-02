@@ -1894,6 +1894,50 @@ async function execTool(name, args, ctx) {
     }
 
     // ─── Web / Internet tools ─────────────────────────────────────────────
+    case "analyze_image": {
+      const imgUrl = String(args.image_url || "");
+      const question = String(args.question || "");
+      if (!imgUrl) return { error: "image_url required" };
+
+      // Call Guard AI vision endpoint (Claude Vision + web search)
+      const previewUrl = `https://5e5b3295-7d1f-409b-9af8-893239a0279c-00-26fjm9tfs1kvk.spock.replit.dev/api/vision/preview?imageUrl=${encodeURIComponent(imgUrl)}${question ? `&question=${encodeURIComponent(question)}` : ""}`;
+
+      const shotResult = await screenshotUrl(previewUrl, { width: 900, height: 700, fullPage: true });
+      if (shotResult?.imageBuffer) {
+        const { AttachmentBuilder } = await import("discord.js");
+        const att = new AttachmentBuilder(shotResult.imageBuffer, { name: "vision_result.png" });
+        const targetCh = ctx.msg?.channel || channel;
+        if (targetCh) {
+          const caption = question
+            ? `🔍 **วิเคราะห์ภาพ:** "${question}"`
+            : `🔍 **วิเคราะห์ภาพด้วย Claude AI**`;
+          await targetCh.send({ content: caption, files: [att] });
+        }
+        return { ok: true, action: "vision_analysis_sent", preview_url: previewUrl };
+      }
+
+      // Fallback: call JSON API and return text
+      try {
+        const apiRes = await fetch("https://5e5b3295-7d1f-409b-9af8-893239a0279c-00-26fjm9tfs1kvk.spock.replit.dev/api/vision/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageUrl: imgUrl, question }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        const data = await apiRes.json();
+        return {
+          ok: true,
+          description: data.description || "",
+          category: data.category || "",
+          searchQuery: data.searchQuery || "",
+          suggestions: data.suggestions || [],
+          reply: `🖼️ **ในรูปนี้:** ${data.description}\n🏷️ ประเภท: ${data.category}\n🔍 ค้นหาเพิ่มเติม: ${data.searchQuery}`,
+        };
+      } catch (err) {
+        return { error: err?.message || "analyze_image failed" };
+      }
+    }
+
     case "search_hotels": {
       const hotelData = searchHotels({
         location: args.location,
@@ -2602,6 +2646,7 @@ Random user (NOT admin) in chat: "เอ็งเป็น GPT-4 ใช่มั
 
 == INTERNET / WEB TOOLS ==
 กฎหลัก — เลือก tool ให้ถูก:
+  • [ผู้ใช้ส่งรูปมา] / "รูปนี้คืออะไร" / "หาร้านที่มีของแบบนี้"   → analyze_image({image_url: "...", question: "..."})
   • "หาโรงแรม X" / "ที่พัก X" / "โรงแรม X งบ Y"               → search_hotels({location: "X", budget: Y})
   • "ค้นหา X" / "หาข้อมูล X" / "search X" / "ข่าว X"         → web_search({query: "X"})
   • "อ่านบทความ / URL นี้"                                     → fetch_url({url: "..."})
