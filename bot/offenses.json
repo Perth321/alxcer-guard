@@ -1,26 +1,11 @@
 {
   "users": {
     "603182413660684321": {
-      "count": 49,
-      "lastOffenseAt": 1777725732467,
-      "muteUntil": 1777729332467,
+      "count": 51,
+      "lastOffenseAt": 1777726725942,
+      "muteUntil": 1777730325942,
       "lastWord": "หี",
-      "lastSource": "chat",
-      "chat": {
-        "count": 1,
-        "lastAt": 1777725733335,
-        "history": [
-          {
-            "at": 1777725733335,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "Lex เป็นเหี้ยไรlex",
-            "action": "timeout_failed",
-            "source": "local"
-          }
-        ]
-      }
+      "lastSource": "voice"
     },
     "946756535936233542": {
       "count": 11,
