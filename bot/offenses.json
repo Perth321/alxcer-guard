@@ -8,35 +8,11 @@
       "lastSource": "voice"
     },
     "946756535936233542": {
-      "count": 8,
-      "lastOffenseAt": 1777717718141,
-      "muteUntil": 0,
+      "count": 9,
+      "lastOffenseAt": 1777723100929,
+      "muteUntil": 1777726700929,
       "lastWord": "หี",
-      "lastSource": "chat",
-      "chat": {
-        "count": 2,
-        "lastAt": 1777718265890,
-        "history": [
-          {
-            "at": 1777717718973,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "พิมพ์หีบ",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1777718265890,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "เน็ตควย",
-            "action": "timeout_failed",
-            "source": "local"
-          }
-        ]
-      }
+      "lastSource": "voice"
     },
     "967120879689551873": {
       "count": 3,
