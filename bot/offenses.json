@@ -30,44 +30,11 @@
       }
     },
     "967120879689551873": {
-      "count": 2,
-      "lastOffenseAt": 1777384379910,
-      "muteUntil": 0,
+      "count": 3,
+      "lastOffenseAt": 1777698065707,
+      "muteUntil": 1777701665707,
       "lastWord": "หี",
-      "lastSource": "chat",
-      "chat": {
-        "count": 3,
-        "lastAt": 1777631120513,
-        "history": [
-          {
-            "at": 1777544540699,
-            "severity": 6,
-            "matched": "อ้วน",
-            "reason": "ใช้คำหยาบคาย",
-            "excerpt": "อ้วน คิดถึงเค้าไหม",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1777621110118,
-            "severity": 7,
-            "matched": "หุบปาก",
-            "reason": "ใช้คำสั่งให้ปิดปากอย่างหยาบคาย",
-            "excerpt": "ทำไมโดนหุบปาก",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1777631120513,
-            "severity": 7,
-            "matched": "pussy",
-            "reason": "ใช้คำต้องห้าม: \"pussy\"",
-            "excerpt": "https://tenor.com/view/cat-kitty-kitten-cute-pussy-cat-gif-15745451",
-            "action": "timeout_failed",
-            "source": "local"
-          }
-        ]
-      }
+      "lastSource": "voice"
     },
     "1491387879648264347": {
       "chat": {
