@@ -1433,6 +1433,7 @@ async function attachReceiver(connection, channel) {
     _s.lastSpoke = _attachNow;
     _s.warned = false;
     _s.silentTicks = 0;
+    _s.speaking = false; // reset stale speaking flag on receiver re-attach
   }
 
   receiver.speaking.on("start", (userId) => {
