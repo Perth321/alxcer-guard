@@ -43,7 +43,7 @@ jobs:
             ffmpeg \
             google-chrome-stable \
             libxss1 libxtst6 libxrandr2 libatk-bridge2.0-0 \
-            libdrm2 libgbm1 libasound2 libpangocairo-1.0-0
+            libdrm2 libgbm1 libasound2t64 libpangocairo-1.0-0
           ffmpeg -version | head -n 1
           google-chrome-stable --version
 
