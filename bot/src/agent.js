@@ -9,6 +9,7 @@ import { webSearch, fetchUrl, wikipediaLookup, getWeather, searchHotels } from "
 import { runCode, deployWebpage, readOwnLog, readOwnSource, writeOwnSource,
          screenshotUrl, inspectWebpage, checkWebsite, computerBrowse,
          readLocalFile, writeLocalFile, listLocalFiles, shellExec } from "./tools_openclaw.js";
+import { startGoLive, stopGoLive, testScreencapture } from "./screenshare.js";
 import {
   createTimer,
   cancelTimer,
@@ -1222,6 +1223,40 @@ const TOOLS = [
           dirpath: { type: "string", description: "Directory path เช่น /tmp หรือ . (default: /tmp)" },
         },
       },
+    },
+  },
+
+  // ─── Go Live / Screenshare ───────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "go_live",
+      description:
+        "เปิด Discord Go Live (แชร์หน้าจอจริง) ในห้อง voice — ทุกคนในห้องจะเห็นหน้าจอบอท สามารถระบุ URL เพื่อเปิดเว็บบนหน้าจอที่ stream ได้",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string", description: "ID ของ voice channel (ถ้าไม่ระบุใช้ห้องที่บอทอยู่)" },
+          display_url: { type: "string", description: "URL เปิดบนหน้าจอที่ stream เช่น https://youtube.com (optional)" },
+          fps: { type: "number", description: "FPS ของ stream (default 15, max 30)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "stop_go_live",
+      description: "หยุด Discord Go Live / screenshare ที่กำลัง stream อยู่",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "test_screenshare",
+      description: "ทดสอบระบบ screenshare — ตรวจสอบว่า Xvfb, ffmpeg, x11grab พร้อมไหม โดยไม่ต้อง stream จริง",
+      parameters: { type: "object", properties: {} },
     },
   },
 ];
@@ -2446,6 +2481,30 @@ async function execTool(name, args, ctx) {
       return await listLocalFiles(args.dirpath || "/tmp");
     }
 
+    // ─── Go Live / Screenshare ─────────────────────────────────────────────
+    case "go_live": {
+      const guildId = ctx.guild.id;
+      let channelId = args.channel_id || null;
+      if (!channelId) {
+        const me = ctx.guild.members.me;
+        channelId = me?.voice?.channelId || null;
+      }
+      if (!channelId) return { error: "ไม่พบ voice channel — ระบุ channel_id หรือให้บอทเข้าห้องก่อน" };
+      return await startGoLive(ctx.guild.client, {
+        guildId, channelId,
+        displayUrl: args.display_url || null,
+        fps: Math.min(Math.max(Number(args.fps) || 15, 5), 30),
+      });
+    }
+
+    case "stop_go_live": {
+      return await stopGoLive(ctx.guild.client, { guildId: ctx.guild.id });
+    }
+
+    case "test_screenshare": {
+      return await testScreencapture();
+    }
+
     default:
       return { error: `unknown tool: ${name}` };
   }
@@ -2828,6 +2887,14 @@ CODE ANALYSIS WORKFLOW:
 SELF-HEALING:
   • ALWAYS อ่านไฟล์ก่อน (read_own_source หรือ read_local_file) ก่อนแก้ (write_own_source) ห้ามเดา
   • จำกัดเฉพาะ bot/src/* — ห้ามแตะ workflow files (.github/workflows/)
+
+== GO LIVE / SCREENSHARE ==
+บอทแชร์หน้าจอจริงใน Discord voice ได้:
+  • "แชร์จอ" / "Go Live" / "เปิด screenshare" / "stream หน้าจอ"  → go_live()
+  • "แชร์จอแล้วเปิดเว็บ X" / "Go Live เปิด YouTube"              → go_live({display_url: "https://..."})
+  • "หยุดแชร์จอ" / "stop stream" / "ปิด Go Live"                 → stop_go_live()
+  • "ทดสอบ screenshare" / "เช็คว่า stream ได้ไหม"                → test_screenshare()
+RULE: ก่อน go_live ครั้งแรก ให้ test_screenshare ก่อนเสมอ ถ้า admin ไม่ได้สั่งก็ test เองก่อน go_live เลย
 
 Admin: "ดู log ล่าสุดหน่อย มีบัคไหม"
 → tool: read_own_log({lines: 150, filter: "error"})
