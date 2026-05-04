@@ -36,16 +36,20 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install system dependencies (ffmpeg + Chrome)
+      - name: Install system dependencies (ffmpeg + Chrome + Xvfb)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ffmpeg \
             google-chrome-stable \
             libxss1 libxtst6 libxrandr2 libatk-bridge2.0-0 \
-            libdrm2 libgbm1 libasound2t64 libpangocairo-1.0-0
+            libdrm2 libgbm1 libasound2t64 libpangocairo-1.0-0 \
+            xvfb xdotool x11-utils x11-xserver-utils
           ffmpeg -version | head -n 1
           google-chrome-stable --version
+          Xvfb -version 2>&1 | head -n 1 || echo 'Xvfb ready'
+          echo "x264: $(ffmpeg -encoders 2>&1 | grep libx264 | head -1)"
+          echo "x11grab: $(ffmpeg -devices 2>&1 | grep x11 | head -1)"
 
       - name: Cache bot dependencies
         id: cache-deps
