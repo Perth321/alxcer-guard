@@ -1,9 +1,9 @@
 {
   "users": {
     "603182413660684321": {
-      "count": 59,
-      "lastOffenseAt": 1777915868302,
-      "muteUntil": 0,
+      "count": 60,
+      "lastOffenseAt": 1777920295670,
+      "muteUntil": 1777923895670,
       "lastWord": "หี",
       "lastSource": "voice"
     },
