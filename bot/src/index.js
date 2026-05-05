@@ -2251,18 +2251,27 @@ async function seedRecentFromGuild(guild) {
 
 // Spontaneous engagement throttle: at most once per ~75s per channel.
 const lastSpontaneousAt = new Map();
+const lastReplyResponseAt = new Map(); // channelId → timestamp, prevents reply-chain loops
 const SPONTANEOUS_COOLDOWN_MS = 90 * 1000;
 const SPONTANEOUS_BASE_PROB = 0.07; // 7% chance per qualifying msg (reduced from 18%)
-const SPONTANEOUS_MIN_RECENT = 1; // start chiming after just 1 msg in buffer
+const SPONTANEOUS_MIN_RECENT = 4; // need at least 4 msgs before chiming
 
 function isBotTriggered(msg) {
-  // Direct mention of the bot user
-  if (client.user && msg.mentions?.users?.has(client.user.id)) return "mention";
-  // Reply to one of the bot's messages — check message cache
-  if (msg.reference?.messageId) {
-    const _ref = msg.channel.messages?.cache?.get(msg.reference.messageId);
-    if (_ref?.author?.id === client.user?.id) return "reply";
-  }
+    // Direct mention of the bot user
+    if (client.user && msg.mentions?.users?.has(client.user.id)) return "mention";
+    // Reply to one of the bot's messages — only if meaningful + not in cooldown (prevents reply loops)
+    if (msg.reference?.messageId) {
+      const _ref = msg.channel.messages?.cache?.get(msg.reference.messageId);
+      if (_ref?.author?.id === client.user?.id) {
+        const _txt = (msg.content || "").replace(/<@!?\d+>/g, "").trim();
+        const _words = _txt.split(/\s+/).filter(Boolean).length;
+        const _hasQ = _txt.includes("?") || /ไหม|มั้ย|อะไร|ยังไง|ทำไม|เมื่อไร|กี่|ใคร|ที่ไหน|อย่างไร|หรือเปล่า/.test(_txt);
+        if (_words < 3 && !_hasQ) return null; // skip "ok", "55555", "อ่อ", short reactions
+        const _lastReply = lastReplyResponseAt.get(msg.channel.id) || 0;
+        if (Date.now() - _lastReply < 60_000) return null; // 60s cooldown per channel
+        return "reply";
+      }
+    }
   const text = msg.content || "";
   const lower = text.toLowerCase();
   // 1) Standalone-word match (English uses ASCII word-boundary heuristic).
@@ -2883,6 +2892,7 @@ client.on(Events.MessageCreate, async (msg) => {
     // ===== NEW: AI reply when the bot is addressed =====
     const triggered = isBotTriggered(msg);
     if (triggered && aiAvailable()) {
+      if (triggered === "reply") lastReplyResponseAt.set(msg.channel.id, Date.now());
       // If the message has image / video attachments, route through the
       // vision pipeline (YOLO + vision-LLM) instead of plain chat.
       const media = collectMediaAttachments(msg);
