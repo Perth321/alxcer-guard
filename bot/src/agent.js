@@ -1823,12 +1823,13 @@ async function execTool(name, args, ctx) {
       return { ok: true, user: m.displayName };
     }
     case "voice_disconnect": {
-      const m = await guild.members.fetch(args.user_id);
-      if (m.id === guild.client.user?.id) return { error: "ไม่สามารถ disconnect ตัวเองได้" };
-      if (!m.voice?.channelId) return { error: "user is not in a voice channel" };
-      await m.voice.disconnect(args.reason || "Alxcer Guard agent");
-      return { ok: true, user: m.displayName };
-    }
+        const m = await guild.members.fetch(args.user_id);
+        if (m.id === guild.client.user?.id) return { error: "ไม่สามารถ disconnect ตัวเองได้" };
+        if (!m.voice?.channelId) return { error: "user is not in a voice channel" };
+        ctx.markBotKick?.(args.user_id);
+        await m.voice.disconnect(args.reason || "Alxcer Guard agent");
+        return { ok: true, user: m.displayName };
+      }
     case "voice_move": {
       const m = await guild.members.fetch(args.user_id);
       if (m.id === guild.client.user?.id) return { error: "ไม่สามารถ move ตัวเองได้" };
@@ -1905,6 +1906,7 @@ async function execTool(name, args, ctx) {
         ids.map(async (id) => {
           const m = await guild.members.fetch(id);
           if (!m.voice?.channelId) return { id, name: m.displayName, skipped: "not in voice" };
+          ctx.markBotKick?.(id);
           await m.voice.disconnect(reason);
           return { id, name: m.displayName, ok: true };
         }),
@@ -2329,7 +2331,7 @@ async function execTool(name, args, ctx) {
       const question = String(args.question || "");
       if (!imgUrl) return { error: "image_url required" };
 
-      // Use the bot's built-in vision AI (Gemini/OpenRouter vision) — replaces dead Replit endpoint
+      // Use the bot's built-in vision AI (Gemini/OpenRouter vision)
       try {
         const result = await generateVisionReply({
           imageUrls: [imgUrl],
@@ -2373,7 +2375,7 @@ async function execTool(name, args, ctx) {
       const maxR = Math.min(Math.max(args.max_results || 5, 1), 8);
       const searchText = await webSearch(args.query, maxR);
 
-      // Return text results directly (removed dead Replit screenshot URL)
+      // Return text results directly
       return searchText;
     }
 
