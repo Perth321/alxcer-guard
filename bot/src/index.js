@@ -276,6 +276,7 @@ let audioFlushHandle = null;
 let timerHandle = null;
 // Active wake-alarm sessions: timerId -> { stop: () => void, until: number }
 const wakeSessions = new Map();
+const botKickedUsers = new Set(); // users recently disconnected by bot action (for kick detection)
 let joining = false;
 let reevalQueued = false;
 let activeReceiver = null;
@@ -327,6 +328,11 @@ const runtime = {
   getTranscriptStats: () => getTranscriptStats(),
   getCursingStats: (opts) => getCursingStats(opts),
   playPrankSound: (name) => playPrankSound(name),
+  markBotKick: (userId) => {
+    if (!userId) return;
+    botKickedUsers.add(userId);
+    setTimeout(() => botKickedUsers.delete(userId), 8_000);
+  },
   snapshot: () => {
     const now = Date.now();
     const conn = config.guildId ? getVoiceConnection(config.guildId) : null;
@@ -1414,7 +1420,7 @@ async function fireTimer(t) {
       return;
     }
 
-    if (t.type === "auto_unmute") {    if (t.type === "auto_unmute") {
+    if (t.type === "auto_unmute") {
       let member = null;
       try { member = await guild.members.fetch(t.userId); } catch {}
       let outcome = "ℹ️ ผู้ใช้ไม่อยู่แล้ว";
@@ -2141,6 +2147,53 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
+  // ===== Voice room join/leave/move/kick announcements =====
+  {
+    const _vsaMember = newState.member ?? oldState.member;
+    if (_vsaMember && !_vsaMember.user?.bot) {
+      const _wasIn = !!oldState.channelId;
+      const _nowIn = !!newState.channelId;
+      const _name = _vsaMember.displayName || _vsaMember.user?.username || userId;
+      const _avatar = _vsaMember.user?.displayAvatarURL?.({ size: 64 }) || undefined;
+      const _guild = newState.guild || oldState.guild;
+      let _voiceEmbed = null;
+
+      if (!_wasIn && _nowIn) {
+        _voiceEmbed = new EmbedBuilder()
+          .setColor(0x2ecc71)
+          .setAuthor({ name: _name, iconURL: _avatar })
+          .setTitle("🟢 เข้าห้องเสียง")
+          .setDescription(`<@${userId}> เข้าร่วมห้อง **${newState.channel?.name ?? "unknown"}**`)
+          .setTimestamp(new Date());
+        console.log(`[voice-track] JOIN: ${_name} → ${newState.channel?.name}`);
+      } else if (_wasIn && !_nowIn) {
+        const _wasKicked = botKickedUsers.has(userId);
+        if (_wasKicked) botKickedUsers.delete(userId);
+        _voiceEmbed = new EmbedBuilder()
+          .setColor(_wasKicked ? 0xe74c3c : 0x95a5a6)
+          .setAuthor({ name: _name, iconURL: _avatar })
+          .setTitle(_wasKicked ? "⛔ โดนเตะออกจากห้อง" : "🔴 ออกจากห้องเสียง")
+          .setDescription(_wasKicked
+            ? `<@${userId}> ถูกเตะออกจากห้อง **${oldState.channel?.name ?? "unknown"}** โดยระบบ`
+            : `<@${userId}> ออกจากห้อง **${oldState.channel?.name ?? "unknown"}**`)
+          .setTimestamp(new Date());
+        console.log(`[voice-track] ${_wasKicked ? "KICK" : "LEAVE"}: ${_name} ← ${oldState.channel?.name}`);
+      } else if (_wasIn && _nowIn && oldState.channelId !== newState.channelId) {
+        _voiceEmbed = new EmbedBuilder()
+          .setColor(0xf39c12)
+          .setAuthor({ name: _name, iconURL: _avatar })
+          .setTitle("🔀 ย้ายห้องเสียง")
+          .setDescription(`<@${userId}> ย้ายจากห้อง **${oldState.channel?.name ?? "unknown"}** ➜ **${newState.channel?.name ?? "unknown"}**`)
+          .setTimestamp(new Date());
+        console.log(`[voice-track] MOVE: ${_name}: ${oldState.channel?.name} → ${newState.channel?.name}`);
+      }
+
+      if (_voiceEmbed && config.notifyChannelId) {
+        announce(_guild, { embeds: [_voiceEmbed] }).catch(() => {});
+      }
+    }
+  }
+
   try {
     await reevaluateAndJoin(newState.guild);
   } catch (err) {
@@ -2198,16 +2251,17 @@ async function seedRecentFromGuild(guild) {
 
 // Spontaneous engagement throttle: at most once per ~75s per channel.
 const lastSpontaneousAt = new Map();
-const SPONTANEOUS_COOLDOWN_MS = 75 * 1000;
-const SPONTANEOUS_BASE_PROB = 0.18; // 18% chance per qualifying msg
+const SPONTANEOUS_COOLDOWN_MS = 90 * 1000;
+const SPONTANEOUS_BASE_PROB = 0.07; // 7% chance per qualifying msg (reduced from 18%)
 const SPONTANEOUS_MIN_RECENT = 1; // start chiming after just 1 msg in buffer
 
 function isBotTriggered(msg) {
   // Direct mention of the bot user
   if (client.user && msg.mentions?.users?.has(client.user.id)) return "mention";
-  // Reply to one of the bot's messages
+  // Reply to one of the bot's messages — check message cache
   if (msg.reference?.messageId) {
-    // We can't easily resolve here without fetch; trust mention pings only
+    const _ref = msg.channel.messages?.cache?.get(msg.reference.messageId);
+    if (_ref?.author?.id === client.user?.id) return "reply";
   }
   const text = msg.content || "";
   const lower = text.toLowerCase();
