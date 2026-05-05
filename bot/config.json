@@ -5,7 +5,11 @@
   "warningSeconds": 300,
   "muteSeconds": 600,
   "ignoreBots": true,
-  "bannedWords": ["หี", "ขอดูหี", "ดูหี"],
+  "bannedWords": [
+    "หี",
+    "ขอดูหี",
+    "ดูหี"
+  ],
   "firstOffenseMuteSeconds": 60,
   "repeatOffenseMuteSeconds": 3600,
   "wakeMusicUrl": "",
