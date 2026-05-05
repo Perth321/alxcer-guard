@@ -252,3 +252,29 @@ export function searchHotels({ location, budget, checkin, checkout, guests = 1 }
     message:     `ค้นหาที่พักใน ${location} (${cin} → ${cout}, ${g} คน)${budget ? `, งบไม่เกิน ${budget} บาท` : ""}: [Booking.com](${bookingUrl}) | [Agoda](${agodaUrl})`,
   };
 }
+
+// ─── Translate text using MyMemory free API (no API key needed) ──────────────
+export async function translateText(text, { from = "auto", to = "en" } = {}) {
+  if (!text) return { error: "text required" };
+  const maxLen = 500;
+  const chunk = text.slice(0, maxLen);
+  const langPair = from === "auto" ? `${to}|${to}` : `${from}|${to}`;
+  try {
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(chunk)}&langpair=${encodeURIComponent(from === "auto" ? "th|" + to : from + "|" + to)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return { error: `MyMemory HTTP ${res.status}` };
+    const data = await res.json();
+    if (data.responseStatus !== 200) return { error: data.responseDetails || "translation failed" };
+    return {
+      ok: true,
+      original: chunk,
+      translated: data.responseData?.translatedText || "",
+      from: from === "auto" ? (data.responseData?.detectedLanguage || "auto") : from,
+      to,
+      truncated: text.length > maxLen,
+    };
+  } catch (err) {
+    return { error: err?.message || "translateText failed" };
+  }
+}
+
