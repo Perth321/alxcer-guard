@@ -785,7 +785,7 @@ export async function shouldEngage(recentMessages) {
       messages: [
         {
           role: "system",
-          content: 'You decide if a witty Discord bot persona ("guard") should chime into a chat. Be GENEROUS — engage ~40% of the time, especially when people are talking about something fun, opinionated, joking, gossiping, complaining, asking questions, or making confident claims. Only refuse for: pure 2-word reactions, clear private 2-person DMs, or boring single-word responses. Reply ONLY with JSON: {"engage": boolean, "why": "<short>"}.',
+          content: 'You decide if a witty Discord bot persona ("guard") should chime into a chat. Be SELECTIVE — only engage ~20% of the time. Jump in ONLY when: someone asks a real question, there is a heated debate or strong opinion worth reacting to, someone says something clearly wrong or surprising. SKIP: casual greetings, short banter, simple reactions, routine chat, anything 1-3 words. Reply ONLY with JSON: {"engage": boolean, "why": "<short>"}.',
         },
         { role: "user", content: `Recent chat:\n${sample}` },
       ],
