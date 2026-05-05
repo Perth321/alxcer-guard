@@ -71,4 +71,4 @@ DISCORD_PERSONAL_ACCESS_TOKEN=xxx node src/index.js
 
 - GitHub Actions รันได้สูงสุด 6 ชั่วโมงต่อ job — cron จะ relaunch ใหม่ ทำให้มี gap เล็กน้อย (~10–60s)
 - Cron ของ GitHub free อาจ delay ตอน traffic สูง
-- ถ้าต้องการ uptime 24/7 ไม่มี gap ให้รันบน host ของตัวเอง (Replit deployment, VPS ฯลฯ)
+- ถ้าต้องการ uptime 24/7 ไม่มี gap ให้รันบน host ของตัวเอง (VPS ฯลฯ)
