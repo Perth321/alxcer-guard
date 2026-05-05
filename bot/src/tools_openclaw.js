@@ -296,6 +296,13 @@ export async function screenshotUrl(url, opts = {}) {
   const { width = 1280, height = 800, fullPage = false, delay = 0 } = opts;
   if (!/^https?:\/\//i.test(url)) return { error: "URL must start with http:// or https://" };
 
+  // Block Replit dev/preview domains — Microlink can't access them and returns
+  // Replit's browser-debug error page as the screenshot instead of real content.
+  const REPLIT_BLOCKED = /\.replit\.dev|\.repl\.co|\.spock\.replit\.dev|\.replit\.app\/.*__repl|replit\.com\/.*~\/|127\.0\.0\.1|localhost/i;
+  if (REPLIT_BLOCKED.test(url)) {
+    return { error: "ไม่สามารถ screenshot URL ของ Replit dev ได้ — Microlink ไม่มีสิทธิ์เข้าถึงหน้านี้ ลอง computer_browse กับเว็บสาธารณะแทนครับ" };
+  }
+
   try {
     const params = new URLSearchParams({
       url,
