@@ -278,3 +278,123 @@ export async function translateText(text, { from = "auto", to = "en" } = {}) {
   }
 }
 
+// ─── Generate image via Pollinations.ai (free, no key) ────────────────────────
+export async function generateImage(prompt, { width = 1024, height = 1024 } = {}) {
+  if (!prompt) return { error: "prompt required" };
+  const w = Math.min(Math.max(Number(width) || 1024, 256), 2048);
+  const h = Math.min(Math.max(Number(height) || 1024, 256), 2048);
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=${w}&height=${h}&nologo=true&enhance=false&seed=${Math.floor(Math.random()*9999)}`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+    if (!res.ok) return { error: `Pollinations returned ${res.status}` };
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length < 2000) return { error: "image too small — generation may have failed" };
+    return { ok: true, imageBuffer: buf, source_url: url };
+  } catch (err) {
+    return { error: err?.message || "generateImage failed" };
+  }
+}
+
+// ─── Generate chart image via QuickChart.io (free, no key) ────────────────────
+export async function getQuickChart(chartConfig, { width = 700, height = 400 } = {}) {
+  try {
+    const body = JSON.stringify({ chart: chartConfig, width, height, backgroundColor: "white", format: "png", version: "4" });
+    const res = await fetch("https://quickchart.io/chart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) {
+      // Fallback: GET request
+      const encoded = encodeURIComponent(JSON.stringify(chartConfig));
+      const res2 = await fetch(`https://quickchart.io/chart?c=${encoded}&w=${width}&h=${height}&bkg=white&format=png`, { signal: AbortSignal.timeout(15_000) });
+      if (!res2.ok) return { error: `QuickChart returned ${res2.status}` };
+      const buf2 = Buffer.from(await res2.arrayBuffer());
+      return { ok: true, imageBuffer: buf2 };
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    return { ok: true, imageBuffer: buf };
+  } catch (err) {
+    return { error: err?.message || "getQuickChart failed" };
+  }
+}
+
+// ─── Define word via Free Dictionary API (free, English) ─────────────────────
+export async function defineWord(word) {
+  if (!word) return { error: "word required" };
+  try {
+    const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word.toLowerCase())}`, { signal: AbortSignal.timeout(8_000) });
+    if (!res.ok) return { error: `ไม่พบคำว่า "${word}" ในพจนานุกรม` };
+    const data = await res.json();
+    if (!Array.isArray(data) || !data[0]) return { error: "no definition found" };
+    const entry = data[0];
+    const phonetic = entry.phonetic || entry.phonetics?.find(p => p.text)?.text || "";
+    const meanings = (entry.meanings || []).slice(0, 3).map(m => ({
+      partOfSpeech: m.partOfSpeech,
+      definitions: (m.definitions || []).slice(0, 2).map(d => ({ definition: d.definition, example: d.example || "" })),
+      synonyms: (m.synonyms || []).slice(0, 4),
+    }));
+    return { ok: true, word: entry.word, phonetic, meanings };
+  } catch (err) {
+    return { error: err?.message || "defineWord failed" };
+  }
+}
+
+// ─── Urban Dictionary lookup (slang) ─────────────────────────────────────────
+export async function urbanDefine(word) {
+  if (!word) return { error: "word required" };
+  try {
+    const res = await fetch(`https://api.urbandictionary.com/v0/define?term=${encodeURIComponent(word)}`, { signal: AbortSignal.timeout(8_000) });
+    if (!res.ok) return { error: "urban dictionary failed" };
+    const data = await res.json();
+    const list = (data.list || []).slice(0, 2);
+    if (!list.length) return { error: `ไม่พบคำว่า "${word}" ใน Urban Dictionary` };
+    return {
+      ok: true,
+      word,
+      results: list.map(e => ({
+        definition: (e.definition || "").replace(/\[|\]/g, "").slice(0, 500),
+        example: (e.example || "").replace(/\[|\]/g, "").slice(0, 300),
+        thumbs_up: e.thumbs_up,
+      })),
+    };
+  } catch (err) {
+    return { error: err?.message || "urbanDefine failed" };
+  }
+}
+
+// ─── Trivia question via Open Trivia DB (free, no key) ───────────────────────
+export async function getTrivia({ category = "", difficulty = "" } = {}) {
+  const CAT = { general:9, science:17, history:23, geography:22, sports:21, entertainment:11, computers:18, music:12, anime:31, movies:11, tv:14 };
+  const params = new URLSearchParams({ amount: "1", type: "multiple" });
+  const catKey = (category || "").toLowerCase();
+  if (CAT[catKey]) params.set("category", String(CAT[catKey]));
+  if (difficulty) params.set("difficulty", difficulty.toLowerCase());
+  try {
+    const res = await fetch(`https://opentdb.com/api.php?${params}`, { signal: AbortSignal.timeout(10_000) });
+    const data = await res.json();
+    if (data.response_code !== 0 || !data.results?.[0]) return { error: "trivia fetch failed — try again" };
+    const q = data.results[0];
+    const dec = s => s.replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&#039;/g,"'").replace(/&rsquo;/g,"'");
+    const choices = [...q.incorrect_answers, q.correct_answer].map(dec).sort(() => Math.random() - 0.5);
+    return { ok:true, question:dec(q.question), correct:dec(q.correct_answer), choices, category:q.category, difficulty:q.difficulty };
+  } catch (err) {
+    return { error: err?.message || "getTrivia failed" };
+  }
+}
+
+// ─── URL shortener via is.gd (free, no key) ──────────────────────────────────
+export async function shortenUrl(url) {
+  if (!url) return { error: "url required" };
+  try {
+    const res = await fetch(`https://is.gd/create.php?format=simple&url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(8_000) });
+    if (!res.ok) return { error: "shortener failed" };
+    const short = (await res.text()).trim();
+    if (!short.startsWith("http")) return { error: "invalid response: " + short.slice(0, 50) };
+    return { ok: true, short_url: short, original: url };
+  } catch (err) {
+    return { error: err?.message || "shortenUrl failed" };
+  }
+}
+
