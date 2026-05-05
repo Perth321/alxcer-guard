@@ -27,7 +27,6 @@ export function isAdmin(member) {
 
 // ===== TOOL DEFINITIONS (OpenAI-compatible JSON schema) =====
 const TOOLS = [
-  // --- Resolution helpers (use these first when admin gives a name, not an ID) ---
   {
     type: "function",
     function: {
@@ -56,8 +55,6 @@ const TOOLS = [
       },
     },
   },
-
-  // --- Voice control ---
   {
     type: "function",
     function: {
@@ -134,22 +131,6 @@ const TOOLS = [
       },
     },
   },
-  {
-    type: "function",
-    function: {
-      name: "list_voice_members",
-      description:
-        "List members currently in a voice channel (or all voice channels if channel_id is omitted). Includes mute/deafen state.",
-      parameters: {
-        type: "object",
-        properties: { channel_id: { type: "string" } },
-      },
-    },
-  },
-
-  // --- BATCH voice tools (ALWAYS prefer these for "ทุกคน" / "all" / "everyone" requests) ---
-  // Each accepts EITHER explicit user_ids OR a scope keyword. Returns a summary
-  // of how many were affected. Use ONE call instead of looping voice_mute.
   {
     type: "function",
     function: {
@@ -276,8 +257,6 @@ const TOOLS = [
       },
     },
   },
-
-  // --- Moderation ---
   {
     type: "function",
     function: {
@@ -380,8 +359,6 @@ const TOOLS = [
       },
     },
   },
-
-  // --- Member management ---
   {
     type: "function",
     function: {
@@ -433,16 +410,6 @@ const TOOLS = [
   {
     type: "function",
     function: {
-      name: "list_roles",
-      description: "List roles in the guild (id, name, color).",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-
-  // --- Channel/message ---
-  {
-    type: "function",
-    function: {
       name: "send_message",
       description: "Send a text message to a channel. Defaults to the current channel.",
       parameters: {
@@ -453,52 +420,6 @@ const TOOLS = [
         },
         required: ["content"],
       },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "pin_message",
-      description: "Pin a message in a channel.",
-      parameters: {
-        type: "object",
-        properties: {
-          message_id: { type: "string" },
-          channel_id: { type: "string" },
-        },
-        required: ["message_id"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "unpin_message",
-      description: "Unpin a message.",
-      parameters: {
-        type: "object",
-        properties: {
-          message_id: { type: "string" },
-          channel_id: { type: "string" },
-        },
-        required: ["message_id"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "list_channels",
-      description: "List text/voice channels in the guild.",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "list_members",
-      description: "List members in the guild (id, displayName, isAdmin, in_voice).",
-      parameters: { type: "object", properties: {} },
     },
   },
   {
@@ -531,20 +452,6 @@ const TOOLS = [
   {
     type: "function",
     function: {
-      name: "get_recent_offenses",
-      description:
-        "Get the most recent offense events across the WHOLE server (who did what, when, what word, severity). Use this when the admin asks 'ตรวจสอบบันทึก', 'ใครทำอะไรบ้าง', 'ดู log ล่าสุด'.",
-      parameters: {
-        type: "object",
-        properties: {
-          limit: { type: "number", description: "1-30, default 10" },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "clear_user_offenses",
       description: "Reset the offense counters for a user.",
       parameters: {
@@ -554,8 +461,6 @@ const TOOLS = [
       },
     },
   },
-
-  // ===== Timers / alarms / sleep mode / temporary mute =====
   {
     type: "function",
     function: {
@@ -571,29 +476,6 @@ const TOOLS = [
           label: { type: "string", description: "Short note shown in the embed (เช่น 'ต้มมาม่า')" },
           mention_user_id: { type: "string", description: "Optional user id to @mention when fired (defaults to the requesting admin)" },
         },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "set_alarm",
-      description:
-        "Schedule an alarm at a specific clock time (Asia/Bangkok). If the time has already passed today it will fire tomorrow. Set play_wake_music=true for the soft-music wake-up flow that plays in the user's voice channel with a Stop button.",
-      parameters: {
-        type: "object",
-        properties: {
-          hour: { type: "integer", minimum: 0, maximum: 23 },
-          minute: { type: "integer", minimum: 0, maximum: 59 },
-          second: { type: "integer", minimum: 0, maximum: 59 },
-          label: { type: "string" },
-          play_wake_music: {
-            type: "boolean",
-            description: "If true, the bot joins the target user's voice channel and plays a soft TTS wake call + music loop until they hit Stop in the embed.",
-          },
-          mention_user_id: { type: "string", description: "User to wake / ping. Defaults to the requesting admin." },
-        },
-        required: ["hour", "minute"],
       },
     },
   },
@@ -679,36 +561,6 @@ const TOOLS = [
   {
     type: "function",
     function: {
-      name: "get_current_ai_model",
-      description:
-        "ADMIN DEBUG ONLY. Returns the actual provider/model that produced the most recent AI replies. Use this when an admin asks 'ตอนนี้ใช้โมเดลอะไร / what AI model are you using right now'. Do NOT use this to brag about being GPT/Gemini in conversation — only call it when the admin asks specifically.",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-
-  // ─── Web / Internet tools (OpenClaw-inspired) ───────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "search_hotels",
-      description:
-        "ค้นหาโรงแรมที่พักจริงๆ ในพื้นที่ที่ต้องการ พร้อมลิงก์จองตรงๆ บน Booking.com และ Agoda ของแต่ละโรงแรม ใช้ tool นี้ทุกครั้งเมื่อมีคนถามหาโรงแรม ที่พัก หรือที่นอน — ห้ามใช้ Google search หรือ computer_browse สำหรับโรงแรมเด็ดขาด",
-      parameters: {
-        type: "object",
-        properties: {
-          location: { type: "string", description: "ชื่อเมืองหรือสถานที่ เช่น พัทยา, เชียงใหม่, Bangkok" },
-          budget: { type: "number", description: "งบประมาณสูงสุดต่อคืน (บาท)" },
-          checkin: { type: "string", description: "วันเช็คอิน YYYY-MM-DD" },
-          checkout: { type: "string", description: "วันเช็คเอาท์ YYYY-MM-DD" },
-          guests: { type: "number", description: "จำนวนผู้เข้าพัก" },
-        },
-        required: ["location"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "web_search",
       description:
         "Search the internet using DuckDuckGo. Use this whenever the admin or user asks about news, facts, current events, prices, or anything that needs up-to-date web information. Returns titles, URLs, and snippets. No API key needed.",
@@ -719,22 +571,6 @@ const TOOLS = [
           max_results: { type: "number", description: "Max results to return (1-8, default 5)" },
         },
         required: ["query"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "fetch_url",
-      description:
-        "Fetch and read the text content of any URL (news article, website, blog post, documentation, etc). Use this to get the full content of a link. Strips HTML tags and returns readable text.",
-      parameters: {
-        type: "object",
-        properties: {
-          url: { type: "string", description: "Full URL starting with https://" },
-          max_chars: { type: "number", description: "Max characters to return (default 3000, max 8000)" },
-        },
-        required: ["url"],
       },
     },
   },
@@ -769,8 +605,6 @@ const TOOLS = [
       },
     },
   },
-
-  // ─── Discord extended tools ──────────────────────────────────────────────
   {
     type: "function",
     function: {
@@ -789,460 +623,11 @@ const TOOLS = [
   {
     type: "function",
     function: {
-      name: "create_thread",
-      description: "Create a public thread on a message in a text channel. Useful for organizing discussions.",
-      parameters: {
-        type: "object",
-        properties: {
-          channel_id: { type: "string" },
-          message_id: { type: "string", description: "Message ID to attach the thread to (optional)" },
-          name: { type: "string", description: "Thread name" },
-          auto_archive_minutes: { type: "number", description: "Archive after N minutes of inactivity: 60, 1440 (1d), 4320 (3d), 10080 (7d)" },
-        },
-        required: ["channel_id", "name"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "set_slowmode",
-      description: "Set the slowmode cooldown on a text channel. 0 = disabled. Max 21600 seconds (6h).",
-      parameters: {
-        type: "object",
-        properties: {
-          channel_id: { type: "string" },
-          seconds: { type: "number", description: "Slowmode delay in seconds (0 to disable)" },
-        },
-        required: ["channel_id", "seconds"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "lock_channel",
-      description: "Lock or unlock a text channel so regular members cannot send messages. Useful for cooling down heated discussions.",
-      parameters: {
-        type: "object",
-        properties: {
-          channel_id: { type: "string" },
-          lock: { type: "boolean", description: "true = lock, false = unlock" },
-          reason: { type: "string" },
-        },
-        required: ["channel_id", "lock"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "get_server_info",
       description: "Get detailed info about the Discord server: member count, roles, boost level, channels, creation date.",
       parameters: { type: "object", properties: {} },
     },
   },
-
-  // ─── OpenClaw: code execution ─────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "run_code",
-      description:
-        "Execute code in any programming language via a secure sandboxed runner. Returns stdout, stderr, exit code. " +
-        "Supports: python, javascript, typescript, bash, php, ruby, go, rust, c, cpp, java, kotlin, csharp, and 70+ more. " +
-        "Use when admin asks to 'รันโค้ด', 'เขียนสคริปต์', 'คำนวณ', 'ทดสอบโค้ด', or wants to execute any code.",
-      parameters: {
-        type: "object",
-        properties: {
-          language: { type: "string", description: "Language name: python, javascript, bash, go, rust, php, ruby, cpp, java, etc." },
-          code: { type: "string", description: "Full source code to execute" },
-          stdin: { type: "string", description: "Optional stdin input to pass to the program" },
-        },
-        required: ["language", "code"],
-      },
-    },
-  },
-
-  // ─── OpenClaw: web deployment ─────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "deploy_webpage",
-      description:
-        "Deploy an HTML/CSS/JS webpage and return a live preview URL. " +
-        "Creates a public GitHub Gist and returns an htmlpreview.github.io link anyone can open. " +
-        "Use when admin asks to 'ทำเว็บ', 'สร้าง HTML', 'อัพขึ้น', 'ส่ง URL', 'deploy หน้าเว็บ'. " +
-        "Always write complete, beautiful, standalone HTML (include CSS+JS inline). " +
-        "Use modern design: gradient backgrounds, smooth animations, responsive layout.",
-      parameters: {
-        type: "object",
-        properties: {
-          filename: { type: "string", description: "Filename, e.g. 'dashboard.html' or 'landing.html'" },
-          html: { type: "string", description: "Full HTML content (include all CSS and JS inline in the file)" },
-          description: { type: "string", description: "Short description of the page (used as Gist description)" },
-        },
-        required: ["filename", "html"],
-      },
-    },
-  },
-
-  // ─── OpenClaw: self-awareness / self-healing ──────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "read_own_log",
-      description:
-        "Read recent GitHub Actions workflow logs for the bot's own running job. " +
-        "Use to debug errors, check bot status, or diagnose issues. " +
-        "Triggered by: 'ดู log', 'มีบัคอะไร', 'เกิดอะไรขึ้น', 'bot crash', 'check ระบบ'.",
-      parameters: {
-        type: "object",
-        properties: {
-          lines: { type: "number", description: "Max log lines to return (default 100, max 300)" },
-          filter: { type: "string", description: "Optional keyword to filter log lines (e.g. 'ERROR', 'warn', '[agent]')" },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "read_own_source",
-      description:
-        "Read a source file from the bot's own GitHub repo. Use BEFORE making any code change. " +
-        "Triggered by: 'ดูซอร์สโค้ด', 'โครงสร้างระบบ', 'อยากรู้ว่า X ทำงานยังไง', 'แก้บัค X'.",
-      parameters: {
-        type: "object",
-        properties: {
-          filepath: { type: "string", description: "Path relative to repo root, e.g. 'bot/src/agent.js', 'bot/src/index.js', 'bot/package.json'" },
-        },
-        required: ["filepath"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "write_own_source",
-      description:
-        "Write/patch a source file in the bot's GitHub repo and trigger an automatic redeploy. " +
-        "ALWAYS read_own_source first to understand the existing code. " +
-        "Only allowed for bot/src/* files. Never modify workflow files. " +
-        "Use for self-healing: 'แก้บัค', 'fix', 'patch', 'อัพเดตตัวเอง'.",
-      parameters: {
-        type: "object",
-        properties: {
-          filepath: { type: "string", description: "File path: must start with 'bot/src/' — e.g. 'bot/src/tools_web.js'" },
-          content: { type: "string", description: "Complete new file content (not a diff — full file)" },
-          commit_message: { type: "string", description: "Git commit message, e.g. 'fix(agent): handle null reply edge case'" },
-        },
-        required: ["filepath", "content", "commit_message"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_audit_log",
-      description: "ดูประวัติ action ของคนในเซิฟเวอร์ (kick, ban, ลบข้อความ, แก้ channel, เปลี่ยน role ฯลฯ)",
-      parameters: {
-        type: "object",
-        properties: {
-          limit: { type: "number", description: "จำนวน entries (default 20, max 100)" },
-          action: { type: "string", description: "kick | ban | unban | channel_create | channel_delete | channel_update | message_delete | member_update | role_create | role_delete | invite_create" },
-          user_id: { type: "string", description: "Filter by executor user ID (optional)" },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "create_channel",
-      description: "สร้าง text หรือ voice channel ใน Discord server",
-      parameters: {
-        type: "object",
-        properties: {
-          name: { type: "string", description: "ชื่อ channel (ใส่ emoji ได้ เช่น 💬┃general)" },
-          type: { type: "string", description: "text | voice (default: text)" },
-          category_name: { type: "string", description: "ชื่อ category ที่จะใส่ (fuzzy match, optional)" },
-          topic: { type: "string", description: "Topic / คำอธิบาย channel" },
-          nsfw: { type: "boolean" },
-          slowmode: { type: "number", description: "Slowmode วินาที (0 = ปิด)" },
-        },
-        required: ["name"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "edit_channel",
-      description: "แก้ไข channel (ชื่อ, topic, slowmode, nsfw)",
-      parameters: {
-        type: "object",
-        properties: {
-          channel_id: { type: "string" },
-          name: { type: "string" },
-          topic: { type: "string" },
-          slowmode: { type: "number", description: "Slowmode วินาที" },
-          nsfw: { type: "boolean" },
-        },
-        required: ["channel_id"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "delete_channel",
-      description: "ลบ channel ออกจาก server",
-      parameters: {
-        type: "object",
-        properties: {
-          channel_id: { type: "string" },
-          reason: { type: "string" },
-        },
-        required: ["channel_id"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "create_category",
-      description: "สร้าง category (folder) ใน Discord server",
-      parameters: {
-        type: "object",
-        properties: {
-          name: { type: "string" },
-          position: { type: "number", description: "Position (0 = top)" },
-        },
-        required: ["name"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "rebuild_server",
-      description: "จัดระเบียบ Discord server ใหม่ให้สวยงาม สร้าง categories + channels ตาม theme ที่เลือก",
-      parameters: {
-        type: "object",
-        properties: {
-          theme: { type: "string", description: "gaming | community | professional | anime | minimal" },
-          dry_run: { type: "boolean", description: "true = แสดงแผนแต่ไม่สร้างจริง" },
-        },
-        required: ["theme"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "create_file",
-      description: "สร้างไฟล์ (txt, csv, json, html, md, py, js ฯลฯ) และส่งเป็น attachment ใน Discord",
-      parameters: {
-        type: "object",
-        properties: {
-          filename: { type: "string", description: "ชื่อไฟล์พร้อมนามสกุล เช่น report.txt, data.csv" },
-          content: { type: "string", description: "เนื้อหาของไฟล์ทั้งหมด" },
-          channel_id: { type: "string", description: "Channel ID ที่จะส่ง (optional)" },
-          message: { type: "string", description: "ข้อความประกอบ" },
-        },
-        required: ["filename", "content"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "create_excel",
-      description: "สร้างไฟล์ Excel (.xlsx) จากข้อมูลที่ระบุ แล้วส่งเป็น attachment ใน Discord",
-      parameters: {
-        type: "object",
-        properties: {
-          filename: { type: "string", description: "ชื่อไฟล์ เช่น report.xlsx" },
-          sheets: {
-            type: "array",
-            description: "Array ของ sheet [{name, data}] โดย data คือ 2D array (rows × cols)",
-            items: {
-              type: "object",
-              properties: {
-                name: { type: "string" },
-                data: { type: "array", description: "[[header1, header2], [row1col1, row1col2], ...]" },
-              },
-            },
-          },
-          channel_id: { type: "string" },
-        },
-        required: ["filename", "sheets"],
-      },
-    },
-  },
-
-  // ─── OpenClaw v2: Screenshot, Web Inspect, Computer Mode, Shell ──────────
-  {
-    type: "function",
-    function: {
-      name: "screenshot_url",
-      description:
-        "ถ่ายภาพ screenshot ของเว็บไซต์หรือ URL ใดก็ได้ และส่งเป็น รูปภาพ ใน Discord ทันที ใช้สำหรับดูหน้าเว็บ ตรวจสอบ design หรือยืนยัน layout",
-      parameters: {
-        type: "object",
-        properties: {
-          url:       { type: "string", description: "URL ที่ต้องการ screenshot (ต้องขึ้นต้นด้วย https://)" },
-          width:     { type: "number", description: "ความกว้าง viewport ในหน่วย px (default 1280)" },
-          height:    { type: "number", description: "ความสูง viewport ในหน่วย px (default 800)" },
-          full_page: { type: "boolean", description: "true = screenshot เต็มหน้า (scroll ยาว)" },
-        },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "inspect_webpage",
-      description:
-        "วิเคราะห์โครงสร้างเว็บไซต์แบบลึก: title, meta tags, headings (h1-h3), links (internal/external), forms, tech stack, word count, body preview. ดีกว่า fetch_url สำหรับงาน SEO / audit / reverse-engineer หน้าเว็บ",
-      parameters: {
-        type: "object",
-        properties: {
-          url: { type: "string", description: "URL ที่ต้องการ inspect" },
-        },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "check_website",
-      description:
-        "ตรวจสอบสถานะเว็บไซต์: up/down, response time, HTTP status, redirect chain, SSL, server headers. ใช้สำหรับ uptime check หรือ debug ว่าเว็บมีปัญหาอะไร",
-      parameters: {
-        type: "object",
-        properties: {
-          url: { type: "string", description: "URL หรือ domain เช่น 'google.com' หรือ 'https://example.com'" },
-        },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "computer_browse",
-      description:
-        "Computer mode — ควบคุม browser จริง (headless Chrome) บน GitHub Actions: เปิด URL, คลิก element, พิมพ์ข้อความ, run JavaScript, scroll, กรอก form และส่ง screenshot แต่ละขั้นเป็นรูปภาพใน Discord ทำให้เห็น 'AI ทำอะไรบนหน้าจอ' แบบ real-time",
-      parameters: {
-        type: "object",
-        properties: {
-          url: { type: "string", description: "URL เริ่มต้น" },
-          actions: {
-            type: "array",
-            description: "ลำดับ action ที่ต้องการทำ (ถ้าไม่ระบุจะ screenshot URL เลย)",
-            items: {
-              type: "object",
-              properties: {
-                type: {
-                  type: "string",
-                  description: "screenshot | click | type | fill_form | eval | goto | wait | scroll | get_text | hover | select | press",
-                },
-                selector: { type: "string", description: "CSS selector สำหรับ click/type/get_text/hover/select" },
-                text:     { type: "string", description: "ข้อความที่จะพิมพ์ (สำหรับ type)" },
-                js:       { type: "string", description: "JavaScript ที่จะ run (สำหรับ eval)" },
-                url:      { type: "string", description: "URL ที่จะไป (สำหรับ goto)" },
-                ms:       { type: "number", description: "มิลลิวินาทีที่จะรอ (สำหรับ wait)" },
-                x:        { type: "number", description: "scroll horizontal px" },
-                y:        { type: "number", description: "scroll vertical px" },
-                key:      { type: "string", description: "keyboard key เช่น Enter, Tab, Escape (สำหรับ press)" },
-                value:    { type: "string", description: "value สำหรับ <select> element" },
-                data:     {
-                  type: "array",
-                  description: "สำหรับ fill_form: [{selector, value}, ...]",
-                  items: {
-                    type: "object",
-                    properties: {
-                      selector: { type: "string" },
-                      value:    { type: "string" },
-                    },
-                  },
-                },
-                fullPage: { type: "boolean", description: "screenshot เต็มหน้าหรือเปล่า" },
-              },
-              required: ["type"],
-            },
-          },
-        },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "shell_exec",
-      description:
-        "รัน shell command บน GitHub Actions environment (Ubuntu Linux) ได้เลย เช่น: curl, wget, python3, node, jq, git, apt-get install, ffmpeg, convert ฯลฯ ผลลัพธ์ stdout/stderr จะถูกส่งกลับ ใช้สำหรับ: ดาวน์โหลดไฟล์, ประมวลผล data, install tools, ตรวจสอบ system",
-      parameters: {
-        type: "object",
-        properties: {
-          command:    { type: "string", description: "Shell command ที่ต้องการรัน" },
-          timeout_ms: { type: "number", description: "timeout ในมิลลิวินาที (default 30000, max 60000)" },
-        },
-        required: ["command"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "read_local_file",
-      description:
-        "อ่านไฟล์จาก filesystem ของ GitHub Actions environment — ใช้อ่าน source code บอทที่รันอยู่ได้เลย (path: /home/runner/work/alxcer-guard/alxcer-guard/bot/src/<filename>.js) หรือไฟล์ /tmp ที่ shell_exec สร้างไว้",
-      parameters: {
-        type: "object",
-        properties: {
-          filepath: { type: "string", description: "Path ของไฟล์ เช่น /tmp/data.json หรือ /home/runner/work/alxcer-guard/alxcer-guard/bot/src/index.js (สำหรับอ่าน source code ที่รันอยู่จริง)" },
-        },
-        required: ["filepath"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "write_local_file",
-      description:
-        "เขียนไฟล์ไปยัง /tmp บน GitHub Actions — ใช้สร้างไฟล์ temp สำหรับ shell_exec หรือส่งเป็น attachment ใน Discord ด้วย create_file",
-      parameters: {
-        type: "object",
-        properties: {
-          filepath: { type: "string", description: "Path ไฟล์ (ต้องอยู่ใน /tmp เช่น /tmp/data.csv)" },
-          content:  { type: "string", description: "เนื้อหาของไฟล์" },
-        },
-        required: ["filepath", "content"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "list_local_files",
-      description: "แสดงรายการไฟล์และโฟลเดอร์ใน path ที่ระบุ (default: /tmp)",
-      parameters: {
-        type: "object",
-        properties: {
-          dirpath: { type: "string", description: "Directory path เช่น /tmp หรือ . (default: /tmp)" },
-        },
-      },
-    },
-  },
-,
-  // ─── translate ──────────────────────────────────────────────────────────────
   {
     type: "function",
     function: {
@@ -1259,62 +644,6 @@ const TOOLS = [
       },
     },
   },
-  // ─── create_role ────────────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "create_role",
-      description: "สร้าง role ใหม่ในเซิร์ฟเวอร์",
-      parameters: {
-        type: "object",
-        required: ["name"],
-        properties: {
-          name:        { type: "string",  description: "ชื่อ role" },
-          color:       { type: "string",  description: "สีในรูปแบบ hex เช่น #FF5733 หรือชื่อ red/blue/green/gold/purple/pink/orange" },
-          hoist:       { type: "boolean", description: "แสดง role แยกในรายชื่อสมาชิก (default: false)" },
-          mentionable: { type: "boolean", description: "ให้ mention role ได้ (default: false)" },
-          reason:      { type: "string",  description: "เหตุผล (ปรากฏใน audit log)" },
-        },
-      },
-    },
-  },
-  // ─── delete_role ────────────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "delete_role",
-      description: "ลบ role ออกจากเซิร์ฟเวอร์ (ค้นหาชื่อแบบ fuzzy)",
-      parameters: {
-        type: "object",
-        required: ["role_name"],
-        properties: {
-          role_name: { type: "string", description: "ชื่อ role ที่ต้องการลบ" },
-          reason:    { type: "string" },
-        },
-      },
-    },
-  },
-  // ─── edit_role ──────────────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "edit_role",
-      description: "แก้ไข role ที่มีอยู่แล้ว — ชื่อ, สี, hoist, mentionable",
-      parameters: {
-        type: "object",
-        required: ["role_name"],
-        properties: {
-          role_name:   { type: "string",  description: "ชื่อ role ที่ต้องการแก้ไข" },
-          new_name:    { type: "string",  description: "ชื่อใหม่" },
-          color:       { type: "string",  description: "สีใหม่ เช่น #FF5733 หรือ red/blue/green" },
-          hoist:       { type: "boolean" },
-          mentionable: { type: "boolean" },
-          reason:      { type: "string"  },
-        },
-      },
-    },
-  },
-  // ─── create_invite ──────────────────────────────────────────────────────────
   {
     type: "function",
     function: {
@@ -1332,7 +661,6 @@ const TOOLS = [
       },
     },
   },
-  // ─── get_member_info ────────────────────────────────────────────────────────
   {
     type: "function",
     function: {
@@ -1347,24 +675,6 @@ const TOOLS = [
       },
     },
   },
-  // ─── add_reaction ───────────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "add_reaction",
-      description: "เพิ่ม emoji reaction ลงในข้อความ",
-      parameters: {
-        type: "object",
-        required: ["message_id", "emoji"],
-        properties: {
-          message_id: { type: "string", description: "ID ของข้อความ" },
-          channel_id: { type: "string", description: "ID ของห้อง (default: ห้องปัจจุบัน)" },
-          emoji:      { type: "string", description: "Emoji เช่น '👍' '❤️' '😂' หรือ custom '<:name:id>'" },
-        },
-      },
-    },
-  },
-  // ─── server_stats ───────────────────────────────────────────────────────────
   {
     type: "function",
     function: {
@@ -1373,8 +683,6 @@ const TOOLS = [
       parameters: { type: "object", properties: {} },
     },
   },
-
-  // ─── announce ───────────────────────────────────────────────────────────────
   {
     type: "function",
     function: {
@@ -1398,7 +706,6 @@ const TOOLS = [
       },
     },
   },
-  // ─── generate_image ─────────────────────────────────────────────────────────
   {
     type: "function",
     function: {
@@ -1416,46 +723,6 @@ const TOOLS = [
       },
     },
   },
-  // ─── create_poll ────────────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "create_poll",
-      description: "สร้าง Discord native poll ให้สมาชิกโหวต ใช้สำหรับ 'สร้าง poll', 'โหวต', 'สำรวจความเห็น', 'ถามว่า...'",
-      parameters: {
-        type: "object",
-        required: ["question", "answers"],
-        properties: {
-          question:          { type: "string", description: "คำถาม" },
-          answers:           { type: "array",  items: { type: "string" }, description: "ตัวเลือก 2-10 อัน" },
-          duration_hours:    { type: "integer", description: "เวลาโหวต ชั่วโมง (default: 24, max: 168)" },
-          channel_id:        { type: "string"  },
-          allow_multiselect: { type: "boolean", description: "เลือกได้หลายตัวเลือก (default: false)" },
-        },
-      },
-    },
-  },
-  // ─── create_event ───────────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "create_event",
-      description: "สร้าง Discord Scheduled Event กิจกรรมในเซิร์ฟ มีแจ้งเตือนอัตโนมัติ ใช้สำหรับ 'สร้าง event', 'นัดประชุม', 'จัด event', 'schedule กิจกรรม'",
-      parameters: {
-        type: "object",
-        required: ["name", "start_iso"],
-        properties: {
-          name:        { type: "string", description: "ชื่อ event" },
-          description: { type: "string" },
-          start_iso:   { type: "string", description: "เวลาเริ่ม ISO เช่น '2026-05-10T19:00:00+07:00'" },
-          end_iso:     { type: "string", description: "เวลาสิ้นสุด ISO (optional)" },
-          channel_id:  { type: "string", description: "Voice channel ID สำหรับ voice event" },
-          location:    { type: "string", description: "สถานที่ สำหรับ external event" },
-        },
-      },
-    },
-  },
-  // ─── random_pick ────────────────────────────────────────────────────────────
   {
     type: "function",
     function: {
@@ -1477,141 +744,6 @@ const TOOLS = [
       },
     },
   },
-  // ─── search_members ─────────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "search_members",
-      description: "ค้นหาสมาชิกตามเงื่อนไข: role, ชื่อ, สถานะ online/offline, อยู่ในห้องเสียง, booster",
-      parameters: {
-        type: "object",
-        properties: {
-          role_name:     { type: "string"  },
-          name_contains: { type: "string"  },
-          status:        { type: "string",  enum: ["online","idle","dnd","offline"] },
-          in_voice:      { type: "boolean", description: "อยู่ในห้องเสียงตอนนี้" },
-          is_boosting:   { type: "boolean", description: "กำลัง boost เซิร์ฟ" },
-          limit:         { type: "integer", description: "จำนวนสูงสุด (default: 25)" },
-        },
-      },
-    },
-  },
-  // ─── give_role_to_all ───────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "give_role_to_all",
-      description: "ให้ role กับสมาชิกทุกคน (หรือกรองตามเงื่อนไข) แบบ bulk ใช้สำหรับ 'ให้ยศ X กับทุกคน', 'เพิ่ม role Y ให้ทุกคน'",
-      parameters: {
-        type: "object",
-        required: ["role_name"],
-        properties: {
-          role_name:    { type: "string"  },
-          filter_role:  { type: "string",  description: "ให้เฉพาะคนที่มี role นี้" },
-          only_without: { type: "boolean", description: "ให้เฉพาะคนที่ยังไม่มี role นี้ (default: true)" },
-          exclude_bots: { type: "boolean", description: "ไม่รวมบอท (default: true)" },
-          reason:       { type: "string"  },
-        },
-      },
-    },
-  },
-  // ─── list_role_members ──────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "list_role_members",
-      description: "แสดงรายชื่อสมาชิกที่มี role ที่กำหนด ใช้สำหรับ 'ใครมียศ X', 'list role Y', 'สมาชิก role X มีใครบ้าง'",
-      parameters: {
-        type: "object",
-        required: ["role_name"],
-        properties: {
-          role_name:       { type: "string"  },
-          include_offline: { type: "boolean", description: "รวม offline (default: true)" },
-        },
-      },
-    },
-  },
-  // ─── chart ──────────────────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "chart",
-      description: "สร้างกราฟ/chart แล้วส่งเป็นรูปภาพ รองรับ bar, line, pie, doughnut, radar ใช้สำหรับ 'สร้างกราฟ', 'แผนภูมิ', 'chart ข้อมูล'",
-      parameters: {
-        type: "object",
-        required: ["chart_type", "labels", "datasets"],
-        properties: {
-          chart_type: { type: "string", enum: ["bar","line","pie","doughnut","radar","polarArea"] },
-          title:      { type: "string"  },
-          labels:     { type: "array",  items: { type: "string" } },
-          datasets:   { type: "array",  description: "[{label:string, data:[numbers], color?:string}]", items: { type: "object" } },
-          channel_id: { type: "string" },
-        },
-      },
-    },
-  },
-  // ─── shorten_url ────────────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "shorten_url",
-      description: "ย่อ URL ยาวให้สั้น ใช้ is.gd ฟรี ไม่ต้อง API key",
-      parameters: {
-        type: "object",
-        required: ["url"],
-        properties: { url: { type: "string" } },
-      },
-    },
-  },
-  // ─── define ─────────────────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "define",
-      description: "ค้นหาความหมายคำศัพท์ English (formal) หรือ slang (Urban Dictionary) ใช้สำหรับ 'แปลความหมาย X', 'X แปลว่าอะไร', 'X หมายความว่า', 'ความหมาย X'",
-      parameters: {
-        type: "object",
-        required: ["word"],
-        properties: {
-          word:  { type: "string" },
-          style: { type: "string", enum: ["formal","slang"], description: "formal = Oxford, slang = Urban Dictionary (default: formal)" },
-        },
-      },
-    },
-  },
-  // ─── trivia ─────────────────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "trivia",
-      description: "ดึงคำถาม trivia/quiz แล้วโพสต์ให้สมาชิกตอบ ใช้สำหรับ 'เล่น trivia', 'ถาม quiz', 'ทดสอบความรู้', 'คำถามสนุกๆ'",
-      parameters: {
-        type: "object",
-        properties: {
-          category:   { type: "string", description: "หมวด: general, science, history, geography, sports, entertainment, computers, music, anime, movies" },
-          difficulty: { type: "string", enum: ["easy","medium","hard"] },
-          channel_id: { type: "string" },
-        },
-      },
-    },
-  },
-  // ─── set_channel_topic ──────────────────────────────────────────────────────
-  {
-    type: "function",
-    function: {
-      name: "set_channel_topic",
-      description: "เปลี่ยน topic/คำอธิบายของ channel ใช้สำหรับ 'เปลี่ยน topic ห้อง X', 'ตั้งคำอธิบายห้อง', 'set topic'",
-      parameters: {
-        type: "object",
-        required: ["topic"],
-        properties: {
-          channel_id: { type: "string" },
-          topic:      { type: "string", description: "topic ใหม่ (สูงสุด 1024 ตัวอักษร, ว่างเปล่า = ลบ topic)" },
-        },
-      },
-    },
-  },
-  // ─── purge_user_messages ────────────────────────────────────────────────────
   {
     type: "function",
     function: {
@@ -1628,7 +760,6 @@ const TOOLS = [
       },
     },
   },
-  // ─── get_bot_info ───────────────────────────────────────────────────────────
   {
     type: "function",
     function: {
@@ -1638,6 +769,7 @@ const TOOLS = [
     },
   }
 ];
+;
 
 
 const COLOR_MAP = {
@@ -3978,6 +3110,7 @@ export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
   const { authorTag, authorId, guild, chatHistory } = ctx;
 
   const snapshot = await buildServerSnapshot(guild);
+  console.log('[agent] snapshot ok, chatHistory:', chatHistory?.length || 0, 'tools:', TOOLS.length);
 
   // Format recent chat (oldest → newest) so the agent has context for
   // pronouns / continuations like "ทำอีกครั้ง", "คนเดิม", "ห้องเดิม".
@@ -4011,7 +3144,8 @@ export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
       systemExtra: AGENT_SYSTEM,
       tools: TOOLS,
       max_tokens: 700,
-    });
+    })
+    console.log('[agent] step', step, '| tool_calls:', reply?.tool_calls?.length || 0, '| content_len:', (reply?.content || '').length);;
     if (!reply) break;
 
     // Rescue inline pseudo-XML tool calls before pushing the reply, so the
