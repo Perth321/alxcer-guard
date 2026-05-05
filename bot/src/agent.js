@@ -4,8 +4,8 @@
 // names, choose the right tools, chain calls, and report back.
 
 import { PermissionFlagsBits, ChannelType } from "discord.js";
-import { generateReply, aiAvailable, getModelStatus } from "./ai.js";
-import { webSearch, fetchUrl, wikipediaLookup, getWeather, searchHotels } from "./tools_web.js";
+import { generateReply, generateVisionReply, aiAvailable, getModelStatus } from "./ai.js";
+import { webSearch, fetchUrl, wikipediaLookup, getWeather, searchHotels, translateText } from "./tools_web.js";
 import { runCode, deployWebpage, readOwnLog, readOwnSource, writeOwnSource,
          screenshotUrl, inspectWebpage, checkWebsite, computerBrowse,
          readLocalFile, writeLocalFile, listLocalFiles, shellExec } from "./tools_openclaw.js";
@@ -1224,6 +1224,138 @@ const TOOLS = [
       },
     },
   },
+,
+  // ─── translate ──────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "translate",
+      description: "แปลภาษา — รองรับ th, en, ja, ko, zh, fr, de, es, ar และอีกกว่า 50 ภาษา ใช้ฟรีไม่ต้องมี API key",
+      parameters: {
+        type: "object",
+        required: ["text", "to"],
+        properties: {
+          text: { type: "string", description: "ข้อความที่ต้องการแปล (สูงสุด 500 ตัวอักษร)" },
+          from: { type: "string", description: "ภาษาต้นทาง เช่น 'th', 'en', 'ja' — ถ้าไม่ระบุจะ auto-detect" },
+          to:   { type: "string", description: "ภาษาปลายทาง เช่น 'en', 'th', 'ja', 'ko', 'zh', 'fr', 'de', 'ar'" },
+        },
+      },
+    },
+  },
+  // ─── create_role ────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "create_role",
+      description: "สร้าง role ใหม่ในเซิร์ฟเวอร์",
+      parameters: {
+        type: "object",
+        required: ["name"],
+        properties: {
+          name:        { type: "string",  description: "ชื่อ role" },
+          color:       { type: "string",  description: "สีในรูปแบบ hex เช่น #FF5733 หรือชื่อ red/blue/green/gold/purple/pink/orange" },
+          hoist:       { type: "boolean", description: "แสดง role แยกในรายชื่อสมาชิก (default: false)" },
+          mentionable: { type: "boolean", description: "ให้ mention role ได้ (default: false)" },
+          reason:      { type: "string",  description: "เหตุผล (ปรากฏใน audit log)" },
+        },
+      },
+    },
+  },
+  // ─── delete_role ────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "delete_role",
+      description: "ลบ role ออกจากเซิร์ฟเวอร์ (ค้นหาชื่อแบบ fuzzy)",
+      parameters: {
+        type: "object",
+        required: ["role_name"],
+        properties: {
+          role_name: { type: "string", description: "ชื่อ role ที่ต้องการลบ" },
+          reason:    { type: "string" },
+        },
+      },
+    },
+  },
+  // ─── edit_role ──────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "edit_role",
+      description: "แก้ไข role ที่มีอยู่แล้ว — ชื่อ, สี, hoist, mentionable",
+      parameters: {
+        type: "object",
+        required: ["role_name"],
+        properties: {
+          role_name:   { type: "string",  description: "ชื่อ role ที่ต้องการแก้ไข" },
+          new_name:    { type: "string",  description: "ชื่อใหม่" },
+          color:       { type: "string",  description: "สีใหม่ เช่น #FF5733 หรือ red/blue/green" },
+          hoist:       { type: "boolean" },
+          mentionable: { type: "boolean" },
+          reason:      { type: "string"  },
+        },
+      },
+    },
+  },
+  // ─── create_invite ──────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "create_invite",
+      description: "สร้างลิงก์เชิญ (invite link) สำหรับเซิร์ฟเวอร์",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id:    { type: "string",  description: "ID ของห้อง (default: ห้องปัจจุบัน)" },
+          max_uses:      { type: "number",  description: "จำนวนครั้งสูงสุด (0 = ไม่จำกัด, default: 0)" },
+          max_age_hours: { type: "number",  description: "อายุในชั่วโมง (0 = ไม่หมดอายุ, default: 24)" },
+          temporary:     { type: "boolean", description: "สมาชิกชั่วคราว" },
+          reason:        { type: "string"  },
+        },
+      },
+    },
+  },
+  // ─── get_member_info ────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "get_member_info",
+      description: "ดูข้อมูลสมาชิกแบบละเอียด: roles, join date, permissions, voice state, boost status ฯลฯ",
+      parameters: {
+        type: "object",
+        required: ["user_id"],
+        properties: {
+          user_id: { type: "string", description: "Discord user ID" },
+        },
+      },
+    },
+  },
+  // ─── add_reaction ───────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "add_reaction",
+      description: "เพิ่ม emoji reaction ลงในข้อความ",
+      parameters: {
+        type: "object",
+        required: ["message_id", "emoji"],
+        properties: {
+          message_id: { type: "string", description: "ID ของข้อความ" },
+          channel_id: { type: "string", description: "ID ของห้อง (default: ห้องปัจจุบัน)" },
+          emoji:      { type: "string", description: "Emoji เช่น '👍' '❤️' '😂' หรือ custom '<:name:id>'" },
+        },
+      },
+    },
+  },
+  // ─── server_stats ───────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "server_stats",
+      description: "สถิติเซิร์ฟเวอร์ละเอียด: online/offline/idle, bots, channels ทุกประเภท, boosts",
+      parameters: { type: "object", properties: {} },
+    },
+  }
 ];
 
 // ===== Resolution helpers =====
@@ -1903,39 +2035,17 @@ async function execTool(name, args, ctx) {
       const question = String(args.question || "");
       if (!imgUrl) return { error: "image_url required" };
 
-      // Call Guard AI vision endpoint (Claude Vision + web search)
-      const previewUrl = `https://5e5b3295-7d1f-409b-9af8-893239a0279c-00-26fjm9tfs1kvk.spock.replit.dev/api/vision/preview?imageUrl=${encodeURIComponent(imgUrl)}${question ? `&question=${encodeURIComponent(question)}` : ""}`;
-
-      const shotResult = await screenshotUrl(previewUrl, { width: 900, height: 700, fullPage: true });
-      if (shotResult?.imageBuffer) {
-        const { AttachmentBuilder } = await import("discord.js");
-        const att = new AttachmentBuilder(shotResult.imageBuffer, { name: "vision_result.png" });
-        const targetCh = ctx.msg?.channel || channel;
-        if (targetCh) {
-          const caption = question
-            ? `🔍 **วิเคราะห์ภาพ:** "${question}"`
-            : `🔍 **วิเคราะห์ภาพด้วย Claude AI**`;
-          await targetCh.send({ content: caption, files: [att] });
-        }
-        return { ok: true, action: "vision_analysis_sent", preview_url: previewUrl };
-      }
-
-      // Fallback: call JSON API and return text
+      // Use the bot's built-in vision AI (Gemini/OpenRouter vision) — replaces dead Replit endpoint
       try {
-        const apiRes = await fetch("https://5e5b3295-7d1f-409b-9af8-893239a0279c-00-26fjm9tfs1kvk.spock.replit.dev/api/vision/analyze", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ imageUrl: imgUrl, question }),
-          signal: AbortSignal.timeout(30_000),
+        const result = await generateVisionReply({
+          imageUrls: [imgUrl],
+          question: question || "รูปนี้คืออะไร? อธิบายรายละเอียดที่เห็น",
+          history: question ? [{ role: "user", content: question }] : [],
         });
-        const data = await apiRes.json();
         return {
           ok: true,
-          description: data.description || "",
-          category: data.category || "",
-          searchQuery: data.searchQuery || "",
-          suggestions: data.suggestions || [],
-          reply: `🖼️ **ในรูปนี้:** ${data.description}\n🏷️ ประเภท: ${data.category}\n🔍 ค้นหาเพิ่มเติม: ${data.searchQuery}`,
+          reply: result?.reply || result?.content || "วิเคราะห์ภาพแล้วครับ",
+          description: result?.reply || "",
         };
       } catch (err) {
         return { error: err?.message || "analyze_image failed" };
@@ -1951,53 +2061,25 @@ async function execTool(name, args, ctx) {
         guests: args.guests || 1,
       });
 
-      // Screenshot our own preview page — no CAPTCHA, renders hotel cards perfectly
-      const shotResult = await screenshotUrl(hotelData.preview_url, {
-        width: 1200,
-        height: 900,
-        fullPage: true,
-      });
-
-      if (shotResult?.imageBuffer) {
-        const { AttachmentBuilder } = await import("discord.js");
-        const att = new AttachmentBuilder(shotResult.imageBuffer, { name: "hotels.png" });
-        const targetCh = ctx.msg?.channel || channel;
-        if (targetCh) {
-          const m = hotelData.meta || {};
-          const loc = args.location || m.location || "?";
-          const parts = [`🏨 **โรงแรมที่พักใน${loc}**`];
-          if (m.checkin && m.checkout) parts.push(`📅 ${m.checkin} → ${m.checkout}`);
-          if (m.budget) parts.push(`💰 ≤${Number(m.budget).toLocaleString()} บาท`);
-          if (m.guests > 1) parts.push(`👤 ${m.guests} คน`);
-          await targetCh.send({ content: parts.join("  "), files: [att] });
-        }
-        return { ok: true, action: "hotel_preview_screenshot_sent", location: args.location };
-      }
-
-      // Fallback if screenshot fails
-      return { ok: true, preview_url: hotelData.preview_url, reply: `🏨 ดูรายชื่อโรงแรม: ${hotelData.preview_url}` };
+      // Return text data with booking links (removed dead internal screenshot URL)
+      return {
+        ok: true,
+        location: hotelData.location,
+        checkin: hotelData.checkin,
+        checkout: hotelData.checkout,
+        guests: hotelData.guests,
+        budget: hotelData.budget,
+        booking_url: hotelData.booking_url,
+        agoda_url: hotelData.agoda_url,
+        reply: hotelData.message,
+      };
     }
 
     case "web_search": {
       const maxR = Math.min(Math.max(args.max_results || 5, 1), 8);
       const searchText = await webSearch(args.query, maxR);
 
-      // Screenshot Guard AI search preview page and send as image
-      const previewUrl = `https://5e5b3295-7d1f-409b-9af8-893239a0279c-00-26fjm9tfs1kvk.spock.replit.dev/api/search/preview?q=${encodeURIComponent(args.query)}`;
-      try {
-        const shotResult = await screenshotUrl(previewUrl, { width: 900, height: 700, fullPage: true });
-        if (shotResult?.imageBuffer) {
-          const { AttachmentBuilder } = await import("discord.js");
-          const att = new AttachmentBuilder(shotResult.imageBuffer, { name: "search.png" });
-          const targetCh = ctx.msg?.channel || channel;
-          if (targetCh) {
-            await targetCh.send({
-              content: `🔍 **ผลค้นหา: "${args.query}"**`,
-              files: [att],
-            });
-          }
-        }
-      } catch (_) { /* screenshot failed, fall through to text */ }
+      // Return text results directly (removed dead Replit screenshot URL)
       return searchText;
     }
 
@@ -2446,6 +2528,151 @@ async function execTool(name, args, ctx) {
       return await listLocalFiles(args.dirpath || "/tmp");
     }
 
+
+    // ─── Translate ────────────────────────────────────────────────────────────
+    case "translate": {
+      const { text, from = "auto", to = "en" } = args;
+      if (!text) return { error: "text required" };
+      return translateText(text, { from, to });
+    }
+
+    // ─── Role management ──────────────────────────────────────────────────────
+    case "create_role": {
+      if (!args.name) return { error: "name required" };
+      try {
+        const COLOR_MAP = { red:"#FF0000",blue:"#0000FF",green:"#00FF00",yellow:"#FFFF00",purple:"#800080",pink:"#FFC0CB",orange:"#FFA500",gold:"#FFD700",silver:"#C0C0C0",white:"#FFFFFF",black:"#000000",cyan:"#00FFFF" };
+        const roleOpts = { name: args.name };
+        if (args.color) roleOpts.color = args.color.startsWith("#") ? args.color : (COLOR_MAP[args.color.toLowerCase()] || "#99AAB5");
+        if (args.hoist !== undefined) roleOpts.hoist = args.hoist;
+        if (args.mentionable !== undefined) roleOpts.mentionable = args.mentionable;
+        if (args.reason) roleOpts.reason = args.reason;
+        const role = await guild.roles.create(roleOpts);
+        return { ok: true, role_id: role.id, name: role.name, color: role.hexColor, position: role.position };
+      } catch (err) { return { error: err?.message || "create_role failed" }; }
+    }
+
+    case "delete_role": {
+      if (!args.role_name) return { error: "role_name required" };
+      try {
+        const roles = await guild.roles.fetch();
+        const q = (args.role_name || "").toLowerCase().trim();
+        const role = roles.find(r => r.name.toLowerCase() === q) || roles.find(r => r.name.toLowerCase().includes(q));
+        if (!role) return { error: "ไม่เจอ role: " + args.role_name };
+        if (role.managed) return { error: "Role " + role.name + " ถูกจัดการโดย integration ลบไม่ได้" };
+        await role.delete(args.reason || "admin request");
+        return { ok: true, deleted: role.name };
+      } catch (err) { return { error: err?.message || "delete_role failed" }; }
+    }
+
+    case "edit_role": {
+      if (!args.role_name) return { error: "role_name required" };
+      try {
+        const roles = await guild.roles.fetch();
+        const q = (args.role_name || "").toLowerCase().trim();
+        const role = roles.find(r => r.name.toLowerCase() === q) || roles.find(r => r.name.toLowerCase().includes(q));
+        if (!role) return { error: "ไม่เจอ role: " + args.role_name };
+        const COLOR_MAP = { red:"#FF0000",blue:"#0000FF",green:"#00FF00",yellow:"#FFFF00",purple:"#800080",pink:"#FFC0CB",orange:"#FFA500",gold:"#FFD700" };
+        const editData = {};
+        if (args.new_name !== undefined) editData.name = args.new_name;
+        if (args.color !== undefined) editData.color = args.color.startsWith("#") ? args.color : (COLOR_MAP[args.color.toLowerCase()] || args.color);
+        if (args.hoist !== undefined) editData.hoist = args.hoist;
+        if (args.mentionable !== undefined) editData.mentionable = args.mentionable;
+        await role.edit(editData, args.reason);
+        return { ok: true, role_id: role.id, name: role.name, color: role.hexColor };
+      } catch (err) { return { error: err?.message || "edit_role failed" }; }
+    }
+
+    // ─── Create invite ────────────────────────────────────────────────────────
+    case "create_invite": {
+      try {
+        const targetCh = args.channel_id ? await guild.channels.fetch(args.channel_id).catch(() => channel) : channel;
+        if (!targetCh) return { error: "channel not found" };
+        const inv = await targetCh.createInvite({
+          maxUses: args.max_uses || 0,
+          maxAge: args.max_age_hours !== undefined ? Math.round(args.max_age_hours * 3600) : 86400,
+          temporary: args.temporary || false,
+          reason: args.reason || "admin request",
+        });
+        return { ok: true, url: "https://discord.gg/" + inv.code, code: inv.code, max_uses: inv.maxUses || "unlimited", expires_in: inv.maxAge ? (inv.maxAge / 3600) + " ชั่วโมง" : "ไม่หมดอายุ", channel: targetCh.name };
+      } catch (err) { return { error: err?.message || "create_invite failed" }; }
+    }
+
+    // ─── Get member info ──────────────────────────────────────────────────────
+    case "get_member_info": {
+      if (!args.user_id) return { error: "user_id required" };
+      try {
+        const member = await guild.members.fetch(args.user_id);
+        const roles = member.roles.cache.filter(r => r.id !== guild.id).sort((a, b) => b.position - a.position).map(r => ({ id: r.id, name: r.name, color: r.hexColor }));
+        return {
+          ok: true,
+          user_id: member.id,
+          username: member.user.username,
+          display_name: member.displayName,
+          global_name: member.user.globalName || null,
+          bot: member.user.bot,
+          avatar_url: member.user.displayAvatarURL({ size: 256 }),
+          joined_server: member.joinedAt?.toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }) || null,
+          account_created: member.user.createdAt?.toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }) || null,
+          is_admin: member.permissions.has(PermissionFlagsBits.Administrator),
+          is_timed_out: !!member.communicationDisabledUntil,
+          timeout_until: member.communicationDisabledUntil?.toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }) || null,
+          voice_channel: member.voice?.channel?.name || null,
+          voice_muted: member.voice?.serverMute || false,
+          voice_deafened: member.voice?.serverDeaf || false,
+          nickname: member.nickname || null,
+          roles: roles.slice(0, 20),
+          role_count: roles.length,
+          boost_since: member.premiumSince?.toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }) || null,
+        };
+      } catch (err) { return { error: err?.message || "get_member_info failed" }; }
+    }
+
+    // ─── Add reaction ─────────────────────────────────────────────────────────
+    case "add_reaction": {
+      if (!args.message_id || !args.emoji) return { error: "message_id and emoji required" };
+      try {
+        const targetCh = args.channel_id ? await guild.channels.fetch(args.channel_id).catch(() => channel) : channel;
+        if (!targetCh) return { error: "channel not found" };
+        const msg = await targetCh.messages.fetch(args.message_id);
+        await msg.react(args.emoji);
+        return { ok: true, emoji: args.emoji, message_id: args.message_id };
+      } catch (err) { return { error: err?.message || "add_reaction failed" }; }
+    }
+
+    // ─── Server stats ─────────────────────────────────────────────────────────
+    case "server_stats": {
+      try {
+        const g = ctx.guild;
+        await g.fetch();
+        const members = await g.members.fetch();
+        const channels = await g.channels.fetch();
+        const roles = await g.roles.fetch();
+        let online = 0, idle = 0, dnd = 0, offline = 0, bots = 0, inVoice = 0;
+        for (const m of members.values()) {
+          if (m.user.bot) { bots++; continue; }
+          const s = m.presence?.status || "offline";
+          if (s === "online") online++; else if (s === "idle") idle++; else if (s === "dnd") dnd++; else offline++;
+        }
+        let textCh = 0, voiceCh = 0, catCh = 0, threadCh = 0, forumCh = 0;
+        for (const c of channels.values()) {
+          if (!c) continue;
+          if (c.type === ChannelType.GuildText) textCh++;
+          else if (c.type === ChannelType.GuildVoice) { voiceCh++; inVoice += c.members?.size || 0; }
+          else if (c.type === ChannelType.GuildCategory) catCh++;
+          else if (c.type === ChannelType.PublicThread || c.type === ChannelType.PrivateThread) threadCh++;
+          else if (c.type === ChannelType.GuildForum) forumCh++;
+        }
+        return {
+          guild_name: g.name, total_members: members.size, humans: members.size - bots, bots,
+          online, idle, dnd, offline, in_voice: inVoice,
+          channels: { text: textCh, voice: voiceCh, categories: catCh, threads: threadCh, forums: forumCh, total: channels.size },
+          roles: roles.size, boost_level: g.premiumTier, boosts: g.premiumSubscriptionCount || 0,
+          verification_level: g.verificationLevel,
+          created_at: g.createdAt?.toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
+        };
+      } catch (err) { return { error: err?.message || "server_stats failed" }; }
+    }
+
     default:
       return { error: `unknown tool: ${name}` };
   }
@@ -2647,6 +2874,16 @@ Admin: "ตอนนี้ใช้โมเดล AI อะไร?"
 Random user (NOT admin) in chat: "เอ็งเป็น GPT-4 ใช่มั้ย?"
 → no tool
 → reply: "ไม่บอกหรอกครับ ความลับของบ้าน 😏 รู้แค่ว่าเป็น Alxcer Guard ก็พอ"
+
+== NEW TOOLS (เพิ่มใหม่ v2) ==
+  • "แปล X เป็นอังกฤษ/ญี่ปุ่น/ฯลฯ" / "translate X to en"      → translate({text, from?, to})
+  • "สร้าง role ชื่อ X" / "เพิ่ม role X สีแดง"                  → create_role({name, color?, hoist?, mentionable?})
+  • "ลบ role X" / "เอา role X ออกไปเลย"                         → delete_role({role_name})
+  • "แก้ role X ให้เป็นสีน้ำเงิน" / "เปลี่ยนชื่อ role X"        → edit_role({role_name, new_name?, color?})
+  • "สร้างลิงก์เชิญ" / "invite link" / "link เชิญ"              → create_invite({max_uses?, max_age_hours?})
+  • "ดูข้อมูล @X" / "profile X" / "ข้อมูลสมาชิก X"               → get_member_info({user_id})
+  • "ใส่ reaction ❤️ ที่ข้อความนั้น" / "react X"                  → add_reaction({message_id, emoji})
+  • "สถิติเซิร์ฟ" / "ใคร online บ้าง" / "server stats"           → server_stats()
 
 == INTERNET / WEB TOOLS ==
 กฎหลัก — เลือก tool ให้ถูก:
