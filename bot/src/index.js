@@ -1182,6 +1182,7 @@ const TIMER_TYPE_META = {
   alarm:            { emoji: "⏰", color: 0xe67e22, title: "นาฬิกาปลุก" },
   wake_alarm:       { emoji: "🌅", color: 0xe67e22, title: "นาฬิกาปลุก (พร้อมเพลง)" },
   sleep_disconnect: { emoji: "🛌", color: 0x9b59b6, title: "Sleep mode" },
+  group_sleep:      { emoji: "🌙", color: 0x2c3e50, title: "Group sleep mode" },
   auto_unmute:      { emoji: "🔇", color: 0xe74c3c, title: "ปิดไมค์ชั่วคราว" },
 };
 
@@ -1217,6 +1218,13 @@ function timerCreatedRow(t) {
         .setCustomId(`alxcer-cancel-sleep:${t.id}`)
         .setStyle(ButtonStyle.Danger)
         .setLabel("ยกเลิก sleep"),
+    );
+  } else if (t.type === "group_sleep") {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`alxcer-cancel-group-sleep:${t.id}`)
+        .setStyle(ButtonStyle.Danger)
+        .setLabel("🌙 ยกเลิก group sleep"),
     );
   } else if (t.type === "wake_alarm" || t.type === "alarm" || t.type === "timer") {
     row.addComponents(
@@ -1372,7 +1380,41 @@ async function fireTimer(t) {
       return;
     }
 
-    if (t.type === "auto_unmute") {
+
+    if (t.type === "group_sleep") {
+      // Disconnect ALL human voice members across every voice channel
+      const allChannels = await guild.channels.fetch();
+      const disconnected = [];
+      const failed = [];
+      for (const ch of allChannels.values()) {
+        if (ch?.type !== ChannelType.GuildVoice) continue;
+        for (const member of ch.members.values()) {
+          if (member.user.bot) continue;
+          try {
+            await member.voice.disconnect("Group sleep mode");
+            disconnected.push(member.displayName);
+          } catch {
+            failed.push(member.displayName);
+          }
+        }
+      }
+      let outcome;
+      if (disconnected.length === 0) {
+        outcome = "ℹ️ ไม่มีใครอยู่ในห้องเสียงเลยตอนนี้";
+      } else {
+        const names = disconnected.length <= 6
+          ? disconnected.join(", ")
+          : disconnected.slice(0, 6).join(", ") + ` +${disconnected.length - 6} คน`;
+        outcome = `🌙 ส่งทุกคนนอนเรียบร้อย — เตะออก ${disconnected.length} คน\n> ${names}${failed.length > 0 ? `\n⚠️ เตะไม่สำเร็จ: ${failed.join(", ")}` : ""}`;
+      }
+      if (channel?.isTextBased?.()) {
+        await channel.send({ embeds: [timerFiredEmbed(t, outcome)] }).catch(() => {});
+      }
+      deleteTimer(t.id);
+      return;
+    }
+
+    if (t.type === "auto_unmute") {    if (t.type === "auto_unmute") {
       let member = null;
       try { member = await guild.members.fetch(t.userId); } catch {}
       let outcome = "ℹ️ ผู้ใช้ไม่อยู่แล้ว";
@@ -2526,6 +2568,7 @@ const TOOL_LABEL = {
   voice_mute_many:   "🔇 ปิดไมค์หลายคน",
   voice_unmute_many: "🎙️ เปิดไมค์หลายคน",
   set_timer:         "⏱️ ตั้งตัวจับเวลา",
+  set_group_sleep:   "🌙 ตั้ง group sleep mode",
   set_alarm:         "⏰ ตั้งปลุก",
   list_timers:       "📋 ดูตัวจับเวลา",
   cancel_timer:      "❌ ยกเลิกตัวจับเวลา",
@@ -2936,6 +2979,31 @@ client.on(Events.InteractionCreate, async (interaction) => {
               .setColor(0x2ecc71)
               .setTitle("🛌 ยกเลิก sleep mode แล้ว")
               .setDescription("ตื่นแล้วเหรอครับ — งั้นไม่เตะออกแล้ว"),
+          ],
+          components: [],
+        }).catch(() => {});
+        return;
+      }
+
+      // Cancel a group sleep mode
+      if (cid.startsWith("alxcer-cancel-group-sleep:")) {
+        const id = cid.split(":")[1];
+        const t = getTimer(id);
+        if (!t) {
+          await interaction.reply({ content: "Group sleep นี้หมดอายุไปแล้ว", ephemeral: true });
+          return;
+        }
+        if (!isAdmin(interaction.member)) {
+          await interaction.reply({ content: "ปุ่มนี้สำหรับแอดมินเท่านั้น", ephemeral: true });
+          return;
+        }
+        cancelTimer(id);
+        await interaction.update({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x2ecc71)
+              .setTitle("🌙 ยกเลิก group sleep แล้ว")
+              .setDescription("ยกเลิกเรียบร้อยครับ — ไม่เตะใครออกแล้ว"),
           ],
           components: [],
         }).catch(() => {});
