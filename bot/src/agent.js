@@ -5,7 +5,7 @@
 
 import { PermissionFlagsBits, ChannelType } from "discord.js";
 import { generateReply, generateVisionReply, aiAvailable, getModelStatus } from "./ai.js";
-import { webSearch, fetchUrl, wikipediaLookup, getWeather, searchHotels, translateText } from "./tools_web.js";
+import { webSearch, fetchUrl, wikipediaLookup, getWeather, searchHotels, translateText, generateImage, getQuickChart, defineWord, urbanDefine, getTrivia, shortenUrl } from "./tools_web.js";
 import { runCode, deployWebpage, readOwnLog, readOwnSource, writeOwnSource,
          screenshotUrl, inspectWebpage, checkWebsite, computerBrowse,
          readLocalFile, writeLocalFile, listLocalFiles, shellExec } from "./tools_openclaw.js";
@@ -1372,8 +1372,285 @@ const TOOLS = [
       description: "สถิติเซิร์ฟเวอร์ละเอียด: online/offline/idle, bots, channels ทุกประเภท, boosts",
       parameters: { type: "object", properties: {} },
     },
+  },
+
+  // ─── announce ───────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "announce",
+      description: "ส่ง embed ประกาศสวยงามไปยัง Discord channel รองรับ title/description/color/image/thumbnail/fields/footer/mention ใช้สำหรับ 'ประกาศว่า X', 'โพสต์ข่าว Y', 'สร้าง embed', 'แจ้งเตือน Z', 'ทำ embed สวยๆ'",
+      parameters: {
+        type: "object",
+        required: ["title"],
+        properties: {
+          title:         { type: "string",  description: "หัวข้อ embed" },
+          description:   { type: "string",  description: "เนื้อหา (รองรับ Discord markdown: **bold**, *italic*, code, > quote)" },
+          color:         { type: "string",  description: "สีของแถบ: red/blue/green/yellow/purple/orange/pink/gold/cyan หรือ hex #RRGGBB" },
+          channel_id:    { type: "string",  description: "ส่งไปห้องไหน (default: ห้องปัจจุบัน)" },
+          thumbnail_url: { type: "string",  description: "URL รูปมุมขวาบน (icon เล็กๆ)" },
+          image_url:     { type: "string",  description: "URL รูปขนาดใหญ่ด้านล่าง embed" },
+          footer:        { type: "string",  description: "ข้อความ footer เล็กๆ ด้านล่าง" },
+          author:        { type: "string",  description: "ชื่อในแถบ author บนสุด" },
+          fields:        { type: "array",   description: "fields [{name, value, inline?}]", items: { type: "object" } },
+          mention:       { type: "string",  description: "@everyone, @here หรือ role mention ที่จะโพสต์ก่อน embed" },
+        },
+      },
+    },
+  },
+  // ─── generate_image ─────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "generate_image",
+      description: "สร้างรูปภาพ AI จากคำอธิบาย (text-to-image) แล้วส่งให้ Discord ทันที ฟรีไม่ต้อง API key ใช้สำหรับ 'วาดรูป X', 'สร้างภาพ Y', 'generate image', 'AI art'",
+      parameters: {
+        type: "object",
+        required: ["prompt"],
+        properties: {
+          prompt:     { type: "string",  description: "คำอธิบายรูป (อังกฤษจะได้ผลดีกว่า เช่น 'cute cat on cloud, anime style')" },
+          width:      { type: "integer", description: "ความกว้าง px (default: 1024)" },
+          height:     { type: "integer", description: "ความสูง px (default: 1024)" },
+          channel_id: { type: "string"  },
+        },
+      },
+    },
+  },
+  // ─── create_poll ────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "create_poll",
+      description: "สร้าง Discord native poll ให้สมาชิกโหวต ใช้สำหรับ 'สร้าง poll', 'โหวต', 'สำรวจความเห็น', 'ถามว่า...'",
+      parameters: {
+        type: "object",
+        required: ["question", "answers"],
+        properties: {
+          question:          { type: "string", description: "คำถาม" },
+          answers:           { type: "array",  items: { type: "string" }, description: "ตัวเลือก 2-10 อัน" },
+          duration_hours:    { type: "integer", description: "เวลาโหวต ชั่วโมง (default: 24, max: 168)" },
+          channel_id:        { type: "string"  },
+          allow_multiselect: { type: "boolean", description: "เลือกได้หลายตัวเลือก (default: false)" },
+        },
+      },
+    },
+  },
+  // ─── create_event ───────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "create_event",
+      description: "สร้าง Discord Scheduled Event กิจกรรมในเซิร์ฟ มีแจ้งเตือนอัตโนมัติ ใช้สำหรับ 'สร้าง event', 'นัดประชุม', 'จัด event', 'schedule กิจกรรม'",
+      parameters: {
+        type: "object",
+        required: ["name", "start_iso"],
+        properties: {
+          name:        { type: "string", description: "ชื่อ event" },
+          description: { type: "string" },
+          start_iso:   { type: "string", description: "เวลาเริ่ม ISO เช่น '2026-05-10T19:00:00+07:00'" },
+          end_iso:     { type: "string", description: "เวลาสิ้นสุด ISO (optional)" },
+          channel_id:  { type: "string", description: "Voice channel ID สำหรับ voice event" },
+          location:    { type: "string", description: "สถานที่ สำหรับ external event" },
+        },
+      },
+    },
+  },
+  // ─── random_pick ────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "random_pick",
+      description: "สุ่มทุกอย่าง: โยนเหรียญ (coin), ทอยลูกเต๋า (dice), สุ่มตัวเลข (number), เลือกสมาชิกแบบสุ่ม (member), สุ่มจากรายการ (list)",
+      parameters: {
+        type: "object",
+        required: ["type"],
+        properties: {
+          type:       { type: "string", enum: ["coin","dice","number","member","list"] },
+          sides:      { type: "integer", description: "จำนวนหน้าลูกเต๋า (default: 6)" },
+          count:      { type: "integer", description: "จำนวนครั้ง (default: 1, max: 20)" },
+          min:        { type: "integer", description: "ตัวเลขต่ำสุด (type:number, default: 1)" },
+          max:        { type: "integer", description: "ตัวเลขสูงสุด (type:number, default: 100)" },
+          items:      { type: "array",   items: { type: "string" }, description: "รายการ (type:list)" },
+          channel_id: { type: "string",  description: "ห้องเสียงสุ่มสมาชิก (type:member)" },
+          count_members: { type: "integer", description: "สุ่มสมาชิกกี่คน (default: 1)" },
+        },
+      },
+    },
+  },
+  // ─── search_members ─────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "search_members",
+      description: "ค้นหาสมาชิกตามเงื่อนไข: role, ชื่อ, สถานะ online/offline, อยู่ในห้องเสียง, booster",
+      parameters: {
+        type: "object",
+        properties: {
+          role_name:     { type: "string"  },
+          name_contains: { type: "string"  },
+          status:        { type: "string",  enum: ["online","idle","dnd","offline"] },
+          in_voice:      { type: "boolean", description: "อยู่ในห้องเสียงตอนนี้" },
+          is_boosting:   { type: "boolean", description: "กำลัง boost เซิร์ฟ" },
+          limit:         { type: "integer", description: "จำนวนสูงสุด (default: 25)" },
+        },
+      },
+    },
+  },
+  // ─── give_role_to_all ───────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "give_role_to_all",
+      description: "ให้ role กับสมาชิกทุกคน (หรือกรองตามเงื่อนไข) แบบ bulk ใช้สำหรับ 'ให้ยศ X กับทุกคน', 'เพิ่ม role Y ให้ทุกคน'",
+      parameters: {
+        type: "object",
+        required: ["role_name"],
+        properties: {
+          role_name:    { type: "string"  },
+          filter_role:  { type: "string",  description: "ให้เฉพาะคนที่มี role นี้" },
+          only_without: { type: "boolean", description: "ให้เฉพาะคนที่ยังไม่มี role นี้ (default: true)" },
+          exclude_bots: { type: "boolean", description: "ไม่รวมบอท (default: true)" },
+          reason:       { type: "string"  },
+        },
+      },
+    },
+  },
+  // ─── list_role_members ──────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "list_role_members",
+      description: "แสดงรายชื่อสมาชิกที่มี role ที่กำหนด ใช้สำหรับ 'ใครมียศ X', 'list role Y', 'สมาชิก role X มีใครบ้าง'",
+      parameters: {
+        type: "object",
+        required: ["role_name"],
+        properties: {
+          role_name:       { type: "string"  },
+          include_offline: { type: "boolean", description: "รวม offline (default: true)" },
+        },
+      },
+    },
+  },
+  // ─── chart ──────────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "chart",
+      description: "สร้างกราฟ/chart แล้วส่งเป็นรูปภาพ รองรับ bar, line, pie, doughnut, radar ใช้สำหรับ 'สร้างกราฟ', 'แผนภูมิ', 'chart ข้อมูล'",
+      parameters: {
+        type: "object",
+        required: ["chart_type", "labels", "datasets"],
+        properties: {
+          chart_type: { type: "string", enum: ["bar","line","pie","doughnut","radar","polarArea"] },
+          title:      { type: "string"  },
+          labels:     { type: "array",  items: { type: "string" } },
+          datasets:   { type: "array",  description: "[{label:string, data:[numbers], color?:string}]", items: { type: "object" } },
+          channel_id: { type: "string" },
+        },
+      },
+    },
+  },
+  // ─── shorten_url ────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "shorten_url",
+      description: "ย่อ URL ยาวให้สั้น ใช้ is.gd ฟรี ไม่ต้อง API key",
+      parameters: {
+        type: "object",
+        required: ["url"],
+        properties: { url: { type: "string" } },
+      },
+    },
+  },
+  // ─── define ─────────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "define",
+      description: "ค้นหาความหมายคำศัพท์ English (formal) หรือ slang (Urban Dictionary) ใช้สำหรับ 'แปลความหมาย X', 'X แปลว่าอะไร', 'X หมายความว่า', 'ความหมาย X'",
+      parameters: {
+        type: "object",
+        required: ["word"],
+        properties: {
+          word:  { type: "string" },
+          style: { type: "string", enum: ["formal","slang"], description: "formal = Oxford, slang = Urban Dictionary (default: formal)" },
+        },
+      },
+    },
+  },
+  // ─── trivia ─────────────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "trivia",
+      description: "ดึงคำถาม trivia/quiz แล้วโพสต์ให้สมาชิกตอบ ใช้สำหรับ 'เล่น trivia', 'ถาม quiz', 'ทดสอบความรู้', 'คำถามสนุกๆ'",
+      parameters: {
+        type: "object",
+        properties: {
+          category:   { type: "string", description: "หมวด: general, science, history, geography, sports, entertainment, computers, music, anime, movies" },
+          difficulty: { type: "string", enum: ["easy","medium","hard"] },
+          channel_id: { type: "string" },
+        },
+      },
+    },
+  },
+  // ─── set_channel_topic ──────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "set_channel_topic",
+      description: "เปลี่ยน topic/คำอธิบายของ channel ใช้สำหรับ 'เปลี่ยน topic ห้อง X', 'ตั้งคำอธิบายห้อง', 'set topic'",
+      parameters: {
+        type: "object",
+        required: ["topic"],
+        properties: {
+          channel_id: { type: "string" },
+          topic:      { type: "string", description: "topic ใหม่ (สูงสุด 1024 ตัวอักษร, ว่างเปล่า = ลบ topic)" },
+        },
+      },
+    },
+  },
+  // ─── purge_user_messages ────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "purge_user_messages",
+      description: "ลบข้อความทั้งหมดของ user คนนึงใน channel (เฉพาะ ≤14 วัน) ใช้สำหรับ 'ลบข้อความของ X', 'เคลียร์ spam ของ X'",
+      parameters: {
+        type: "object",
+        required: ["user_id"],
+        properties: {
+          user_id:    { type: "string" },
+          channel_id: { type: "string" },
+          limit:      { type: "integer", description: "สแกนกี่ข้อความ (default: 100, max: 500)" },
+        },
+      },
+    },
+  },
+  // ─── get_bot_info ───────────────────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "get_bot_info",
+      description: "ดูสถานะบอท: uptime, ping, memory, guilds ใช้สำหรับ 'สถานะบอท', 'bot status', 'บอทโอเคไหม', 'ping เท่าไหร่'",
+      parameters: { type: "object", properties: {} },
+    },
   }
 ];
+
+
+const COLOR_MAP = {
+  red:"#e74c3c", blue:"#3498db", green:"#2ecc71", yellow:"#f1c40f",
+  purple:"#9b59b6", orange:"#e67e22", pink:"#fd79a8", gold:"#f9ca24",
+  cyan:"#00cec9", white:"#ffffff", black:"#2c3e50", grey:"#95a5a6",
+  gray:"#95a5a6", dark:"#2c3e50", teal:"#1abc9c",
+};
+function resolveColor(c) {
+  if (!c) return 0x5865F2;
+  if (c.startsWith("#")) return parseInt(c.slice(1), 16);
+  return parseInt((COLOR_MAP[c.toLowerCase()] || "#5865F2").slice(1), 16);
+}
 
 // ===== Resolution helpers =====
 function normalize(s) {
@@ -2729,6 +3006,365 @@ async function execTool(name, args, ctx) {
       };
     }
 
+
+    // ─── announce ─────────────────────────────────────────────────────────────
+    case "announce": {
+      const targetCh = args.channel_id
+        ? await ctx.guild.channels.fetch(args.channel_id).catch(() => null)
+        : ctx.channel;
+      if (!targetCh?.isTextBased?.()) return { error: "channel not found or not text-based" };
+      const embed = new EmbedBuilder().setColor(resolveColor(args.color));
+      if (args.author)        embed.setAuthor({ name: String(args.author).slice(0, 256) });
+      if (args.title)         embed.setTitle(String(args.title).slice(0, 256));
+      if (args.description)   embed.setDescription(String(args.description).slice(0, 4096));
+      if (args.thumbnail_url) embed.setThumbnail(args.thumbnail_url);
+      if (args.image_url)     embed.setImage(args.image_url);
+      if (args.footer)        embed.setFooter({ text: String(args.footer).slice(0, 2048) });
+      if (Array.isArray(args.fields)) {
+        for (const f of args.fields.slice(0, 25)) {
+          if (f?.name && f?.value)
+            embed.addFields({ name: String(f.name).slice(0,256), value: String(f.value).slice(0,1024), inline: !!f.inline });
+        }
+      }
+      embed.setTimestamp();
+      const content = args.mention ? String(args.mention) : undefined;
+      const msg = await targetCh.send({ content, embeds: [embed] });
+      return { ok: true, message_id: msg.id, channel: targetCh.name };
+    }
+
+    // ─── generate_image ───────────────────────────────────────────────────────
+    case "generate_image": {
+      const targetCh = args.channel_id
+        ? await ctx.guild.channels.fetch(args.channel_id).catch(() => null)
+        : ctx.channel;
+      if (!targetCh?.isTextBased?.()) return { error: "channel not found" };
+      const imgResult = await generateImage(args.prompt, { width: args.width || 1024, height: args.height || 1024 });
+      if (imgResult.error) return { error: imgResult.error };
+      const { AttachmentBuilder } = await import("discord.js");
+      const attachment = new AttachmentBuilder(imgResult.imageBuffer, { name: "generated.png" });
+      const descText = String(args.prompt).slice(0, 200);
+      const embed = new EmbedBuilder()
+        .setColor(0x6c5ce7)
+        .setTitle("🎨 AI Image")
+        .setDescription("> " + descText)
+        .setImage("attachment://generated.png")
+        .setFooter({ text: "Powered by Pollinations.ai" })
+        .setTimestamp();
+      await targetCh.send({ embeds: [embed], files: [attachment] });
+      return { ok: true, prompt: args.prompt };
+    }
+
+    // ─── create_poll ──────────────────────────────────────────────────────────
+    case "create_poll": {
+      const targetCh = args.channel_id
+        ? await ctx.guild.channels.fetch(args.channel_id).catch(() => null)
+        : ctx.channel;
+      if (!targetCh?.isTextBased?.()) return { error: "channel not found" };
+      const answers = (args.answers || []).slice(0, 10).filter(a => a?.trim?.());
+      if (answers.length < 2) return { error: "ต้องมีตัวเลือกอย่างน้อย 2 อัน" };
+      const durationHours = Math.min(Math.max(Number(args.duration_hours) || 24, 1), 168);
+      try {
+        const msg = await targetCh.send({
+          poll: {
+            question: { text: String(args.question).slice(0, 300) },
+            answers: answers.map(a => ({ text: String(a).slice(0, 55) })),
+            duration: durationHours,
+            allowMultiselect: !!args.allow_multiselect,
+          },
+        });
+        return { ok: true, message_id: msg.id, duration_hours: durationHours, answer_count: answers.length };
+      } catch (err) {
+        return { error: "create_poll failed: " + (err?.message || String(err)) };
+      }
+    }
+
+    // ─── create_event ─────────────────────────────────────────────────────────
+    case "create_event": {
+      const { GuildScheduledEventPrivacyLevel, GuildScheduledEventEntityType } = await import("discord.js");
+      let startTime;
+      try { startTime = new Date(args.start_iso); if (isNaN(startTime)) throw new Error("invalid date"); }
+      catch { return { error: "start_iso ไม่ถูกรูปแบบ ใช้ ISO 8601 เช่น '2026-05-10T19:00:00+07:00'" }; }
+      const endTime = args.end_iso ? new Date(args.end_iso) : null;
+      let entityType, eventChannel, entityMetadata;
+      if (args.channel_id) {
+        entityType = GuildScheduledEventEntityType.Voice;
+        eventChannel = args.channel_id;
+      } else {
+        entityType = GuildScheduledEventEntityType.External;
+        entityMetadata = { location: args.location || "Online" };
+      }
+      const eventData = {
+        name: String(args.name).slice(0, 100),
+        scheduledStartTime: startTime,
+        privacyLevel: GuildScheduledEventPrivacyLevel.GuildOnly,
+        entityType,
+      };
+      if (args.description) eventData.description = String(args.description).slice(0, 1000);
+      if (endTime && !isNaN(endTime)) eventData.scheduledEndTime = endTime;
+      if (eventChannel) eventData.channel = eventChannel;
+      if (entityMetadata) eventData.entityMetadata = entityMetadata;
+      try {
+        const event = await ctx.guild.scheduledEvents.create(eventData);
+        return { ok: true, event_id: event.id, name: event.name, start: event.scheduledStartAt?.toISOString() };
+      } catch (err) {
+        return { error: "create_event failed: " + (err?.message || String(err)) };
+      }
+    }
+
+    // ─── random_pick ──────────────────────────────────────────────────────────
+    case "random_pick": {
+      const rCount = Math.min(Math.max(Number(args.count) || 1, 1), 20);
+      if (args.type === "coin") {
+        const results = Array.from({ length: rCount }, () => Math.random() < 0.5 ? "หัว 🪙" : "ก้อย 🔵");
+        return { ok: true, results, summary: rCount === 1 ? results[0] : results.join(", ") };
+      }
+      if (args.type === "dice") {
+        const sides = Math.min(Math.max(Number(args.sides) || 6, 2), 100);
+        const rolls = Array.from({ length: rCount }, () => Math.floor(Math.random() * sides) + 1);
+        const total = rolls.reduce((a, b) => a + b, 0);
+        return { ok: true, rolls, total, sides, summary: rCount === 1 ? "🎲 " + rolls[0] : "🎲 [" + rolls.join(", ") + "] รวม " + total };
+      }
+      if (args.type === "number") {
+        const nMin = Number(args.min) || 1;
+        const nMax = Number(args.max) || 100;
+        const nums = Array.from({ length: rCount }, () => Math.floor(Math.random() * (nMax - nMin + 1)) + nMin);
+        return { ok: true, numbers: nums, summary: rCount === 1 ? "🔢 " + nums[0] : "🔢 [" + nums.join(", ") + "]" };
+      }
+      if (args.type === "list") {
+        const items = args.items || [];
+        if (!items.length) return { error: "ต้องส่ง items" };
+        const pool = [...items];
+        const pickCount = Math.min(rCount, pool.length);
+        const picks = [];
+        for (let i = 0; i < pickCount; i++) {
+          const idx = Math.floor(Math.random() * pool.length);
+          picks.push(pool.splice(idx, 1)[0]);
+        }
+        return { ok: true, picks, summary: pickCount === 1 ? "🎯 " + picks[0] : "🎯 " + picks.join(", ") };
+      }
+      if (args.type === "member") {
+        let pool = [];
+        if (args.channel_id) {
+          const ch = await ctx.guild.channels.fetch(args.channel_id).catch(() => null);
+          if (ch?.type === ChannelType.GuildVoice) pool = [...ch.members.values()].filter(m => !m.user.bot);
+        } else {
+          const channels = await ctx.guild.channels.fetch();
+          for (const ch of channels.values()) {
+            if (ch?.type === ChannelType.GuildVoice) pool.push(...[...ch.members.values()].filter(m => !m.user.bot));
+          }
+        }
+        if (!pool.length) return { error: "ไม่มีสมาชิกในห้องเสียงที่ระบุ" };
+        const pickCount = Math.min(Number(args.count_members) || rCount, pool.length);
+        const copy = [...pool];
+        const picks = [];
+        for (let i = 0; i < pickCount; i++) {
+          const idx = Math.floor(Math.random() * copy.length);
+          picks.push(copy.splice(idx, 1)[0]);
+        }
+        return { ok: true, picks: picks.map(m => ({ id: m.id, name: m.displayName })), summary: "🎯 " + picks.map(m => m.displayName).join(", ") };
+      }
+      return { error: "type ไม่ถูกต้อง: coin/dice/number/list/member" };
+    }
+
+    // ─── search_members ───────────────────────────────────────────────────────
+    case "search_members": {
+      await ctx.guild.members.fetch();
+      let members = [...ctx.guild.members.cache.values()];
+      if (args.role_name) {
+        const role = ctx.guild.roles.cache.find(r => r.name.toLowerCase() === String(args.role_name).toLowerCase());
+        if (!role) return { error: "ไม่พบ role \"" + args.role_name + "\"" };
+        members = members.filter(m => m.roles.cache.has(role.id));
+      }
+      if (args.name_contains) {
+        const q = String(args.name_contains).toLowerCase();
+        members = members.filter(m => m.displayName.toLowerCase().includes(q) || m.user.username.toLowerCase().includes(q));
+      }
+      if (args.in_voice === true)    members = members.filter(m => !!m.voice?.channel);
+      if (args.is_boosting === true) members = members.filter(m => !!m.premiumSince);
+      if (args.is_bot !== undefined) members = members.filter(m => m.user.bot === !!args.is_bot);
+      if (args.status) {
+        members = members.filter(m => (m.presence?.status || "offline") === args.status);
+      }
+      const smLimit = Math.min(Number(args.limit) || 25, 100);
+      const results = members.slice(0, smLimit).map(m => ({
+        id: m.id, name: m.displayName, username: m.user.tag,
+        in_voice: !!m.voice?.channel, boosting: !!m.premiumSince,
+        status: m.presence?.status || "offline",
+      }));
+      return { ok: true, count: members.length, shown: results.length, members: results };
+    }
+
+    // ─── give_role_to_all ─────────────────────────────────────────────────────
+    case "give_role_to_all": {
+      const gRole = ctx.guild.roles.cache.find(r => r.name.toLowerCase() === String(args.role_name).toLowerCase());
+      if (!gRole) return { error: "ไม่พบ role \"" + args.role_name + "\"" };
+      await ctx.guild.members.fetch();
+      let gMembers = [...ctx.guild.members.cache.values()];
+      if (args.exclude_bots !== false) gMembers = gMembers.filter(m => !m.user.bot);
+      if (args.filter_role) {
+        const fr = ctx.guild.roles.cache.find(r => r.name.toLowerCase() === String(args.filter_role).toLowerCase());
+        if (fr) gMembers = gMembers.filter(m => m.roles.cache.has(fr.id));
+      }
+      if (args.only_without !== false) gMembers = gMembers.filter(m => !m.roles.cache.has(gRole.id));
+      if (!gMembers.length) return { ok: true, given: 0, note: "ทุกคนมี role นี้อยู่แล้ว" };
+      let given = 0, gFailed = 0;
+      for (const m of gMembers) {
+        try { await m.roles.add(gRole, args.reason || "give_role_to_all"); given++; await new Promise(r => setTimeout(r, 250)); }
+        catch { gFailed++; }
+        if (given + gFailed >= 100) break;
+      }
+      return { ok: true, given, failed: gFailed, role: gRole.name, total_eligible: gMembers.length };
+    }
+
+    // ─── list_role_members ────────────────────────────────────────────────────
+    case "list_role_members": {
+      const lRole = ctx.guild.roles.cache.find(r => r.name.toLowerCase() === String(args.role_name).toLowerCase());
+      if (!lRole) return { error: "ไม่พบ role \"" + args.role_name + "\"" };
+      await ctx.guild.members.fetch();
+      const lMembers = [...lRole.members.values()];
+      return {
+        ok: true, role: lRole.name, count: lMembers.length,
+        members: lMembers.slice(0, 50).map(m => ({
+          id: m.id, name: m.displayName, status: m.presence?.status || "offline", in_voice: !!m.voice?.channel,
+        })),
+      };
+    }
+
+    // ─── chart ────────────────────────────────────────────────────────────────
+    case "chart": {
+      const targetCh = args.channel_id
+        ? await ctx.guild.channels.fetch(args.channel_id).catch(() => null)
+        : ctx.channel;
+      if (!targetCh?.isTextBased?.()) return { error: "channel not found" };
+      const PALETTE = ["#5865F2","#57F287","#FEE75C","#ED4245","#EB459E","#00B0F4","#F47B67","#7289DA"];
+      const noScale = ["pie","doughnut","polarArea","radar"].includes(args.chart_type);
+      const chartConfig = {
+        type: args.chart_type,
+        data: {
+          labels: args.labels,
+          datasets: (args.datasets || []).map((ds, i) => ({
+            label: ds.label || ("Dataset " + (i+1)),
+            data: ds.data,
+            backgroundColor: ds.color || PALETTE[i % PALETTE.length],
+            borderColor: ds.color || PALETTE[i % PALETTE.length],
+            fill: false, tension: 0.3,
+          })),
+        },
+        options: {
+          plugins: {
+            title: { display: !!args.title, text: args.title || "", color: "#ffffff", font: { size: 18 } },
+            legend: { labels: { color: "#ffffff" } },
+          },
+          scales: noScale ? {} : {
+            x: { ticks: { color: "#ffffff" }, grid: { color: "#444" } },
+            y: { ticks: { color: "#ffffff" }, grid: { color: "#444" } },
+          },
+        },
+      };
+      const chartResult = await getQuickChart(chartConfig);
+      if (chartResult.error) return { error: chartResult.error };
+      const { AttachmentBuilder } = await import("discord.js");
+      const chartAttach = new AttachmentBuilder(chartResult.imageBuffer, { name: "chart.png" });
+      const chartEmbed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(args.title ? "📊 " + args.title : "📊 Chart")
+        .setImage("attachment://chart.png").setTimestamp();
+      await targetCh.send({ embeds: [chartEmbed], files: [chartAttach] });
+      return { ok: true, chart_type: args.chart_type };
+    }
+
+    // ─── shorten_url ──────────────────────────────────────────────────────────
+    case "shorten_url": {
+      const sResult = await shortenUrl(args.url);
+      return sResult.ok ? { ok: true, short_url: sResult.short_url, original: sResult.original } : { error: sResult.error };
+    }
+
+    // ─── define ───────────────────────────────────────────────────────────────
+    case "define": {
+      if (args.style === "slang") {
+        const uResult = await urbanDefine(args.word);
+        return uResult.error ? { error: uResult.error } : { ok: true, word: uResult.word, type: "slang", results: uResult.results };
+      }
+      const dResult = await defineWord(args.word);
+      return dResult.error ? { error: dResult.error } : { ok: true, word: dResult.word, phonetic: dResult.phonetic, type: "formal", meanings: dResult.meanings };
+    }
+
+    // ─── trivia ───────────────────────────────────────────────────────────────
+    case "trivia": {
+      const targetCh = args.channel_id
+        ? await ctx.guild.channels.fetch(args.channel_id).catch(() => null)
+        : ctx.channel;
+      if (!targetCh?.isTextBased?.()) return { error: "channel not found" };
+      const tResult = await getTrivia({ category: args.category, difficulty: args.difficulty });
+      if (tResult.error) return { error: tResult.error };
+      const DIFF_COLOR = { easy: 0x2ecc71, medium: 0xf1c40f, hard: 0xe74c3c };
+      const letters = ["🇦","🇧","🇨","🇩","🇪","🇫"];
+      const choiceLines = tResult.choices.map((c, i) => letters[i] + " " + c).join("\n");
+      const triviaEmbed = new EmbedBuilder()
+        .setColor(DIFF_COLOR[tResult.difficulty] || 0x5865F2)
+        .setTitle("🧠 Trivia — " + tResult.category)
+        .setDescription("**" + tResult.question + "**\n\n" + choiceLines)
+        .setFooter({ text: "ระดับ: " + tResult.difficulty + " • เฉลยใน 30 วินาที" })
+        .setTimestamp();
+      const triviaMsg = await targetCh.send({ embeds: [triviaEmbed] });
+      setTimeout(async () => {
+        const revealEmbed = new EmbedBuilder()
+          .setColor(0x2ecc71)
+          .setTitle("✅ เฉลย!")
+          .setDescription("**" + tResult.question + "**\n\n**คำตอบ:** " + tResult.correct);
+        await triviaMsg.reply({ embeds: [revealEmbed] }).catch(() => {});
+      }, 30_000);
+      return { ok: true, question: tResult.question, choices: tResult.choices, correct: tResult.correct, reveals_in: "30 วินาที" };
+    }
+
+    // ─── set_channel_topic ────────────────────────────────────────────────────
+    case "set_channel_topic": {
+      const targetCh = args.channel_id
+        ? await ctx.guild.channels.fetch(args.channel_id).catch(() => null)
+        : ctx.channel;
+      if (!targetCh) return { error: "channel not found" };
+      if (!targetCh.setTopic) return { error: "ห้องนี้ไม่รองรับ topic" };
+      const topic = String(args.topic || "").slice(0, 1024);
+      await targetCh.setTopic(topic);
+      return { ok: true, channel: targetCh.name, topic };
+    }
+
+    // ─── purge_user_messages ──────────────────────────────────────────────────
+    case "purge_user_messages": {
+      const targetCh = args.channel_id
+        ? await ctx.guild.channels.fetch(args.channel_id).catch(() => null)
+        : ctx.channel;
+      if (!targetCh?.isTextBased?.()) return { error: "channel not found" };
+      let puMember;
+      try { puMember = await ctx.guild.members.fetch(args.user_id); }
+      catch { return { error: "user not found" }; }
+      const scanLimit = Math.min(Number(args.limit) || 100, 500);
+      const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+      const msgs = await targetCh.messages.fetch({ limit: Math.min(scanLimit, 100) });
+      const toDelete = [...msgs.values()].filter(m => m.author.id === args.user_id && m.createdTimestamp > cutoff);
+      if (!toDelete.length) return { ok: true, deleted: 0, note: "ไม่พบข้อความของ user นี้ (ภายใน 14 วัน)" };
+      await targetCh.bulkDelete(toDelete, true);
+      return { ok: true, deleted: toDelete.length, user: puMember.displayName, channel: targetCh.name };
+    }
+
+    // ─── get_bot_info ─────────────────────────────────────────────────────────
+    case "get_bot_info": {
+      const botClient = ctx.guild.client;
+      const uptimeSec = Math.floor((botClient.uptime || 0) / 1000);
+      const btH = Math.floor(uptimeSec / 3600), btM = Math.floor((uptimeSec % 3600) / 60), btS = uptimeSec % 60;
+      const mem = process.memoryUsage();
+      return {
+        ok: true, bot_name: botClient.user?.tag,
+        uptime: btH + "h " + btM + "m " + btS + "s",
+        uptime_seconds: uptimeSec,
+        ping_ms: botClient.ws.ping,
+        guilds: botClient.guilds.cache.size,
+        memory_mb: Math.round(mem.rss / 1024 / 1024),
+        heap_mb: Math.round(mem.heapUsed / 1024 / 1024),
+        node_version: process.version,
+      };
+    }
+
     default:
       return { error: `unknown tool: ${name}` };
   }
@@ -2816,15 +3452,42 @@ Logs / history:
   • "ดูประวัติ X" / "X ทำผิดอะไรบ้าง"                       → get_user_offenses(X)
   • "เคลียร์ประวัติ X" / "ล้างบันทึก X"                     → clear_user_offenses(X)
 
-Timers / alarms / sleep mode (NEW — IMPORTANT):
+Timers / alarms / sleep mode:
   • "ตั้งเวลา N นาที" / "เตือนใน N วินาที" / "นับถอยหลัง N" / "remind me in N min" → set_timer({minutes/seconds/hours, label})
-  • "ปลุก ตี 7" / "ปลุก 06:30" / "alarm at 7am" / "ตั้งนาฬิกาปลุก 06:30:15"     → set_alarm({hour, minute, second?})
+  • "ปลุก ตี 7" / "ปลุก 06:30" / "alarm at 7am" / "ตั้งนาฬิกาปลุก 06:30:15"      → set_alarm({hour, minute, second?})
   • "ปลุกแบบมีเพลง" / "ปลุกพร้อมเพลง" / "wake me up with music"                    → set_alarm({..., play_wake_music: true})
-  • "sleep mode N นาที/ชม" / "เตะกูออกใน N" / "ดีดออกใน N" / "ปลุกตัวเอง N ชม"        → set_self_disconnect({hours?, minutes?, seconds?, user_id?})
-  • "sleep mode ทุกคน N ชม" / "เตะทุกคนออกใน N ชม" / "ปิดเซิร์ฟใน N" / "group sleep N" → set_group_sleep({hours?, minutes?, seconds?, label?})
-  • "ปิดไมค์ A 30 วินาที" / "mute A 5 นาที" / "ปิดเสียง A สัก 1 นาที"               → mute_user_for({user_id, seconds/minutes})
-  • "ดูตัวจับเวลาที่ตั้งไว้" / "list timers" / "มีอันไหนตั้งอยู่บ้าง"                    → list_timers()
-  • "ยกเลิกตัวจับเวลา <id>" / "ลบ alarm <id>" / "cancel timer <id>"               → cancel_timer({timer_id})
+  • "sleep mode N นาที/ชม" / "เตะกูออกใน N" / "ดีดออกใน N" / "ปลุกตัวเอง N"       → set_self_disconnect({hours?, minutes?, seconds?, user_id?})
+  • "sleep ทุกคน N" / "เตะทุกคนออกใน N" / "ปิดเซิร์ฟใน N" / "group sleep N"       → set_group_sleep({hours?, minutes?, seconds?, label?})
+  • "ปิดไมค์ A 30 วินาที" / "mute A 5 นาที" / "ปิดเสียง A สัก 1 นาที"              → mute_user_for({user_id, seconds/minutes})
+  • "ดูตัวจับเวลา" / "list timers" / "มีอันไหนตั้งอยู่บ้าง"                          → list_timers()
+  • "ยกเลิกตัวจับเวลา <id>" / "cancel timer <id>"                                 → cancel_timer({timer_id})
+
+Content & Media (NEW):
+  • "ประกาศว่า X" / "โพสต์ข่าว" / "สร้าง embed" / "แจ้งเตือน"                    → announce({title, description?, color?, channel_id?, thumbnail_url?, image_url?, footer?, fields?, mention?})
+  • "วาดรูป X" / "สร้างภาพ Y" / "generate image" / "AI art"                        → generate_image({prompt, width?, height?, channel_id?})
+  • "สร้างกราฟ" / "แผนภูมิ" / "bar/pie/line chart ข้อมูล"                           → chart({chart_type, title?, labels, datasets, channel_id?})
+
+Polls & Events (NEW):
+  • "สร้าง poll" / "โหวต" / "สำรวจความเห็น" / "ถามว่า..."                          → create_poll({question, answers, duration_hours?, allow_multiselect?})
+  • "สร้าง event" / "นัดประชุม" / "จัด event" / "schedule กิจกรรม"                  → create_event({name, start_iso, description?, channel_id?, location?})
+
+Random & Fun (NEW):
+  • "โยนเหรียญ" / "coin flip"                                                      → random_pick({type:"coin"})
+  • "ทอยลูกเต๋า" / "roll dice" / "สุ่ม d6 / d20"                                   → random_pick({type:"dice", sides?, count?})
+  • "สุ่มตัวเลข N-M" / "random number"                                             → random_pick({type:"number", min?, max?})
+  • "สุ่มสมาชิก" / "สุ่มคนในห้อง" / "random member"                                → random_pick({type:"member", channel_id?})
+  • "สุ่มจาก A/B/C" / "random pick"                                                → random_pick({type:"list", items})
+  • "เล่น trivia" / "ถาม quiz" / "ทดสอบความรู้"                                    → trivia({category?, difficulty?, channel_id?})
+  • "ย่อลิงก์" / "shorten URL"                                                     → shorten_url({url})
+  • "X แปลว่าอะไร" / "ความหมาย X" / "define X"                                     → define({word, style?})  [style:"slang" = Urban Dictionary]
+
+Member & Channel Management (NEW):
+  • "ค้นหาสมาชิก" / "ใครอยู่ใน role X" / "คนที่ online" / "ใครอยู่ในห้องเสียง"     → search_members({role_name?, status?, in_voice?, is_boosting?})
+  • "ให้ยศ X กับทุกคน" / "เพิ่ม role Y ให้ทุกคน"                                   → give_role_to_all({role_name, only_without?, filter_role?})
+  • "ใครมียศ X บ้าง" / "list role Y" / "สมาชิก role X"                             → list_role_members({role_name})
+  • "เปลี่ยน topic ห้อง X" / "ตั้งคำอธิบายห้อง" / "set topic"                       → set_channel_topic({topic, channel_id?})
+  • "ลบข้อความของ X" / "เคลียร์ spam ของ X" / "purge user X"                       → purge_user_messages({user_id, channel_id?, limit?})
+  • "สถานะบอท" / "bot status" / "บอทโอเคไหม" / "ping"                             → get_bot_info()
 
 AI / model identity (NEW):
   • If admin asks "ตอนนี้ใช้โมเดลอะไร / ใช้ AI ตัวไหน / what model are you using right now / กำลังใช้ Gemini หรือ GPT" → call get_current_ai_model and report the REAL provider/model from the tool result in 1 line. Example: "ตอนนี้กำลังตอบจาก Gemini (gemini-2.5-flash) ครับ — ถ้ามันเต็มโควต้าจะ fall back เป็น OpenRouter"
@@ -2927,6 +3590,54 @@ Admin: "เตะทุกคนออกอีก 30 นาที ปิดเ�
 → tool: set_group_sleep({minutes: 30, label: "ปิดเซิร์ฟ"})
 → reply: "ตั้ง group sleep 30 นาทีแล้วครับ — จะเตะทุกคนออกพร้อมกัน กด Cancel ที่ embed ถ้าเปลี่ยนใจ"
 
+Admin: "ประกาศว่าพรุ่งนี้มี event ตี 2"
+→ tool: announce({title:"📢 แจ้งเตือน!", description:"พรุ่งนี้มี event ตี 2 มาร่วมกันได้เลย!", color:"blue", mention:"@everyone"})
+→ reply: "โพสต์ประกาศแล้วครับ"
+
+Admin: "วาดรูปแมวอ้วนนอนบนเมฆ"
+→ tool: generate_image({prompt:"fat cat sleeping on a fluffy cloud, cute anime style"})
+→ reply: "กำลังวาดอยู่ครับ รอแป๊บนึง 🎨"
+
+Admin: "สร้าง poll ถามว่าชอบ Java Python หรือ JavaScript"
+→ tool: create_poll({question:"ชอบภาษาโปรแกรมไหนมากที่สุด?", answers:["Java","Python","JavaScript"], duration_hours:24})
+→ reply: "สร้าง poll แล้วครับ โหวตได้เลย!"
+
+Admin: "สุ่มคนในห้อง VC หน่อย"
+→ tool: random_pick({type:"member"})
+→ reply: "🎯 ได้ [ชื่อ] ครับ!"
+
+Admin: "โยนเหรียญหน่อย"
+→ tool: random_pick({type:"coin"})
+→ reply: "🪙 หัว!"
+
+Admin: "ทอย d20"
+→ tool: random_pick({type:"dice", sides:20})
+→ reply: "🎲 ได้ 17 ครับ!"
+
+Admin: "สร้างกราฟ bar สมาชิกใหม่ ม.ค-มี.ค"
+→ tool: chart({chart_type:"bar", title:"สมาชิกใหม่ Q1", labels:["ม.ค","ก.พ","มี.ค"], datasets:[{label:"สมาชิก",data:[12,18,24]}]})
+→ reply: "สร้างกราฟแล้วครับ 📊"
+
+Admin: "เล่น trivia ระดับ medium"
+→ tool: trivia({difficulty:"medium"})
+→ reply: "โพสต์คำถามแล้วครับ เฉลยใน 30 วินาที 🧠"
+
+Admin: "ย่อลิงก์ https://very-long-url.example.com"
+→ tool: shorten_url({url:"https://very-long-url.example.com"})
+→ reply: "ลิงก์สั้น: https://is.gd/XXXXX"
+
+Admin: "serendipity แปลว่าอะไร"
+→ tool: define({word:"serendipity"})
+→ reply: "serendipity — noun: การค้นพบสิ่งดีๆ โดยบังเอิญ"
+
+Admin: "ใครมียศ Moderator บ้าง"
+→ tool: list_role_members({role_name:"Moderator"})
+→ reply: "ยศ Moderator มีสมาชิก 3 คน: A, B, C"
+
+Admin: "สถานะบอท"
+→ tool: get_bot_info()
+→ reply: "บอททำงานปกติครับ — uptime 2h 15m, ping 42ms, memory 128MB"
+
 Admin: "ปิดไมค์ @Alex 1 นาที"
 [mentioned users]: Alex (id: 1031...)
 → tool: mute_user_for({user_id: "1031...", minutes: 1})
@@ -2944,15 +3655,15 @@ Random user (NOT admin) in chat: "เอ็งเป็น GPT-4 ใช่มั
 → no tool
 → reply: "ไม่บอกหรอกครับ ความลับของบ้าน 😏 รู้แค่ว่าเป็น Alxcer Guard ก็พอ"
 
-== NEW TOOLS (เพิ่มใหม่ v2) ==
-  • "แปล X เป็นอังกฤษ/ญี่ปุ่น/ฯลฯ" / "translate X to en"      → translate({text, from?, to})
-  • "สร้าง role ชื่อ X" / "เพิ่ม role X สีแดง"                  → create_role({name, color?, hoist?, mentionable?})
-  • "ลบ role X" / "เอา role X ออกไปเลย"                         → delete_role({role_name})
-  • "แก้ role X ให้เป็นสีน้ำเงิน" / "เปลี่ยนชื่อ role X"        → edit_role({role_name, new_name?, color?})
-  • "สร้างลิงก์เชิญ" / "invite link" / "link เชิญ"              → create_invite({max_uses?, max_age_hours?})
-  • "ดูข้อมูล @X" / "profile X" / "ข้อมูลสมาชิก X"               → get_member_info({user_id})
-  • "ใส่ reaction ❤️ ที่ข้อความนั้น" / "react X"                  → add_reaction({message_id, emoji})
-  • "สถิติเซิร์ฟ" / "ใคร online บ้าง" / "server stats"           → server_stats()
+== ADDITIONAL TOOLS ==
+  • "แปล X เป็นอังกฤษ/ญี่ปุ่น"  → translate({text, from?, to})
+  • "สร้าง role ชื่อ X สีแดง"    → create_role({name, color?, hoist?, mentionable?})
+  • "ลบ role X"                   → delete_role({role_name})
+  • "แก้ role X สีน้ำเงิน"        → edit_role({role_name, new_name?, color?})
+  • "สร้างลิงก์เชิญ"              → create_invite({max_uses?, max_age_hours?})
+  • "ดูข้อมูล @X" / "profile X"   → get_member_info({user_id})
+  • "ใส่ reaction ❤️ ที่ข้อความ"   → add_reaction({message_id, emoji})
+  • "สถิติเซิร์ฟ" / "server stats" → server_stats()
 
 == INTERNET / WEB TOOLS ==
 กฎหลัก — เลือก tool ให้ถูก:
