@@ -9,7 +9,7 @@
 // (this bot runs in a 6-hour GitHub Actions container). Keep durations short
 // enough to fit a single run.
 
-const TYPES = new Set(["timer", "alarm", "sleep_disconnect", "auto_unmute", "wake_alarm"]);
+const TYPES = new Set(["timer", "alarm", "sleep_disconnect", "group_sleep", "auto_unmute", "wake_alarm"]);
 
 let _seq = 1;
 function nextId() {
