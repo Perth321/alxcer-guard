@@ -602,15 +602,32 @@ const TOOLS = [
     function: {
       name: "set_self_disconnect",
       description:
-        "Sleep mode: schedule the bot to disconnect a user from voice after N seconds. Posts an embed with a Cancel button so they can wake up before the timer hits. Use for 'ปลุกตัวเอง 10 นาทีแล้วเตะออก', 'sleep mode 30 นาที', 'ดีดกูออกใน 5 นาที'.",
+        "Sleep mode สำหรับคนเดียว: ตั้งตัวจับเวลาแล้วบอทจะเตะ user คนนั้นออกจากห้องเสียงเมื่อครบเวลา พร้อม embed countdown + ปุ่มยกเลิก ใช้สำหรับ 'sleep mode 30 นาที', 'เตะกูออกใน 2 ชั่วโมง', 'ดีดออกใน 5 นาที', 'ปลุกตัวเองอีก 1 ชม'",
       parameters: {
         type: "object",
         properties: {
-          seconds: { type: "integer" },
-          minutes: { type: "integer" },
-          hours: { type: "integer" },
-          user_id: { type: "string", description: "User to disconnect. Defaults to the requesting admin." },
-          label: { type: "string" },
+          seconds: { type: "integer", description: "จำนวนวินาที" },
+          minutes: { type: "integer", description: "จำนวนนาที" },
+          hours:   { type: "integer", description: "จำนวนชั่วโมง (ใส่ได้พร้อมกับ minutes เช่น hours:1 minutes:30 = 1.5 ชม)" },
+          user_id: { type: "string",  description: "User ที่จะเตะออก — ถ้าไม่ระบุจะใช้คนที่สั่ง" },
+          label:   { type: "string",  description: "ป้ายกำกับ เช่น 'นอนละ'" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "set_group_sleep",
+      description:
+        "Group sleep mode: ตั้งตัวจับเวลาแล้วบอทจะเตะ **ทุกคน** ออกจากทุกห้องเสียงในเซิร์ฟพร้อมกัน ใช้เมื่อต้องการปิดเซิร์ฟหลัง N ชั่วโมง/นาที ใช้สำหรับ 'sleep mode ทุกคน 2 ชม', 'เตะทุกคนออกอีก 1 ชั่วโมง', 'ปิดเซิร์ฟในอีก 30 นาที', 'group sleep 2 ชั่วโมง'",
+      parameters: {
+        type: "object",
+        properties: {
+          seconds: { type: "integer", description: "จำนวนวินาที" },
+          minutes: { type: "integer", description: "จำนวนนาที" },
+          hours:   { type: "integer", description: "จำนวนชั่วโมง" },
+          label:   { type: "string",  description: "ป้ายกำกับ เช่น 'ปิดเซิร์ฟ'" },
         },
       },
     },
@@ -2673,6 +2690,45 @@ async function execTool(name, args, ctx) {
       } catch (err) { return { error: err?.message || "server_stats failed" }; }
     }
 
+
+    // ─── Group sleep mode ─────────────────────────────────────────────────────
+    case "set_group_sleep": {
+      let parsed;
+      try {
+        parsed = parseDurationToFireAt({ seconds: args.seconds, minutes: args.minutes, hours: args.hours });
+      } catch (e) {
+        return { error: e.message };
+      }
+      // Snapshot who is currently in voice for the summary
+      let voiceCount = 0;
+      try {
+        const channels = await ctx.guild.channels.fetch();
+        for (const ch of channels.values()) {
+          if (ch?.type === ChannelType.GuildVoice) voiceCount += ch.members?.size || 0;
+        }
+      } catch {}
+      const t = createTimer({
+        type: "group_sleep",
+        fireAt: parsed.fireAt,
+        label: args.label || "Group sleep mode",
+        guildId: ctx.guild.id,
+        channelId: ctx.channel?.id || null,
+        userId: ctx.authorId || null,
+        mentionUserId: ctx.authorId || null,
+        ownerId: ctx.authorId || null,
+        payload: { voiceSnapshotCount: voiceCount },
+      });
+      return {
+        ok: true,
+        timer_id: t.id,
+        in: formatDurationShort(parsed.totalSeconds),
+        fires_at_bangkok: formatClockBangkok(t.fireAt),
+        label: t.label,
+        voice_members_now: voiceCount,
+        note: "จะเตะทุกคนออกจากทุกห้องเสียงเมื่อครบเวลา — มีปุ่มยกเลิก",
+      };
+    }
+
     default:
       return { error: `unknown tool: ${name}` };
   }
@@ -2764,7 +2820,8 @@ Timers / alarms / sleep mode (NEW — IMPORTANT):
   • "ตั้งเวลา N นาที" / "เตือนใน N วินาที" / "นับถอยหลัง N" / "remind me in N min" → set_timer({minutes/seconds/hours, label})
   • "ปลุก ตี 7" / "ปลุก 06:30" / "alarm at 7am" / "ตั้งนาฬิกาปลุก 06:30:15"     → set_alarm({hour, minute, second?})
   • "ปลุกแบบมีเพลง" / "ปลุกพร้อมเพลง" / "wake me up with music"                    → set_alarm({..., play_wake_music: true})
-  • "sleep mode N นาที" / "เตะกูออกใน N นาที" / "ดีดออกใน N วินาที" / "ปลุกตัวเอง" → set_self_disconnect({minutes/seconds, user_id?})
+  • "sleep mode N นาที/ชม" / "เตะกูออกใน N" / "ดีดออกใน N" / "ปลุกตัวเอง N ชม"        → set_self_disconnect({hours?, minutes?, seconds?, user_id?})
+  • "sleep mode ทุกคน N ชม" / "เตะทุกคนออกใน N ชม" / "ปิดเซิร์ฟใน N" / "group sleep N" → set_group_sleep({hours?, minutes?, seconds?, label?})
   • "ปิดไมค์ A 30 วินาที" / "mute A 5 นาที" / "ปิดเสียง A สัก 1 นาที"               → mute_user_for({user_id, seconds/minutes})
   • "ดูตัวจับเวลาที่ตั้งไว้" / "list timers" / "มีอันไหนตั้งอยู่บ้าง"                    → list_timers()
   • "ยกเลิกตัวจับเวลา <id>" / "ลบ alarm <id>" / "cancel timer <id>"               → cancel_timer({timer_id})
@@ -2857,6 +2914,18 @@ Admin: "ปลุก 7 โมงเช้า"   (no music asked)
 Admin: "sleep mode 30 นาที — ขี้เกียจกด leave เอง"
 → tool: set_self_disconnect({minutes: 30})
 → reply: "ได้เลยครับ — อีก 30 นาทีผมเตะออกให้ ถ้าเปลี่ยนใจกด Cancel ที่ embed ได้"
+
+Admin: "เตะกูออกอีก 1 ชั่วโมงครึ่ง"
+→ tool: set_self_disconnect({hours: 1, minutes: 30})
+→ reply: "ตั้งแล้วครับ — อีก 1ชม 30น จะเตะออกให้"
+
+Admin: "group sleep ทุกคน 2 ชั่วโมง"
+→ tool: set_group_sleep({hours: 2, label: "Group sleep"})
+→ reply: "ตั้งแล้วครับ — อีก 2ชม บอทจะเตะทุกคนออกจากทุกห้องเสียงพร้อมกัน มีปุ่มยกเลิกที่ embed"
+
+Admin: "เตะทุกคนออกอีก 30 นาที ปิดเซิร์ฟแล้ว"
+→ tool: set_group_sleep({minutes: 30, label: "ปิดเซิร์ฟ"})
+→ reply: "ตั้ง group sleep 30 นาทีแล้วครับ — จะเตะทุกคนออกพร้อมกัน กด Cancel ที่ embed ถ้าเปลี่ยนใจ"
 
 Admin: "ปิดไมค์ @Alex 1 นาที"
 [mentioned users]: Alex (id: 1031...)
