@@ -78,7 +78,19 @@ export function findProfanity(text, extraWords = []) {
   }
   for (const w of extraWords) {
     const wn = normalizeText(w);
-    if (wn && norm.includes(wn)) return w;
+    if (!wn) continue;
+    // Very short custom banned words (<=3 chars, e.g. "หี"): require word-boundary
+    // to prevent ASR mishearing or Thai syllable overlap from causing false bans.
+    if (wn.length <= 3) {
+      if (norm === wn ||
+          norm.startsWith(wn + " ") ||
+          norm.endsWith(" " + wn) ||
+          norm.includes(" " + wn + " ")) {
+        return w;
+      }
+    } else if (norm.includes(wn)) {
+      return w;
+    }
   }
   // 2) Token exact match (catches leetspeak after normalize)
   const tokens = tokenize(text);
