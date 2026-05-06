@@ -1855,7 +1855,20 @@ function findBannedWord(text) {
   const lower = text.toLowerCase();
   for (const word of config.bannedWords) {
     if (!word) continue;
-    if (lower.includes(word.toLowerCase())) return word;
+    const wl = word.toLowerCase();
+    // Very short words (<=3 chars, e.g. "หี"): require word-boundary so ASR
+    // mishearing "หมี" -> "หี" or similar Thai syllables don't false-ban.
+    // Longer phrases ("ดูหี", "ขอดูหี"): substring is fine — distinctive enough.
+    if (wl.length <= 3) {
+      if (lower === wl ||
+          lower.startsWith(wl + " ") ||
+          lower.endsWith(" " + wl) ||
+          lower.includes(" " + wl + " ")) {
+        return word;
+      }
+    } else if (lower.includes(wl)) {
+      return word;
+    }
   }
   return null;
 }
