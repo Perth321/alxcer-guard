@@ -1467,13 +1467,12 @@ async function execTool(name, args, ctx) {
       try {
         const result = await generateVisionReply({
           imageUrls: [imgUrl],
-          question: question || "รูปนี้คืออะไร? อธิบายรายละเอียดที่เห็น",
-          history: question ? [{ role: "user", content: question }] : [],
+          userText: question || "รูปนี้คืออะไร? อธิบายรายละเอียดที่เห็น",
         });
         return {
           ok: true,
-          reply: result?.reply || result?.content || "วิเคราะห์ภาพแล้วครับ",
-          description: result?.reply || "",
+          reply: result?.content || "วิเคราะห์ภาพแล้วครับ",
+          description: result?.content || "",
         };
       } catch (err) {
         return { error: err?.message || "analyze_image failed" };
