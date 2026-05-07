@@ -2922,7 +2922,7 @@ client.on(Events.MessageCreate, async (msg) => {
           await handleVisionReply(msg, triggered, media);
         } catch (err) {
           console.warn("[vision] handler crashed:", err?.message?.slice(0, 200));
-          await handleAgentOrChatReply(msg, triggered);
+          await handleAgentOrChatReply(msg, triggered, media);
         }
         return;
       }
