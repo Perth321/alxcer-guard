@@ -7,8 +7,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 1,
-        "lastAt": 1778158739624,
+        "count": 2,
+        "lastAt": 1778158952688,
         "history": [
           {
             "at": 1778158739624,
@@ -16,6 +16,15 @@
             "matched": "เยส",
             "reason": "มีคำหยาบที่สื่อถึงการล่วงละเมิดทางเพศ",
             "excerpt": "โดนเยสมา ไง",
+            "action": "timeout_failed",
+            "source": "ai"
+          },
+          {
+            "at": 1778158952688,
+            "severity": 7,
+            "matched": "ฟรีคุวย",
+            "reason": "มีคำหยาบคายที่หยาบคายมาก",
+            "excerpt": "ไม่ต้องทำหรอก ให้ ฟรีคุวยพี่ใหญ่",
             "action": "timeout_failed",
             "source": "ai"
           }
