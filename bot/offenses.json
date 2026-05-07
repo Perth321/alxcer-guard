@@ -5,7 +5,22 @@
       "lastOffenseAt": 1778091409843,
       "muteUntil": 0,
       "lastWord": "ขอดูหี",
-      "lastSource": "voice"
+      "lastSource": "voice",
+      "chat": {
+        "count": 1,
+        "lastAt": 1778158739624,
+        "history": [
+          {
+            "at": 1778158739624,
+            "severity": 7,
+            "matched": "เยส",
+            "reason": "มีคำหยาบที่สื่อถึงการล่วงละเมิดทางเพศ",
+            "excerpt": "โดนเยสมา ไง",
+            "action": "timeout_failed",
+            "source": "ai"
+          }
+        ]
+      }
     },
     "946756535936233542": {
       "count": 14,
