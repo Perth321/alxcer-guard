@@ -36,16 +36,11 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install system dependencies (ffmpeg + Chrome)
+      - name: Install system dependencies (ffmpeg only)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ffmpeg \
-            google-chrome-stable \
-            libxss1 libxtst6 libxrandr2 libatk-bridge2.0-0 \
-            libdrm2 libgbm1 libasound2t64 libpangocairo-1.0-0
+          sudo apt-get install -y --no-install-recommends ffmpeg
           ffmpeg -version | head -n 1
-          google-chrome-stable --version
 
       - name: Cache bot dependencies
         id: cache-deps
