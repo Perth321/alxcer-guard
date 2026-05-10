@@ -4,6 +4,10 @@ Discord voice activity guard bot. ตรวจจับสมาชิกที�
 
 **บอทรันบน GitHub Actions** ทั้งหมด ไม่ต้องมี server ตลอดเวลา — มี cron รันใหม่ทุก 6 ชั่วโมง
 
+## ChatGPT integration test
+
+hello
+
 ## How it works
 
 1. เข้าห้องเสียงที่มีคนอยู่มากที่สุดในเซิร์ฟเวอร์
