@@ -88,7 +88,7 @@
       "lastSource": "chat",
       "chat": {
         "count": 2,
-        "lastAt": 1778595038755,
+        "lastAt": 1778612351305,
         "history": [
           {
             "at": 1778569408652,
@@ -100,11 +100,11 @@
             "source": "local"
           },
           {
-            "at": 1778595038754,
+            "at": 1778612351305,
             "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
+            "matched": "fuck",
+            "reason": "ใช้คำต้องห้าม: \"fuck\"",
+            "excerpt": "THIS IS SO FUCK UP LMAFO",
             "action": "timeout_failed",
             "source": "local"
           }
