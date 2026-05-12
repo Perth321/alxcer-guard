@@ -87,8 +87,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "chat",
       "chat": {
-        "count": 2,
-        "lastAt": 1778612351305,
+        "count": 3,
+        "lastAt": 1778612363504,
         "history": [
           {
             "at": 1778569408652,
@@ -105,6 +105,15 @@
             "matched": "fuck",
             "reason": "ใช้คำต้องห้าม: \"fuck\"",
             "excerpt": "THIS IS SO FUCK UP LMAFO",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1778612363503,
+            "severity": 7,
+            "matched": "fuck",
+            "reason": "ใช้คำต้องห้าม: \"fuck\"",
+            "excerpt": "this is so fuck up",
             "action": "timeout_failed",
             "source": "local"
           }
