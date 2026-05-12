@@ -81,11 +81,26 @@
       "lastSource": "voice"
     },
     "1395239010720415898": {
-      "count": 2,
-      "lastOffenseAt": 1777996681819,
-      "muteUntil": 0,
-      "lastWord": "หี",
-      "lastSource": "voice"
+      "count": 3,
+      "lastOffenseAt": 1778569407778,
+      "muteUntil": 1778573007778,
+      "lastWord": "ขอดูหี",
+      "lastSource": "chat",
+      "chat": {
+        "count": 1,
+        "lastAt": 1778569408652,
+        "history": [
+          {
+            "at": 1778569408652,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "ขอดูหีพี่เจาสิ",
+            "action": "timeout_failed",
+            "source": "local"
+          }
+        ]
+      }
     },
     "1464586313444495503": {
       "count": 1,
