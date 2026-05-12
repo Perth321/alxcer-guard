@@ -87,8 +87,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "chat",
       "chat": {
-        "count": 1,
-        "lastAt": 1778569408652,
+        "count": 2,
+        "lastAt": 1778595038755,
         "history": [
           {
             "at": 1778569408652,
@@ -96,6 +96,15 @@
             "matched": "หี",
             "reason": "ใช้คำต้องห้าม: \"หี\"",
             "excerpt": "ขอดูหีพี่เจาสิ",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1778595038754,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควย",
             "action": "timeout_failed",
             "source": "local"
           }
