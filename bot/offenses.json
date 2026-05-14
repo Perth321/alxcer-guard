@@ -56,8 +56,8 @@
       "lastWord": "หี",
       "lastSource": "voice",
       "chat": {
-        "count": 1,
-        "lastAt": 1778765142480,
+        "count": 2,
+        "lastAt": 1778765852802,
         "history": [
           {
             "at": 1778765142480,
@@ -67,6 +67,15 @@
             "excerpt": "ฟังเรื่องหี",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1778765852802,
+            "severity": 8,
+            "matched": "กะเทย",
+            "reason": "ใช้คำหยาบคายต่อคน",
+            "excerpt": "เล็กเป็นกะเทยใช่ไหม",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
