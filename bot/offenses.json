@@ -54,7 +54,22 @@
       "lastOffenseAt": 1777729049857,
       "muteUntil": 0,
       "lastWord": "หี",
-      "lastSource": "voice"
+      "lastSource": "voice",
+      "chat": {
+        "count": 1,
+        "lastAt": 1778765142480,
+        "history": [
+          {
+            "at": 1778765142480,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "ฟังเรื่องหี",
+            "action": "timeout_failed",
+            "source": "local"
+          }
+        ]
+      }
     },
     "967120879689551873": {
       "count": 19,
