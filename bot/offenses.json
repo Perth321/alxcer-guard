@@ -7,8 +7,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 2,
-        "lastAt": 1778158952688,
+        "count": 3,
+        "lastAt": 1778757368096,
         "history": [
           {
             "at": 1778158739624,
@@ -27,6 +27,15 @@
             "excerpt": "ไม่ต้องทำหรอก ให้ ฟรีคุวยพี่ใหญ่",
             "action": "timeout_failed",
             "source": "ai"
+          },
+          {
+            "at": 1778757368096,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "ไอเหี้ยพึ่งอ่าน556655",
+            "action": "timeout_failed",
+            "source": "local"
           }
         ]
       }
