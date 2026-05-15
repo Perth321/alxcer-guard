@@ -90,6 +90,17 @@ export async function commitOffenses(offensesObject, message = "chore: update of
   );
 }
 
+export async function commitNotifications(
+  data,
+  message = "chore: update notifications via /notify",
+) {
+  await commitFile(
+    "bot/notifications.json",
+    JSON.stringify(data, null, 2) + "\n",
+    message,
+  );
+}
+
 export async function commitTranscripts(
   transcriptsObject,
   message = "chore: persist voice transcript history",

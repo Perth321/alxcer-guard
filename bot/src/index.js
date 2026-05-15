@@ -46,6 +46,26 @@ import {
   isPrankCommand,
 } from "./commands.js";
 import {
+  buildQuizFromAttachment,
+  getActiveQuiz,
+  setActiveQuiz,
+  resetQuiz,
+  getOrCreateProgress,
+  getProgress,
+  recordAnswer,
+  jumpTo,
+  submitFinal,
+  resetUserProgress,
+  listTakers,
+  renderQuestion,
+  renderResult,
+} from "./study.js";
+import {
+  handleNotifyCommand,
+  handleNotifyComponent,
+  tickScheduler as tickNotifyScheduler,
+} from "./notifications.js";
+import {
   addTranscript,
   getRecent as getRecentTranscripts,
   getStats as getTranscriptStats,
@@ -2112,6 +2132,16 @@ client.once(Events.ClientReady, async (c) => {
       }
     }, 60 * 60 * 1000);
 
+    // Scheduled notifications tick — every 30s. Items fire once per day at
+    // their configured Asia/Bangkok time.
+    setInterval(() => {
+      tickNotifyScheduler({
+        client,
+        guildId: config.guildId,
+        defaultChannelId: config.notifyChannelId,
+      }).catch((err) => console.error("[notify] tick error", err?.message));
+    }, 30_000);
+
     setInterval(() => {
       if (!currentChannelId) return;
       const lines = [];
@@ -2941,6 +2971,196 @@ client.on(Events.MessageCreate, async (msg) => {
   }
 });
 
+// ─── /study command + button handlers ────────────────────────────────────────
+
+async function announceStudyAvailable(guildId, quiz, byUserId) {
+  if (!config.notifyChannelId) return;
+  try {
+    const guild = await client.guilds.fetch(guildId);
+    const ch = await guild.channels.fetch(config.notifyChannelId).catch(() => null);
+    if (!ch?.isTextBased?.()) return;
+    const embed = new EmbedBuilder()
+      .setColor(0x6366f1)
+      .setTitle("📚 มีข้อสอบใหม่!")
+      .setDescription(
+        `<@${byUserId}> ได้อัพไฟล์ **${quiz.fileName}** และให้บอทสร้างข้อสอบ ${quiz.questions.length} ข้อแล้ว\n\n` +
+          `ใครอยากทำให้พิมพ์ \`/study start\` ได้เลย — ทุกคนทำชุดเดียวกัน คะแนนของแต่ละคนเป็นของส่วนตัว`,
+      );
+    await ch.send({ embeds: [embed] });
+  } catch (err) {
+    console.error("[study] announce failed", err?.message);
+  }
+}
+
+async function handleStudyCommand(interaction) {
+  const sub = interaction.options.getSubcommand();
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({ content: "ใช้ในเซิร์ฟเวอร์เท่านั้น", ephemeral: true });
+    return;
+  }
+
+  if (sub === "upload") {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
+      return;
+    }
+    const att = interaction.options.getAttachment("file", true);
+    await interaction.deferReply({ ephemeral: true });
+    try {
+      const quiz = await buildQuizFromAttachment(att, { createdBy: interaction.user.id });
+      setActiveQuiz(guildId, quiz);
+      await interaction.editReply({
+        content: `✅ สร้างข้อสอบ **${quiz.questions.length} ข้อ** จากไฟล์ \`${quiz.fileName}\` แล้ว — ทุกคนพิมพ์ \`/study start\` เพื่อเริ่มทำได้เลย`,
+      });
+      announceStudyAvailable(guildId, quiz, interaction.user.id).catch(() => {});
+    } catch (err) {
+      console.error("[study:upload] error", err?.message);
+      await interaction.editReply({ content: `❌ สร้างข้อสอบไม่สำเร็จ: ${err?.message ?? "unknown"}` });
+    }
+    return;
+  }
+
+  if (sub === "start") {
+    const quiz = getActiveQuiz(guildId);
+    if (!quiz) {
+      await interaction.reply({
+        content: "ยังไม่มีข้อสอบ — แอดมินยังไม่ได้อัพไฟล์ (ใช้ `/study upload`)",
+        ephemeral: true,
+      });
+      return;
+    }
+    const progress = getOrCreateProgress(guildId, interaction.user.id, quiz.id);
+    if (progress.submitted) {
+      await interaction.reply({
+        content: "คุณส่งคำตอบไปแล้ว — รอแอดมิน reset หรืออัพข้อสอบใหม่ ถ้าอยากทำใหม่ให้กดปุ่ม 🔁 ทำใหม่ ในผลคะแนน",
+        ephemeral: true,
+      });
+      return;
+    }
+    await interaction.reply({ ...renderQuestion(quiz, progress), ephemeral: true });
+    return;
+  }
+
+  if (sub === "status") {
+    const quiz = getActiveQuiz(guildId);
+    if (!quiz) {
+      await interaction.reply({ content: "ยังไม่มีข้อสอบ", ephemeral: true });
+      return;
+    }
+    const takers = listTakers(guildId);
+    const submitted = takers.filter((t) => t.submitted);
+    const inProgress = takers.filter((t) => !t.submitted);
+    const lines = [
+      `📚 ไฟล์: \`${quiz.fileName}\``,
+      `จำนวนข้อ: **${quiz.questions.length}**`,
+      `สร้างโดย: <@${quiz.createdBy}>`,
+      "",
+      `**ส่งแล้ว (${submitted.length} คน):**`,
+      submitted.length
+        ? submitted
+            .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+            .map((t) => `• <@${t.userId}> — ${t.score}/${t.outOf}`)
+            .join("\n")
+        : "_ยังไม่มี_",
+      "",
+      `**กำลังทำ (${inProgress.length} คน):**`,
+      inProgress.length
+        ? inProgress.map((t) => `• <@${t.userId}> — ตอบ ${t.answered}/${quiz.questions.length}`).join("\n")
+        : "_ยังไม่มี_",
+    ];
+    await interaction.reply({
+      content: lines.join("\n").slice(0, 1900),
+      ephemeral: true,
+      allowedMentions: { parse: [] },
+    });
+    return;
+  }
+
+  if (sub === "reset") {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
+      return;
+    }
+    const had = !!getActiveQuiz(guildId);
+    resetQuiz(guildId);
+    await interaction.reply({
+      content: had ? "🗑️ ลบข้อสอบเรียบร้อย" : "ไม่มีข้อสอบให้ลบอยู่แล้ว",
+      ephemeral: true,
+    });
+    return;
+  }
+}
+
+async function handleStudyButton(interaction) {
+  const guildId = interaction.guildId;
+  const userId = interaction.user.id;
+  const cid = interaction.customId;
+  const quiz = guildId ? getActiveQuiz(guildId) : null;
+  if (!quiz) {
+    await interaction.reply({ content: "ข้อสอบนี้หมดอายุแล้ว (อาจถูก reset หรือบอทรีสตาร์ท)", ephemeral: true });
+    return true;
+  }
+  const parts = cid.split(":");
+  const action = parts[1];
+  let progress = getProgress(guildId, userId);
+
+  try {
+    if (action === "retry") {
+      // Reset only this user's progress — don't disturb others taking the quiz
+      resetUserProgress(guildId, userId);
+      const fresh = getOrCreateProgress(guildId, userId, quiz.id);
+      await interaction.update(renderQuestion(quiz, fresh));
+      return true;
+    }
+
+    if (!progress) progress = getOrCreateProgress(guildId, userId, quiz.id);
+
+    if (progress.submitted) {
+      await interaction.reply({ content: "คุณส่งคำตอบไปแล้ว — กดปุ่ม 🔁 ทำใหม่ ในผลคะแนนถ้าอยากเริ่มใหม่", ephemeral: true });
+      return true;
+    }
+
+    if (action === "ans") {
+      const qIdx = parseInt(parts[2], 10);
+      const choice = parseInt(parts[3], 10);
+      if (!Number.isInteger(qIdx) || !Number.isInteger(choice)) {
+        await interaction.deferUpdate();
+        return true;
+      }
+      recordAnswer(guildId, userId, qIdx, choice, quiz.questions.length);
+      const updated = getProgress(guildId, userId);
+      await interaction.update(renderQuestion(quiz, updated));
+      return true;
+    }
+
+    if (action === "nav") {
+      const qIdx = parseInt(parts[2], 10);
+      if (Number.isInteger(qIdx)) jumpTo(guildId, userId, qIdx);
+      const updated = getProgress(guildId, userId);
+      await interaction.update(renderQuestion(quiz, updated));
+      return true;
+    }
+
+    if (action === "submit") {
+      const final = submitFinal(guildId, userId);
+      if (!final) {
+        await interaction.reply({ content: "ส่งคำตอบไม่สำเร็จ ลองใหม่", ephemeral: true });
+        return true;
+      }
+      await interaction.update(renderResult(quiz, final));
+      return true;
+    }
+  } catch (err) {
+    console.error("[study] button error", err?.message);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: `❌ ${err?.message ?? "unknown"}`, ephemeral: true }).catch(() => {});
+    }
+    return true;
+  }
+  return false;
+}
+
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) {
@@ -2950,6 +3170,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.commandName === "debug") {
         await handleDebugCommand(interaction, runtime);
+        return;
+      }
+      if (interaction.commandName === "notify") {
+        await handleNotifyCommand(interaction);
+        return;
+      }
+      if (interaction.commandName === "study") {
+        await handleStudyCommand(interaction);
         return;
       }
       if (isPrankCommand(interaction.commandName)) {
@@ -2965,6 +3193,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
     ) {
       const handled = await handleSettingComponent(interaction, runtime);
       if (handled) return;
+    }
+
+    if (
+      interaction.isButton() ||
+      interaction.isAnySelectMenu?.() ||
+      interaction.isModalSubmit()
+    ) {
+      const handledNotify = await handleNotifyComponent(interaction);
+      if (handledNotify) return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith("study:")) {
+      const handledStudy = await handleStudyButton(interaction);
+      if (handledStudy) return;
     }
 
     if (

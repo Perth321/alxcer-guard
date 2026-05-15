@@ -30,6 +30,39 @@ export const DEBUG_COMMAND = new SlashCommandBuilder()
   .setDMPermission(false)
   .toJSON();
 
+export const STUDY_COMMAND = new SlashCommandBuilder()
+  .setName("study")
+  .setDescription("📚 ฟังก์ชั่นเรียนหนังสือ — อัพไฟล์เพื่อให้บอทออกข้อสอบ")
+  .addSubcommand((s) =>
+    s
+      .setName("upload")
+      .setDescription("(แอดมิน) อัพโหลดไฟล์เพื่อสร้างข้อสอบใหม่")
+      .addAttachmentOption((o) =>
+        o
+          .setName("file")
+          .setDescription("ไฟล์ .docx / .xlsx / .pptx / .txt")
+          .setRequired(true),
+      ),
+  )
+  .addSubcommand((s) =>
+    s.setName("start").setDescription("เริ่มทำข้อสอบที่อัพไว้"),
+  )
+  .addSubcommand((s) =>
+    s.setName("status").setDescription("ดูสถานะข้อสอบปัจจุบัน + คะแนนของแต่ละคน"),
+  )
+  .addSubcommand((s) =>
+    s.setName("reset").setDescription("(แอดมิน) ลบข้อสอบปัจจุบัน"),
+  )
+  .setDMPermission(false)
+  .toJSON();
+
+export const NOTIFY_COMMAND = new SlashCommandBuilder()
+  .setName("notify")
+  .setDescription("⏰ ตั้งค่าการแจ้งเตือนตามเวลา + เลือกยศที่จะ ping")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
+  .setDMPermission(false)
+  .toJSON();
+
 
 export const PRANK_COMMAND_DEFS = [
   { name: "rung", emoji: "🔔", desc: "เล่นเสียงกริ่งในห้องเสียง (เฉพาะแอดมิน)" },
@@ -50,8 +83,8 @@ export async function registerCommands(client) {
   const rest = new REST({ version: "10" }).setToken(client.token);
   const appId = client.application?.id ?? client.user.id;
   const guildId = client.config.guildId;
-  const body = [SETTING_COMMAND, DEBUG_COMMAND, ...PRANK_COMMANDS];
-  const list = ["setting", "debug", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
+  const body = [SETTING_COMMAND, DEBUG_COMMAND, STUDY_COMMAND, NOTIFY_COMMAND, ...PRANK_COMMANDS];
+  const list = ["setting", "debug", "study", "notify", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
     .map((n) => "/" + n)
     .join(" ");
 
