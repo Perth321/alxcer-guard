@@ -21,6 +21,12 @@ const DEFAULTS = {
   // Empty = fall back to a soft synthesized chime + repeated TTS.
   wakeMusicUrl: "",
   wakeTtsText: "ขออนุญาตปลุกนะครับ ตื่นได้แล้วเด้อ",
+  // Classroom mode
+  studentRoleId: "",
+  teacherRoleId: "",
+  classDurationMinutes: 60,
+  classEndTtsText:
+    "ตอนนี้เวลานี้ หมดเวลาเรียนของวันนี้แล้ว ขอให้นักเรียนทุกท่าน และอาจารย์ทุกท่านหยุดทำการสอน และขอให้ทุกท่านเดินทางโดยสวัสดิภาพ",
 };
 
 export function loadConfig() {
@@ -51,6 +57,13 @@ export function normalize(cfg) {
     wakeTtsText: typeof cfg.wakeTtsText === "string" && cfg.wakeTtsText.trim()
       ? cfg.wakeTtsText.trim()
       : DEFAULTS.wakeTtsText,
+    studentRoleId: cfg.studentRoleId ? String(cfg.studentRoleId) : "",
+    teacherRoleId: cfg.teacherRoleId ? String(cfg.teacherRoleId) : "",
+    classDurationMinutes: clampInt(cfg.classDurationMinutes, 5, 600, 60),
+    classEndTtsText:
+      typeof cfg.classEndTtsText === "string" && cfg.classEndTtsText.trim()
+        ? cfg.classEndTtsText.trim()
+        : DEFAULTS.classEndTtsText,
   };
 }
 

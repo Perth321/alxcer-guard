@@ -144,6 +144,8 @@ const QUIZ_PROMPT = `คุณคือผู้ออกข้อสอบท�
 - คำถามและคำตอบเป็นภาษาไทย (เว้นคำเทคนิคที่เป็นภาษาอังกฤษได้)
 - คำถามต้องวัดความเข้าใจ ไม่ใช่ลอกประโยคเดิม
 - ครอบคลุมเนื้อหาหลายส่วนอย่างสมดุล
+- แต่ละข้อต้องระบุ "topic" สั้น ๆ (1-3 คำ) ของหมวดที่ข้อนั้นวัด เช่น
+  "ไวยากรณ์", "การทักทาย", "คำศัพท์", "การอ่านจับใจความ", "ประวัติศาสตร์" เป็นต้น
 
 ตอบกลับเป็น JSON เท่านั้น (ห้ามมี markdown fence) ตามรูปแบบ:
 {
@@ -152,6 +154,7 @@ const QUIZ_PROMPT = `คุณคือผู้ออกข้อสอบท�
       "q": "คำถาม...",
       "choices": ["ตัวเลือก A", "ตัวเลือก B", "ตัวเลือก C", "ตัวเลือก D"],
       "answer": 0,
+      "topic": "หมวดสั้น ๆ",
       "explain": "เหตุผลสั้น ๆ"
     }
   ]
@@ -187,6 +190,9 @@ async function generateQuestions(sourceText) {
       q: q.q.trim().slice(0, 280),
       choices: q.choices.map((c) => String(c).trim().slice(0, 140)),
       answer: ans,
+      topic: typeof q.topic === "string" && q.topic.trim()
+        ? q.topic.trim().slice(0, 40)
+        : "ทั่วไป",
       explain: typeof q.explain === "string" ? q.explain.trim().slice(0, 240) : "",
     });
     if (cleaned.length >= TARGET_QUESTIONS) break;
@@ -265,6 +271,152 @@ export function submitFinal(guildId, userId) {
   p.outOf = quiz.questions.length;
   p.submittedAt = Date.now();
   return p;
+}
+
+// ─── Analytics ───────────────────────────────────────────────────────────────
+
+// Aggregate everyone's submitted answers and call AI to summarize the
+// recurring weak topics. Returns { perUser:[], topicTotals:{}, aiSummary }.
+export async function analyzeWeaknesses(guildId) {
+  const quiz = activeQuiz.get(guildId);
+  if (!quiz) throw new Error("ยังไม่มีข้อสอบ");
+  const submitters = [];
+  for (const [k, p] of userProgress) {
+    if (!k.startsWith(guildId + ":")) continue;
+    if (!p.submitted) continue;
+    submitters.push({ userId: k.split(":")[1], progress: p });
+  }
+  if (!submitters.length) {
+    throw new Error("ยังไม่มีใครส่งคำตอบ — รอนักเรียนทำข้อสอบก่อน");
+  }
+
+  const topicTotals = {}; // topic -> {wrong, total}
+  const perUser = []; // {userId, score, outOf, wrongTopics:[], wrongDetails:[]}
+
+  for (const { userId, progress } of submitters) {
+    const wrongTopics = {};
+    const wrongDetails = [];
+    for (let i = 0; i < quiz.questions.length; i++) {
+      const q = quiz.questions[i];
+      const t = q.topic || "ทั่วไป";
+      if (!topicTotals[t]) topicTotals[t] = { wrong: 0, total: 0 };
+      topicTotals[t].total++;
+      if (progress.answers[i] !== q.answer) {
+        topicTotals[t].wrong++;
+        wrongTopics[t] = (wrongTopics[t] || 0) + 1;
+        wrongDetails.push({
+          idx: i,
+          topic: t,
+          q: q.q,
+          picked: progress.answers[i],
+          correct: q.answer,
+        });
+      }
+    }
+    perUser.push({
+      userId,
+      score: progress.score ?? 0,
+      outOf: progress.outOf ?? quiz.questions.length,
+      wrongTopics,
+      wrongDetails,
+    });
+  }
+
+  // Top 5 problematic topics by wrong-rate
+  const topicRanking = Object.entries(topicTotals)
+    .map(([t, v]) => ({
+      topic: t,
+      wrong: v.wrong,
+      total: v.total,
+      rate: v.total ? v.wrong / v.total : 0,
+    }))
+    .filter((x) => x.wrong > 0)
+    .sort((a, b) => b.rate - a.rate || b.wrong - a.wrong)
+    .slice(0, 5);
+
+  // Ask AI to give a teaching-oriented summary in Thai
+  let aiSummary = "";
+  try {
+    const facts = topicRanking
+      .map(
+        (t) =>
+          `- ${t.topic}: ผิด ${t.wrong} จาก ${t.total} ครั้ง (${Math.round(t.rate * 100)}%)`,
+      )
+      .join("\n");
+    const sample = perUser
+      .slice(0, 8)
+      .flatMap((u) => u.wrongDetails.slice(0, 2).map((d) => `- (${d.topic}) ${d.q}`))
+      .slice(0, 12)
+      .join("\n");
+    const result = await chat(
+      [
+        {
+          role: "user",
+          content:
+            `ฉันคือครู กำลังดูผลข้อสอบของนักเรียน ${submitters.length} คน\n` +
+            `ไฟล์ข้อสอบ: ${quiz.fileName}\n\n` +
+            `สถิติหมวดที่นักเรียนผิดบ่อย:\n${facts}\n\n` +
+            `ตัวอย่างคำถามที่ผิด:\n${sample}\n\n` +
+            `จงเขียนสรุปเป็นภาษาไทย 4-6 บรรทัด:\n` +
+            `1) บอกว่าทั้งห้องอ่อนเรื่องอะไรมากที่สุด\n` +
+            `2) แนะนำว่าครูควรเน้นทบทวนเรื่องใดเป็นพิเศษ\n` +
+            `3) เสนอกิจกรรม/วิธีสอนสั้น ๆ ที่ช่วยแก้จุดอ่อนนั้น\n` +
+            `ห้ามใส่ markdown fence ตอบเป็นข้อความธรรมดา`,
+        },
+      ],
+      { max_tokens: 600, temperature: 0.5 },
+    );
+    aiSummary = (result?.content || "").trim();
+  } catch (err) {
+    aiSummary = `(สร้างสรุปด้วย AI ไม่สำเร็จ: ${err?.message ?? "unknown"})`;
+  }
+
+  return { quiz, submitters: submitters.length, perUser, topicRanking, aiSummary };
+}
+
+export function buildReportEmbeds(report, { teacherRoleId } = {}) {
+  const { quiz, submitters, perUser, topicRanking, aiSummary } = report;
+  const head = new EmbedBuilder()
+    .setColor(0x8b5cf6)
+    .setTitle(`📑 รายงานผลข้อสอบสำหรับครู — ${quiz.fileName}`)
+    .setDescription(
+      `จำนวนคนที่ส่งคำตอบ: **${submitters} คน**\n` +
+        `จำนวนข้อ: **${quiz.questions.length}**\n\n` +
+        `**🔥 หมวดที่นักเรียนผิดบ่อยที่สุด**\n` +
+        (topicRanking.length
+          ? topicRanking
+              .map(
+                (t, i) =>
+                  `${i + 1}. **${t.topic}** — ผิด ${t.wrong}/${t.total} (${Math.round(t.rate * 100)}%)`,
+              )
+              .join("\n")
+          : "_ทุกคนตอบถูกหมด_") +
+        `\n\n**🧑‍🏫 สรุปจาก AI**\n${aiSummary || "_ไม่มีสรุป_"}`,
+    );
+
+  // Per-user breakdown — chunk into description bodies if needed
+  const userLines = perUser
+    .sort((a, b) => b.score - a.score)
+    .map((u) => {
+      const wrongList = Object.entries(u.wrongTopics)
+        .sort((a, b) => b[1] - a[1])
+        .map(([t, n]) => `${t}×${n}`)
+        .join(", ");
+      return `• <@${u.userId}> — **${u.score}/${u.outOf}**${
+        wrongList ? `  · พลาด: ${wrongList}` : "  · ✅ เต็ม"
+      }`;
+    });
+
+  const detailEmbed = new EmbedBuilder()
+    .setColor(0x8b5cf6)
+    .setTitle("👥 คะแนนรายบุคคล")
+    .setDescription(userLines.join("\n").slice(0, 4000) || "_ไม่มีข้อมูล_");
+
+  return {
+    content: teacherRoleId ? `<@&${teacherRoleId}>` : "",
+    embeds: [head, detailEmbed],
+    allowedMentions: teacherRoleId ? { roles: [teacherRoleId] } : { parse: [] },
+  };
 }
 
 // ─── Render helpers ──────────────────────────────────────────────────────────

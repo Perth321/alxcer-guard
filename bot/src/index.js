@@ -9,6 +9,10 @@ import {
   ChannelType,
   Events,
   PermissionFlagsBits,
+  RoleSelectMenuBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from "discord.js";
 import {
   joinVoiceChannel,
@@ -59,7 +63,17 @@ import {
   listTakers,
   renderQuestion,
   renderResult,
+  analyzeWeaknesses,
+  buildReportEmbeds,
 } from "./study.js";
+import {
+  startClass,
+  stopClass,
+  getClassByChannel,
+  getClassByTeacher,
+  listActive as listActiveClasses,
+  takeExpired as takeExpiredClasses,
+} from "./classroom.js";
 import {
   handleNotifyCommand,
   handleNotifyComponent,
@@ -2142,6 +2156,18 @@ client.once(Events.ClientReady, async (c) => {
       }).catch((err) => console.error("[notify] tick error", err?.message));
     }, 30_000);
 
+    // Classroom end-of-class tick — every 15s. When a class timer expires,
+    // the bot joins the voice channel, plays the bell + TTS announcement +
+    // bell, then leaves.
+    setInterval(() => {
+      const expired = takeExpiredClasses();
+      for (const cls of expired) {
+        endOfClassPlayback(cls).catch((err) =>
+          console.error("[classroom] end playback error", err?.message),
+        );
+      }
+    }, 15_000);
+
     setInterval(() => {
       if (!currentChannelId) return;
       const lines = [];
@@ -2239,6 +2265,50 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         announce(_guild, { embeds: [_voiceEmbed] }).catch(() => {});
       }
     }
+  }
+
+  // ===== Classroom: teacher join → start 1h class; teacher leave → cancel =====
+  try {
+    if (config.teacherRoleId && newState.member) {
+      const isTeacher = newState.member.roles?.cache?.has(config.teacherRoleId);
+      if (isTeacher) {
+        const wasIn = !!oldState.channelId;
+        const nowIn = !!newState.channelId;
+        const teacherId = newState.member.id;
+        const guildId = newState.guild.id;
+
+        // Joined a voice channel (or moved to a different one) → start a fresh class
+        if (nowIn && oldState.channelId !== newState.channelId) {
+          // If teacher had a class running in old channel, cancel it
+          if (wasIn) {
+            const old = getClassByChannel(oldState.channelId);
+            if (old && old.teacherId === teacherId) stopClass(oldState.channelId);
+          }
+          const cls = startClass({
+            guildId,
+            channelId: newState.channelId,
+            teacherId,
+            durationMinutes: config.classDurationMinutes || 60,
+          });
+          console.log(
+            `[classroom] start: teacher ${newState.member.user.tag} in ${newState.channel?.name} for ${config.classDurationMinutes}m`,
+          );
+          announceClassStart(newState.guild, cls, newState.channel, newState.member).catch(() => {});
+        }
+
+        // Left voice entirely → cancel class
+        if (wasIn && !nowIn) {
+          const cls = getClassByTeacher(guildId, teacherId);
+          if (cls) {
+            stopClass(cls.channelId);
+            console.log(`[classroom] cancelled — teacher ${newState.member.user.tag} left voice`);
+            announceClassCancel(newState.guild, cls, newState.member).catch(() => {});
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[classroom] voiceState hook error", err?.message);
   }
 
   try {
@@ -3077,6 +3147,38 @@ async function handleStudyCommand(interaction) {
     return;
   }
 
+  if (sub === "report") {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
+      return;
+    }
+    await interaction.deferReply({ ephemeral: true });
+    try {
+      const report = await analyzeWeaknesses(guildId);
+      const payload = buildReportEmbeds(report, { teacherRoleId: config.teacherRoleId });
+      // Send to notify channel so teachers can see it
+      let target = null;
+      if (config.notifyChannelId) {
+        const guild = await client.guilds.fetch(guildId);
+        target = await guild.channels.fetch(config.notifyChannelId).catch(() => null);
+      }
+      if (target?.isTextBased?.()) {
+        await target.send(payload);
+        await interaction.editReply({ content: `✅ ส่งรายงานให้${config.teacherRoleId ? "ยศครู" : "ห้องแจ้งเตือน"}แล้ว (จากผู้ส่งคำตอบ ${report.submitters} คน)` });
+      } else {
+        // No notify channel configured — just dump in the reply
+        await interaction.editReply({
+          content: `⚠️ ยังไม่ได้ตั้งห้องแจ้งเตือน — แสดงให้ดูตรงนี้แทน`,
+          embeds: payload.embeds,
+        });
+      }
+    } catch (err) {
+      console.error("[study:report] error", err?.message);
+      await interaction.editReply({ content: `❌ ${err?.message ?? "unknown"}` });
+    }
+    return;
+  }
+
   if (sub === "reset") {
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
       await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
@@ -3149,6 +3251,8 @@ async function handleStudyButton(interaction) {
         return true;
       }
       await interaction.update(renderResult(quiz, final));
+      // Notify teacher role with this user's score
+      notifyTeacherSubmission(guildId, interaction.user, quiz, final).catch(() => {});
       return true;
     }
   } catch (err) {
@@ -3159,6 +3263,340 @@ async function handleStudyButton(interaction) {
     return true;
   }
   return false;
+}
+
+// ─── Classroom command + components + end-of-class playback ─────────────────
+
+async function notifyTeacherSubmission(guildId, user, quiz, progress) {
+  if (!config.notifyChannelId) return;
+  try {
+    const guild = await client.guilds.fetch(guildId);
+    const ch = await guild.channels.fetch(config.notifyChannelId).catch(() => null);
+    if (!ch?.isTextBased?.()) return;
+    // Tally wrong topics for this user
+    const wrongByTopic = {};
+    for (let i = 0; i < quiz.questions.length; i++) {
+      if (progress.answers[i] !== quiz.questions[i].answer) {
+        const t = quiz.questions[i].topic || "ทั่วไป";
+        wrongByTopic[t] = (wrongByTopic[t] || 0) + 1;
+      }
+    }
+    const wrongList =
+      Object.entries(wrongByTopic)
+        .sort((a, b) => b[1] - a[1])
+        .map(([t, n]) => `${t}×${n}`)
+        .join(", ") || "✅ เต็ม";
+    const passed = progress.score >= Math.ceil(progress.outOf * 0.7);
+    const embed = new EmbedBuilder()
+      .setColor(passed ? 0x22c55e : 0xef4444)
+      .setAuthor({
+        name: user.username,
+        iconURL: user.displayAvatarURL?.({ size: 64 }),
+      })
+      .setTitle("📝 นักเรียนส่งคำตอบแล้ว")
+      .setDescription(
+        `<@${user.id}> ได้คะแนน **${progress.score}/${progress.outOf}**\n` +
+          `📂 ไฟล์: \`${quiz.fileName}\`\n` +
+          `❌ พลาด: ${wrongList}`,
+      )
+      .setTimestamp(new Date());
+    const content = config.teacherRoleId ? `<@&${config.teacherRoleId}>` : "";
+    await ch.send({
+      content,
+      embeds: [embed],
+      allowedMentions: config.teacherRoleId
+        ? { roles: [config.teacherRoleId], users: [] }
+        : { parse: [] },
+    });
+  } catch (err) {
+    console.error("[study] notify teacher failed", err?.message);
+  }
+}
+
+function buildClassroomPanel() {
+  const studentRole = config.studentRoleId ? `<@&${config.studentRoleId}>` : "_ยังไม่ตั้ง_";
+  const teacherRole = config.teacherRoleId ? `<@&${config.teacherRoleId}>` : "_ยังไม่ตั้ง_";
+  const active = listActiveClasses(config.guildId);
+  const activeStr = active.length
+    ? active
+        .map(
+          (c) =>
+            `• <#${c.channelId}> — สอนโดย <@${c.teacherId}> · เหลือ <t:${Math.floor(c.endsAt / 1000)}:R>`,
+        )
+        .join("\n")
+    : "_ตอนนี้ไม่มีคลาสไหนกำลังเรียนอยู่_";
+  const embed = new EmbedBuilder()
+    .setColor(0x10b981)
+    .setTitle("🎓 ตั้งค่าโหมดห้องเรียน")
+    .setDescription(
+      `**ยศนักเรียน:** ${studentRole}\n` +
+        `**ยศครู:** ${teacherRole}\n` +
+        `**เวลาเรียนต่อคลาส:** ${config.classDurationMinutes || 60} นาที\n\n` +
+        `**คลาสที่กำลังเรียน:**\n${activeStr}\n\n` +
+        `_ตั้งยศครูแล้ว เมื่อครูเข้าห้องเสียง บอทจะตั้งเวลาให้อัตโนมัติ — ครบเวลาบอทจะเข้าห้องนั้นแล้วตีกริ่ง + พูด "หมดเวลาเรียน" + ตีกริ่งอีกครั้ง_`,
+    )
+    .setFooter({ text: "ต้องมีสิทธิ์ Manage Server ถึงจะใช้ปุ่มเหล่านี้ได้" });
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("classroom:setrole-student")
+      .setLabel("🎓 ตั้งยศนักเรียน")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId("classroom:setrole-teacher")
+      .setLabel("👨‍🏫 ตั้งยศครู")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId("classroom:setduration")
+      .setLabel("⏱️ ตั้งเวลาเรียน")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("classroom:refresh")
+      .setLabel("🔄 รีเฟรช")
+      .setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
+async function handleClassroomCommand(interaction) {
+  await interaction.reply({ ...buildClassroomPanel(), ephemeral: true });
+}
+
+async function handleClassroomComponent(interaction) {
+  const cid = interaction.customId;
+  if (!cid.startsWith("classroom:")) return false;
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
+    return true;
+  }
+
+  try {
+    if (cid === "classroom:refresh") {
+      await interaction.update(buildClassroomPanel());
+      return true;
+    }
+
+    if (cid === "classroom:setrole-student" || cid === "classroom:setrole-teacher") {
+      const which = cid.endsWith("student") ? "student" : "teacher";
+      const select = new RoleSelectMenuBuilder()
+        .setCustomId(`classroom:role:${which}`)
+        .setPlaceholder(`เลือกยศ${which === "student" ? "นักเรียน" : "ครู"}`)
+        .setMinValues(1)
+        .setMaxValues(1);
+      await interaction.reply({
+        content: `เลือกยศ${which === "student" ? "นักเรียน" : "ครู"}:`,
+        components: [new ActionRowBuilder().addComponents(select)],
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    if (cid.startsWith("classroom:role:")) {
+      const which = cid.split(":")[2];
+      const roleId = interaction.values?.[0];
+      if (!roleId) {
+        await interaction.reply({ content: "ไม่ได้เลือกยศ", ephemeral: true });
+        return true;
+      }
+      if (which === "student") config.studentRoleId = roleId;
+      else if (which === "teacher") config.teacherRoleId = roleId;
+      const { writeLocal, normalize } = await import("./config.js");
+      const next = normalize(config);
+      Object.assign(config, next);
+      writeLocal(config);
+      const { canPersistRemotely, commitConfig } = await import("./github.js");
+      if (canPersistRemotely()) {
+        commitConfig(config, `chore: set classroom ${which} role`).catch(() => {});
+      }
+      await interaction.update({
+        content: `✅ ตั้งยศ${which === "student" ? "นักเรียน" : "ครู"}เป็น <@&${roleId}> เรียบร้อย`,
+        components: [],
+        allowedMentions: { parse: [] },
+      });
+      return true;
+    }
+
+    if (cid === "classroom:setduration") {
+      const modal = new ModalBuilder()
+        .setCustomId("classroom:duration-modal")
+        .setTitle("ตั้งเวลาเรียนต่อคลาส");
+      const input = new TextInputBuilder()
+        .setCustomId("minutes")
+        .setLabel("นาที (5-600)")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setValue(String(config.classDurationMinutes || 60));
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      await interaction.showModal(modal);
+      return true;
+    }
+
+    if (cid === "classroom:duration-modal") {
+      const v = parseInt(interaction.fields.getTextInputValue("minutes"), 10);
+      if (!Number.isInteger(v) || v < 5 || v > 600) {
+        await interaction.reply({ content: "ใส่จำนวนนาทีระหว่าง 5-600", ephemeral: true });
+        return true;
+      }
+      config.classDurationMinutes = v;
+      const { writeLocal, normalize } = await import("./config.js");
+      const next = normalize(config);
+      Object.assign(config, next);
+      writeLocal(config);
+      const { canPersistRemotely, commitConfig } = await import("./github.js");
+      if (canPersistRemotely()) {
+        commitConfig(config, `chore: set classroom duration to ${v}m`).catch(() => {});
+      }
+      await interaction.reply({
+        content: `✅ ตั้งเวลาเรียนเป็น **${v} นาที** เรียบร้อย`,
+        ephemeral: true,
+      });
+      return true;
+    }
+  } catch (err) {
+    console.error("[classroom] component error", err?.message);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction
+        .reply({ content: `❌ ${err?.message ?? "unknown"}`, ephemeral: true })
+        .catch(() => {});
+    }
+    return true;
+  }
+  return false;
+}
+
+async function announceClassStart(guild, cls, channel, member) {
+  if (!config.notifyChannelId) return;
+  try {
+    const ch = await guild.channels.fetch(config.notifyChannelId).catch(() => null);
+    if (!ch?.isTextBased?.()) return;
+    const embed = new EmbedBuilder()
+      .setColor(0x10b981)
+      .setAuthor({
+        name: member.displayName || member.user.username,
+        iconURL: member.user.displayAvatarURL?.({ size: 64 }),
+      })
+      .setTitle("🟢 เริ่มคาบเรียนแล้ว")
+      .setDescription(
+        `<@${cls.teacherId}> เริ่มสอนใน <#${cls.channelId}>\n` +
+          `⏱️ จะหมดเวลา <t:${Math.floor(cls.endsAt / 1000)}:R> (เวลา <t:${Math.floor(cls.endsAt / 1000)}:t>)`,
+      );
+    const content = config.studentRoleId ? `<@&${config.studentRoleId}>` : "";
+    await ch.send({
+      content,
+      embeds: [embed],
+      allowedMentions: config.studentRoleId
+        ? { roles: [config.studentRoleId] }
+        : { parse: [] },
+    });
+  } catch (err) {
+    console.error("[classroom] announce start failed", err?.message);
+  }
+}
+
+async function announceClassCancel(guild, cls, member) {
+  if (!config.notifyChannelId) return;
+  try {
+    const ch = await guild.channels.fetch(config.notifyChannelId).catch(() => null);
+    if (!ch?.isTextBased?.()) return;
+    const embed = new EmbedBuilder()
+      .setColor(0x95a5a6)
+      .setTitle("⚪ ยกเลิกคาบเรียน")
+      .setDescription(
+        `<@${cls.teacherId}> ออกจากห้องเสียง <#${cls.channelId}> ก่อนหมดเวลา — บอทจะไม่ตีกริ่งสิ้นคาบ`,
+      );
+    await ch.send({ embeds: [embed], allowedMentions: { parse: [] } });
+  } catch (err) {
+    console.error("[classroom] announce cancel failed", err?.message);
+  }
+}
+
+async function endOfClassPlayback(cls) {
+  console.log(`[classroom] firing end-of-class for channel ${cls.channelId}`);
+  let guild = null;
+  let voiceCh = null;
+  try {
+    guild = await client.guilds.fetch(cls.guildId);
+    voiceCh = await guild.channels.fetch(cls.channelId).catch(() => null);
+  } catch (err) {
+    console.warn(`[classroom] could not fetch channel: ${err?.message}`);
+    return;
+  }
+  if (!voiceCh) {
+    console.warn(`[classroom] channel ${cls.channelId} not found, skipping`);
+    return;
+  }
+
+  // Announce in text first
+  if (config.notifyChannelId) {
+    try {
+      const tx = await guild.channels.fetch(config.notifyChannelId).catch(() => null);
+      if (tx?.isTextBased?.()) {
+        const embed = new EmbedBuilder()
+          .setColor(0xef4444)
+          .setTitle("🔔 หมดเวลาเรียนแล้ว")
+          .setDescription(
+            `คาบเรียนใน <#${cls.channelId}> ครบ ${config.classDurationMinutes || 60} นาทีแล้ว — บอทกำลังตีกริ่งในห้อง`,
+          );
+        const content = [
+          config.teacherRoleId ? `<@&${config.teacherRoleId}>` : "",
+          config.studentRoleId ? `<@&${config.studentRoleId}>` : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const roles = [config.teacherRoleId, config.studentRoleId].filter(Boolean);
+        await tx.send({
+          content,
+          embeds: [embed],
+          allowedMentions: { roles },
+        });
+      }
+    } catch (err) {
+      console.warn("[classroom] text announce failed", err?.message);
+    }
+  }
+
+  // Join the voice channel
+  let conn = getVoiceConnection(guild.id);
+  const sameChannel = conn && conn.joinConfig?.channelId === voiceCh.id;
+  if (!sameChannel) {
+    try {
+      conn = joinVoiceChannel({
+        channelId: voiceCh.id,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator,
+        selfDeaf: false,
+        selfMute: false,
+      });
+      await entersState(conn, VoiceConnectionStatus.Ready, 15_000);
+    } catch (err) {
+      console.warn(`[classroom] join voice failed: ${err?.message}`);
+      return;
+    }
+  }
+
+  const bell = PRANK_SOUNDS.rung;
+  const ttsText = config.classEndTtsText ||
+    "ตอนนี้เวลานี้ หมดเวลาเรียนของวันนี้แล้ว ขอให้นักเรียนทุกท่าน และอาจารย์ทุกท่านหยุดทำการสอน และขอให้ทุกท่านเดินทางโดยสวัสดิภาพ";
+
+  try {
+    await playSoundFile(conn, bell, "class-end-bell-1", 30_000);
+    await new Promise((r) => setTimeout(r, 400));
+    await speakThai(conn, ttsText, "class-end-tts");
+    await new Promise((r) => setTimeout(r, 400));
+    // Copy to a unique path because playSoundFile dedupes by filePath
+    const bell2 = path.join(TTS_TMP_DIR, `class-end-bell-2-${Date.now()}.mp3`);
+    try {
+      fs.copyFileSync(bell, bell2);
+      await playSoundFile(conn, bell2, "class-end-bell-2", 30_000);
+      try { fs.unlinkSync(bell2); } catch {}
+    } catch {
+      // fall back to playing the original again — small risk of dedup skip
+      await playSoundFile(conn, bell, "class-end-bell-2", 30_000);
+    }
+  } catch (err) {
+    console.error("[classroom] playback error", err?.message);
+  }
+  console.log(`[classroom] end-of-class sequence finished for ${cls.channelId}`);
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -3178,6 +3616,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.commandName === "study") {
         await handleStudyCommand(interaction);
+        return;
+      }
+      if (interaction.commandName === "classroom") {
+        await handleClassroomCommand(interaction);
         return;
       }
       if (isPrankCommand(interaction.commandName)) {
@@ -3207,6 +3649,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton() && interaction.customId.startsWith("study:")) {
       const handledStudy = await handleStudyButton(interaction);
       if (handledStudy) return;
+    }
+
+    if (
+      (interaction.isButton() ||
+        interaction.isAnySelectMenu?.() ||
+        interaction.isModalSubmit()) &&
+      interaction.customId?.startsWith("classroom:")
+    ) {
+      const handledClass = await handleClassroomComponent(interaction);
+      if (handledClass) return;
     }
 
     if (

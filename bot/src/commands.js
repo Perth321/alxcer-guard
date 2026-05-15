@@ -53,6 +53,18 @@ export const STUDY_COMMAND = new SlashCommandBuilder()
   .addSubcommand((s) =>
     s.setName("reset").setDescription("(แอดมิน) ลบข้อสอบปัจจุบัน"),
   )
+  .addSubcommand((s) =>
+    s
+      .setName("report")
+      .setDescription("(แอดมิน) สรุปผลข้อสอบ + วิเคราะห์ด้วย AI ส่งให้ยศครู"),
+  )
+  .setDMPermission(false)
+  .toJSON();
+
+export const CLASSROOM_COMMAND = new SlashCommandBuilder()
+  .setName("classroom")
+  .setDescription("🎓 ตั้งยศนักเรียน/ครู + เวลาเรียน + ดูคลาสที่กำลังเรียนอยู่")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
   .setDMPermission(false)
   .toJSON();
 
@@ -83,8 +95,8 @@ export async function registerCommands(client) {
   const rest = new REST({ version: "10" }).setToken(client.token);
   const appId = client.application?.id ?? client.user.id;
   const guildId = client.config.guildId;
-  const body = [SETTING_COMMAND, DEBUG_COMMAND, STUDY_COMMAND, NOTIFY_COMMAND, ...PRANK_COMMANDS];
-  const list = ["setting", "debug", "study", "notify", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
+  const body = [SETTING_COMMAND, DEBUG_COMMAND, STUDY_COMMAND, CLASSROOM_COMMAND, NOTIFY_COMMAND, ...PRANK_COMMANDS];
+  const list = ["setting", "debug", "study", "classroom", "notify", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
     .map((n) => "/" + n)
     .join(" ");
 
