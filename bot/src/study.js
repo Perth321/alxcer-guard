@@ -3,9 +3,12 @@
 // clicking buttons. Same quiz stays active until /study reset or a new
 // upload replaces it.
 //
-// Storage is in-memory only. The bot runs in a 6h GitHub Actions container
-// so the quiz naturally expires when the run ends — admins can re-upload.
+// Persistence: state is mirrored to bot/study.json on every mutation and
+// committed to the repo (debounced) so the quiz survives bot restarts
+// (GitHub Actions container restarts every ~6h).
 
+import fs from "node:fs";
+import path from "node:path";
 import * as XLSX from "xlsx";
 import mammoth from "mammoth";
 import JSZip from "jszip";
@@ -16,6 +19,7 @@ import {
   EmbedBuilder,
 } from "discord.js";
 import { chat } from "./ai.js";
+import { canPersistRemotely, commitStudy } from "./github.js";
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
 const MAX_TEXT_CHARS = 12_000;
@@ -23,12 +27,75 @@ const TARGET_QUESTIONS = 10;
 const MIN_QUESTIONS = 5;
 const LETTERS = ["A", "B", "C", "D"];
 
+const STUDY_PATH = path.resolve(process.cwd(), "bot/study.json");
+
 // guildId -> { id, fileName, questions[], createdAt, createdBy }
 const activeQuiz = new Map();
 // `${guildId}:${userId}` -> { quizId, qIdx, answers, submitted, score, outOf }
 const userProgress = new Map();
 
 function pkey(g, u) { return `${g}:${u}`; }
+
+// ─── Persistence ─────────────────────────────────────────────────────────────
+
+function loadFromDisk() {
+  try {
+    if (!fs.existsSync(STUDY_PATH)) return;
+    const raw = fs.readFileSync(STUDY_PATH, "utf8");
+    const data = JSON.parse(raw);
+    if (data?.activeQuiz && typeof data.activeQuiz === "object") {
+      for (const [g, q] of Object.entries(data.activeQuiz)) {
+        if (q && q.questions) activeQuiz.set(g, q);
+      }
+    }
+    if (data?.userProgress && typeof data.userProgress === "object") {
+      for (const [k, p] of Object.entries(data.userProgress)) {
+        if (p && p.quizId) userProgress.set(k, p);
+      }
+    }
+    console.log(
+      `[study] loaded from disk: ${activeQuiz.size} quiz(es), ${userProgress.size} user progress entries`,
+    );
+  } catch (err) {
+    console.error("[study] load failed", err?.message);
+  }
+}
+
+function snapshot() {
+  return {
+    activeQuiz: Object.fromEntries(activeQuiz),
+    userProgress: Object.fromEntries(userProgress),
+  };
+}
+
+function writeLocal() {
+  try {
+    fs.mkdirSync(path.dirname(STUDY_PATH), { recursive: true });
+    fs.writeFileSync(STUDY_PATH, JSON.stringify(snapshot(), null, 2) + "\n");
+  } catch (err) {
+    console.error("[study] local write failed", err?.message);
+  }
+}
+
+let _commitTimer = null;
+function persist({ commitNow = false, message } = {}) {
+  writeLocal();
+  if (!canPersistRemotely()) return;
+  if (_commitTimer) clearTimeout(_commitTimer);
+  const delay = commitNow ? 0 : 5000;
+  _commitTimer = setTimeout(async () => {
+    _commitTimer = null;
+    try {
+      await commitStudy(snapshot(), message);
+      console.log("[study] committed to repo");
+    } catch (err) {
+      console.error("[study] remote commit failed", err?.message);
+    }
+  }, delay);
+}
+
+// Auto-load on import so the bot picks up state from previous run.
+loadFromDisk();
 
 export function getActiveQuiz(guildId) {
   return activeQuiz.get(guildId) ?? null;
@@ -39,6 +106,7 @@ export function resetQuiz(guildId) {
   for (const k of [...userProgress.keys()]) {
     if (k.startsWith(guildId + ":")) userProgress.delete(k);
   }
+  persist({ commitNow: true, message: "chore: reset study quiz" });
 }
 
 export function setActiveQuiz(guildId, quiz) {
@@ -46,6 +114,7 @@ export function setActiveQuiz(guildId, quiz) {
   for (const k of [...userProgress.keys()]) {
     if (k.startsWith(guildId + ":")) userProgress.delete(k);
   }
+  persist({ commitNow: true, message: `chore: new study quiz (${quiz?.fileName ?? "?"})` });
 }
 
 export function listTakers(guildId) {
@@ -272,6 +341,7 @@ export function getOrCreateProgress(guildId, userId, quizId) {
   if (!p || p.quizId !== quizId) {
     p = { quizId, qIdx: 0, answers: {}, submitted: false, startedAt: Date.now() };
     userProgress.set(k, p);
+    persist();
   }
   return p;
 }
@@ -282,6 +352,7 @@ export function getProgress(guildId, userId) {
 
 export function resetUserProgress(guildId, userId) {
   userProgress.delete(pkey(guildId, userId));
+  persist();
 }
 
 export function recordAnswer(guildId, userId, qIdx, choice, total) {
@@ -290,6 +361,7 @@ export function recordAnswer(guildId, userId, qIdx, choice, total) {
   p.answers[qIdx] = choice;
   // Auto-advance if not on last question
   if (qIdx < total - 1 && qIdx >= p.qIdx) p.qIdx = qIdx + 1;
+  persist();
   return p;
 }
 
@@ -297,6 +369,7 @@ export function jumpTo(guildId, userId, qIdx) {
   const p = userProgress.get(pkey(guildId, userId));
   if (!p || p.submitted) return p;
   p.qIdx = Math.max(0, qIdx);
+  persist();
   return p;
 }
 
@@ -312,6 +385,7 @@ export function submitFinal(guildId, userId) {
   p.score = correct;
   p.outOf = quiz.questions.length;
   p.submittedAt = Date.now();
+  persist({ commitNow: true, message: `chore: study submission by ${userId}` });
   return p;
 }
 
