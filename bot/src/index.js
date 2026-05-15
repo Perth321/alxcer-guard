@@ -10,6 +10,7 @@ import {
   Events,
   PermissionFlagsBits,
   RoleSelectMenuBuilder,
+  ChannelSelectMenuBuilder,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -987,6 +988,12 @@ async function playGreeting(connection) {
 }
 
 async function playJoinSignal(connection) {
+  // Skip greeting entirely for channels marked as "silent join" (study/class rooms)
+  const cid = connection?.joinConfig?.channelId;
+  if (cid && Array.isArray(config.silentJoinChannelIds) && config.silentJoinChannelIds.includes(cid)) {
+    console.log(`[greet] silent-join channel ${cid} — skipping greeting`);
+    return;
+  }
   const greeted = await playGreeting(connection);
   if (greeted) return;
   await playJoinBeep(connection);
@@ -3353,12 +3360,12 @@ async function handleStudyButton(interaction) {
       await interaction.deferReply({ ephemeral: true });
       try {
         const report = await analyzeWeaknesses(guildId);
-        if (!report || !report.takers?.length) {
+        if (!report || !report.submitters) {
           await interaction.editReply({ content: "ยังไม่มีคนส่งคำตอบ — รอให้นักเรียนทำเสร็จก่อน" });
           return true;
         }
         const payload = buildReportEmbeds(report, { teacherRoleId: config.teacherRoleId });
-        await interaction.editReply({ content: payload.content ?? "📑 รายงาน + วิเคราะห์โดย AI", embeds: (payload.embeds ?? []).slice(0, 10) });
+        await interaction.editReply({ content: `📑 รายงาน + วิเคราะห์โดย AI (จากผู้ส่งคำตอบ ${report.submitters} คน)`, embeds: (payload.embeds ?? []).slice(0, 10), allowedMentions: { parse: [] } });
       } catch (err) {
         console.error("[study:report] error", err?.message);
         await interaction.editReply({ content: `❌ สร้างรายงานไม่สำเร็จ: ${err?.message ?? "unknown"}` });
@@ -3508,19 +3515,23 @@ function buildClassroomPanel() {
         )
         .join("\n")
     : "_ตอนนี้ไม่มีคลาสไหนกำลังเรียนอยู่_";
+  const silentList = (config.silentJoinChannelIds || [])
+    .map((id) => `<#${id}>`)
+    .join(" ") || "_ยังไม่มี — บอทจะทักทายทุกห้อง_";
   const embed = new EmbedBuilder()
     .setColor(0x10b981)
     .setTitle("🎓 ตั้งค่าโหมดห้องเรียน")
     .setDescription(
       `**ยศนักเรียน:** ${studentRole}\n` +
         `**ยศครู:** ${teacherRole}\n` +
-        `**เวลาเรียนต่อคลาส:** ${config.classDurationMinutes || 60} นาที\n\n` +
+        `**เวลาเรียนต่อคลาส:** ${config.classDurationMinutes || 60} นาที\n` +
+        `**🔇 ห้องเรียน-เงียบ (บอทไม่ทักทายเสียง):**\n${silentList}\n\n` +
         `**คลาสที่กำลังเรียน:**\n${activeStr}\n\n` +
         `_ตั้งยศครูแล้ว เมื่อครูเข้าห้องเสียง บอทจะตั้งเวลาให้อัตโนมัติ — ครบเวลาบอทจะเข้าห้องนั้นแล้วตีกริ่ง + พูด "หมดเวลาเรียน" + ตีกริ่งอีกครั้ง_`,
     )
     .setFooter({ text: "ต้องมีสิทธิ์ Manage Server ถึงจะใช้ปุ่มเหล่านี้ได้" });
 
-  const row = new ActionRowBuilder().addComponents(
+  const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("classroom:setrole-student")
       .setLabel("🎓 ตั้งยศนักเรียน")
@@ -3538,7 +3549,17 @@ function buildClassroomPanel() {
       .setLabel("🔄 รีเฟรช")
       .setStyle(ButtonStyle.Secondary),
   );
-  return { embeds: [embed], components: [row] };
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("classroom:silent-add")
+      .setLabel("🔇 เพิ่มห้องเรียน-เงียบ")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId("classroom:silent-clear")
+      .setLabel("🔔 ล้างห้องเงียบ (ทักทายทุกห้อง)")
+      .setStyle(ButtonStyle.Danger),
+  );
+  return { embeds: [embed], components: [row1, row2] };
 }
 
 async function handleClassroomCommand(interaction) {
@@ -3596,6 +3617,56 @@ async function handleClassroomComponent(interaction) {
         components: [],
         allowedMentions: { parse: [] },
       });
+      return true;
+    }
+
+    if (cid === "classroom:silent-add") {
+      const select = new ChannelSelectMenuBuilder()
+        .setCustomId("classroom:silent-pick")
+        .setPlaceholder("เลือกห้องเสียงที่บอทจะไม่ทักทาย")
+        .setChannelTypes(ChannelType.GuildVoice, ChannelType.GuildStageVoice)
+        .setMinValues(1)
+        .setMaxValues(5);
+      await interaction.reply({
+        content: "เลือกห้องเสียง 1-5 ห้อง — บอทจะเข้าห้องเหล่านี้แบบเงียบ (ไม่เล่น greeting):",
+        components: [new ActionRowBuilder().addComponents(select)],
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    if (cid === "classroom:silent-pick") {
+      const ids = interaction.values || [];
+      const set = new Set(config.silentJoinChannelIds || []);
+      for (const id of ids) set.add(id);
+      config.silentJoinChannelIds = Array.from(set);
+      const { writeLocal, normalize } = await import("./config.js");
+      const next = normalize(config);
+      Object.assign(config, next);
+      writeLocal(config);
+      const { canPersistRemotely, commitConfig } = await import("./github.js");
+      if (canPersistRemotely()) {
+        commitConfig(config, `chore: add ${ids.length} silent-join voice channel(s)`).catch(() => {});
+      }
+      await interaction.update({
+        content: `✅ เพิ่มห้องเงียบแล้ว: ${ids.map((i) => `<#${i}>`).join(" ")}\n_บอทจะไม่เล่นเสียงทักทายในห้องเหล่านี้อีก_`,
+        components: [],
+        allowedMentions: { parse: [] },
+      });
+      return true;
+    }
+
+    if (cid === "classroom:silent-clear") {
+      config.silentJoinChannelIds = [];
+      const { writeLocal, normalize } = await import("./config.js");
+      const next = normalize(config);
+      Object.assign(config, next);
+      writeLocal(config);
+      const { canPersistRemotely, commitConfig } = await import("./github.js");
+      if (canPersistRemotely()) {
+        commitConfig(config, "chore: clear silent-join voice channels").catch(() => {});
+      }
+      await interaction.update(buildClassroomPanel());
       return true;
     }
 
