@@ -1516,7 +1516,11 @@ async function attachReceiver(connection, channel) {
 }
 
 function isReceiverHealthy() {
-  if (receiverProven) return true;
+  // Always require recent audio packets — even after the receiver has been
+  // proven to work once. Previously this returned `true` forever once any
+  // packet arrived, so a silently-dead voice connection would keep
+  // `lastSpoke` stale for everyone and the bot would mass-mute the whole
+  // channel after muteSeconds.
   const sinceAudio = (Date.now() - lastAnyAudio) / 1000;
   return sinceAudio < WATCHDOG_SECONDS;
 }
