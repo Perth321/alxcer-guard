@@ -3053,10 +3053,17 @@ async function announceStudyAvailable(guildId, quiz, byUserId) {
       .setColor(0x6366f1)
       .setTitle("📚 มีข้อสอบใหม่!")
       .setDescription(
-        `<@${byUserId}> ได้อัพไฟล์ **${quiz.fileName}** และให้บอทสร้างข้อสอบ ${quiz.questions.length} ข้อแล้ว\n\n` +
-          `ใครอยากทำให้พิมพ์ \`/study start\` ได้เลย — ทุกคนทำชุดเดียวกัน คะแนนของแต่ละคนเป็นของส่วนตัว`,
+        `<@${byUserId}> ได้อัพไฟล์ **${quiz.fileName}** และให้บอทสร้างข้อสอบ **${quiz.questions.length} ข้อ** แล้ว\n\n` +
+          `▶️ พิมพ์ \`/study\` แล้วกดปุ่ม **เริ่มทำข้อสอบ** ได้เลย — ทุกคนทำชุดเดียวกัน คะแนนของแต่ละคนเป็นของส่วนตัว`,
       );
-    await ch.send({ embeds: [embed] });
+    const content = config.studentRoleId ? `📣 <@&${config.studentRoleId}> มีข้อสอบใหม่!` : "";
+    await ch.send({
+      content,
+      embeds: [embed],
+      allowedMentions: config.studentRoleId
+        ? { roles: [config.studentRoleId] }
+        : { parse: [] },
+    });
   } catch (err) {
     console.error("[study] announce failed", err?.message);
   }

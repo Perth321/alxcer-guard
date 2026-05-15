@@ -161,11 +161,29 @@ const QUIZ_PROMPT = `คุณคือผู้ออกข้อสอบท�
 }`;
 
 function tryParseJson(text) {
-  let t = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim();
+  if (!text) return null;
+  let t = String(text).trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
   try { return JSON.parse(t); } catch {}
-  const m = t.match(/\{[\s\S]*\}/);
-  if (!m) return null;
-  try { return JSON.parse(m[0]); } catch { return null; }
+  // Find first '{' and try progressively shorter substrings ending at '}'
+  const start = t.indexOf("{");
+  if (start < 0) return null;
+  const sub = t.slice(start);
+  // Try the largest balanced-looking prefix first
+  for (let end = sub.lastIndexOf("}"); end > 0; end = sub.lastIndexOf("}", end - 1)) {
+    try { return JSON.parse(sub.slice(0, end + 1)); } catch {}
+    if (end < 50) break;
+  }
+  // Last-resort: if response was truncated mid-array, repair by closing
+  // the questions array + outer object after the last complete question.
+  const lastClose = sub.lastIndexOf("}");
+  if (lastClose > 0) {
+    const repaired = sub.slice(0, lastClose + 1) + "]}";
+    try { return JSON.parse(repaired); } catch {}
+  }
+  return null;
 }
 
 async function generateQuestions(sourceText) {
@@ -173,12 +191,36 @@ async function generateQuestions(sourceText) {
   if (!trimmed || trimmed.length < 50) {
     throw new Error("ไม่พบเนื้อหาที่อ่านได้ในไฟล์ (อาจเป็น scan/รูปภาพ)");
   }
-  const result = await chat(
-    [{ role: "user", content: `${QUIZ_PROMPT}\n\n=== เนื้อหา ===\n${trimmed}` }],
-    { max_tokens: 2500, temperature: 0.6 },
-  );
-  const parsed = tryParseJson(result?.content ?? "");
-  if (!parsed) throw new Error("AI ไม่ตอบเป็น JSON ที่อ่านได้");
+  const callArgs = {
+    max_tokens: 4500,
+    temperature: 0.5,
+    response_format: { type: "json_object" },
+  };
+  const messages = [
+    {
+      role: "system",
+      content: "Reply with a single valid JSON object only. No prose, no markdown.",
+    },
+    { role: "user", content: `${QUIZ_PROMPT}\n\n=== เนื้อหา ===\n${trimmed}` },
+  ];
+  let parsed = null;
+  let lastRaw = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await chat(messages, callArgs);
+    lastRaw = result?.content ?? "";
+    parsed = tryParseJson(lastRaw);
+    if (parsed && Array.isArray(parsed.questions) && parsed.questions.length >= MIN_QUESTIONS) break;
+    // Retry once with even stricter framing
+    messages.push({ role: "assistant", content: lastRaw.slice(0, 200) });
+    messages.push({
+      role: "user",
+      content: `JSON ก่อนหน้านั้นไม่ valid หรือไม่ครบ ${MIN_QUESTIONS} ข้อ — ขอใหม่เป็น JSON object เดียว ไม่มีข้อความอื่น`,
+    });
+  }
+  if (!parsed) {
+    console.error("[study] JSON parse failed, raw head:", lastRaw.slice(0, 300));
+    throw new Error("AI ไม่ตอบเป็น JSON ที่อ่านได้ (ลองอัพไฟล์ใหม่อีกครั้ง)");
+  }
   const list = Array.isArray(parsed.questions) ? parsed.questions : [];
   const cleaned = [];
   for (const q of list) {
