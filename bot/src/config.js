@@ -31,6 +31,8 @@ const DEFAULTS = {
   silentJoinChannelIds: [],
   classEndTtsText:
     "ตอนนี้เวลานี้ หมดเวลาเรียนของวันนี้แล้ว ขอให้นักเรียนทุกท่าน และอาจารย์ทุกท่านหยุดทำการสอน และขอให้ทุกท่านเดินทางโดยสวัสดิภาพ",
+  classStartTtsText:
+    "เริ่มคาบเรียนแล้ว ขอให้นักเรียนทุกท่านเตรียมตัวให้พร้อม และตั้งใจเรียน",
 };
 
 export function loadConfig() {
@@ -71,6 +73,10 @@ export function normalize(cfg) {
       typeof cfg.classEndTtsText === "string" && cfg.classEndTtsText.trim()
         ? cfg.classEndTtsText.trim()
         : DEFAULTS.classEndTtsText,
+    classStartTtsText:
+      typeof cfg.classStartTtsText === "string" && cfg.classStartTtsText.trim()
+        ? cfg.classStartTtsText.trim()
+        : DEFAULTS.classStartTtsText,
   };
 }
 
