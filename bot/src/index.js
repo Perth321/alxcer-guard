@@ -2301,6 +2301,9 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
             `[classroom] start: teacher ${newState.member.user.tag} in ${newState.channel?.name} for ${config.classDurationMinutes}m`,
           );
           announceClassStart(newState.guild, cls, newState.channel, newState.member).catch(() => {});
+          startOfClassPlayback(cls).catch((err) =>
+            console.error("[classroom] start bell failed", err?.message),
+          );
         }
 
         // Left voice entirely → cancel class
@@ -3762,6 +3765,55 @@ async function announceClassCancel(guild, cls, member) {
   } catch (err) {
     console.error("[classroom] announce cancel failed", err?.message);
   }
+}
+
+async function startOfClassPlayback(cls) {
+  console.log(`[classroom] firing start-of-class for channel ${cls.channelId}`);
+  let guild = null;
+  let voiceCh = null;
+  try {
+    guild = await client.guilds.fetch(cls.guildId);
+    voiceCh = await guild.channels.fetch(cls.channelId).catch(() => null);
+  } catch (err) {
+    console.warn(`[classroom:start] could not fetch channel: ${err?.message}`);
+    return;
+  }
+  if (!voiceCh) return;
+
+  // Wait briefly so the teacher's voice client is fully connected before bot
+  // joins (avoids racing the gateway voiceState event).
+  await new Promise((r) => setTimeout(r, 1500));
+
+  let conn = getVoiceConnection(guild.id);
+  const sameChannel = conn && conn.joinConfig?.channelId === voiceCh.id;
+  if (!sameChannel) {
+    try {
+      conn = joinVoiceChannel({
+        channelId: voiceCh.id,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator,
+        selfDeaf: false,
+        selfMute: false,
+      });
+      await entersState(conn, VoiceConnectionStatus.Ready, 15_000);
+    } catch (err) {
+      console.warn(`[classroom:start] join voice failed: ${err?.message}`);
+      return;
+    }
+  }
+
+  const bell = PRANK_SOUNDS.rung;
+  const ttsText = config.classStartTtsText ||
+    "เริ่มคาบเรียนแล้ว ขอให้นักเรียนทุกท่านเตรียมตัวให้พร้อม และตั้งใจเรียน";
+
+  try {
+    await playSoundFile(conn, bell, "class-start-bell", 30_000);
+    await new Promise((r) => setTimeout(r, 400));
+    await speakThai(conn, ttsText, "class-start-tts");
+  } catch (err) {
+    console.error("[classroom:start] playback error", err?.message);
+  }
+  console.log(`[classroom] start-of-class sequence finished for ${cls.channelId}`);
 }
 
 async function endOfClassPlayback(cls) {
