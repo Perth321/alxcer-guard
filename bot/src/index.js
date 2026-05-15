@@ -987,9 +987,28 @@ async function playGreeting(connection) {
   return await playSoundFile(connection, GREETING_PATH, "greet", 20000);
 }
 
+// channelId -> classObject — set by voiceStateUpdate when teacher joins.
+// playJoinSignal consumes it (plays bell + TTS instead of greeting) so we
+// avoid a race between startOfClassPlayback and reevaluateAndJoin's natural
+// connect/destroy/rejoin cycle.
+const pendingClassStart = new Map();
+
 async function playJoinSignal(connection) {
-  // Skip greeting entirely for channels marked as "silent join" (study/class rooms)
   const cid = connection?.joinConfig?.channelId;
+
+  // If a teacher just joined this channel, play the class-start sequence
+  // (bell + TTS) instead of greeting. This consumes the pending flag.
+  if (cid && pendingClassStart.has(cid)) {
+    const cls = pendingClassStart.get(cid);
+    pendingClassStart.delete(cid);
+    console.log(`[classroom] playJoinSignal → start-of-class for ${cid}`);
+    await playClassStartSequence(connection).catch((err) =>
+      console.error("[classroom] start sequence failed", err?.message),
+    );
+    return;
+  }
+
+  // Skip greeting entirely for channels marked as "silent join" (study/class rooms)
   if (cid && Array.isArray(config.silentJoinChannelIds) && config.silentJoinChannelIds.includes(cid)) {
     console.log(`[greet] silent-join channel ${cid} — skipping greeting`);
     return;
@@ -997,6 +1016,19 @@ async function playJoinSignal(connection) {
   const greeted = await playGreeting(connection);
   if (greeted) return;
   await playJoinBeep(connection);
+}
+
+async function playClassStartSequence(connection) {
+  const bell = PRANK_SOUNDS.rung;
+  const ttsText = config.classStartTtsText ||
+    "เริ่มคาบเรียนแล้ว ขอให้นักเรียนทุกท่านเตรียมตัวให้พร้อม และตั้งใจเรียน";
+  try {
+    await playSoundFile(connection, bell, "class-start-bell", 30_000);
+    await new Promise((r) => setTimeout(r, 400));
+    await speakThai(connection, ttsText, "class-start-tts");
+  } catch (err) {
+    console.error("[classroom:start] playback error", err?.message);
+  }
 }
 
 async function playPrankSound(name) {
@@ -2301,9 +2333,9 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
             `[classroom] start: teacher ${newState.member.user.tag} in ${newState.channel?.name} for ${config.classDurationMinutes}m`,
           );
           announceClassStart(newState.guild, cls, newState.channel, newState.member).catch(() => {});
-          startOfClassPlayback(cls).catch((err) =>
-            console.error("[classroom] start bell failed", err?.message),
-          );
+          // Mark this channel as "pending class start" so the next playJoinSignal
+          // call from reevaluateAndJoin plays bell+TTS instead of greeting.
+          pendingClassStart.set(newState.channelId, cls);
         }
 
         // Left voice entirely → cancel class
@@ -2323,6 +2355,18 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
   try {
     await reevaluateAndJoin(newState.guild);
+    // Fallback: if the bot was already connected to the same channel,
+    // reevaluateAndJoin won't call playJoinSignal — fire the start sequence
+    // directly so the bell still plays.
+    if (newState.channelId && pendingClassStart.has(newState.channelId)) {
+      const conn = getVoiceConnection(newState.guild.id);
+      if (conn && conn.joinConfig?.channelId === newState.channelId) {
+        pendingClassStart.delete(newState.channelId);
+        playClassStartSequence(conn).catch((err) =>
+          console.error("[classroom] fallback start sequence failed", err?.message),
+        );
+      }
+    }
   } catch (err) {
     console.error("[voiceUpdate] error", err?.message);
   }
