@@ -25,6 +25,10 @@ const DEFAULTS = {
   studentRoleId: "",
   teacherRoleId: "",
   classDurationMinutes: 60,
+  // Voice channels where the bot should join SILENTLY (no greeting.mp3, no
+  // join-beep). Useful for dedicated study/class rooms where the greeting is
+  // disruptive. List of channel IDs.
+  silentJoinChannelIds: [],
   classEndTtsText:
     "ตอนนี้เวลานี้ หมดเวลาเรียนของวันนี้แล้ว ขอให้นักเรียนทุกท่าน และอาจารย์ทุกท่านหยุดทำการสอน และขอให้ทุกท่านเดินทางโดยสวัสดิภาพ",
 };
@@ -60,6 +64,9 @@ export function normalize(cfg) {
     studentRoleId: cfg.studentRoleId ? String(cfg.studentRoleId) : "",
     teacherRoleId: cfg.teacherRoleId ? String(cfg.teacherRoleId) : "",
     classDurationMinutes: clampInt(cfg.classDurationMinutes, 5, 600, 60),
+    silentJoinChannelIds: Array.isArray(cfg.silentJoinChannelIds)
+      ? Array.from(new Set(cfg.silentJoinChannelIds.filter((x) => typeof x === "string" && x).map(String)))
+      : [],
     classEndTtsText:
       typeof cfg.classEndTtsText === "string" && cfg.classEndTtsText.trim()
         ? cfg.classEndTtsText.trim()
