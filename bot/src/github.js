@@ -101,6 +101,17 @@ export async function commitNotifications(
   );
 }
 
+export async function commitStudy(
+  data,
+  message = "chore: persist study quiz state",
+) {
+  await commitFile(
+    "bot/study.json",
+    JSON.stringify(data, null, 2) + "\n",
+    message,
+  );
+}
+
 export async function commitTranscripts(
   transcriptsObject,
   message = "chore: persist voice transcript history",
