@@ -13,5 +13,9 @@
   "firstOffenseMuteSeconds": 60,
   "repeatOffenseMuteSeconds": 3600,
   "wakeMusicUrl": "",
-  "wakeTtsText": "ขออนุญาตปลุกนะครับ ตื่นได้แล้วเด้อ"
+  "wakeTtsText": "ขออนุญาตปลุกนะครับ ตื่นได้แล้วเด้อ",
+  "studentRoleId": "",
+  "teacherRoleId": "1504669659583221980",
+  "classDurationMinutes": 60,
+  "classEndTtsText": "ตอนนี้เวลานี้ หมดเวลาเรียนของวันนี้แล้ว ขอให้นักเรียนทุกท่าน และอาจารย์ทุกท่านหยุดทำการสอน และขอให้ทุกท่านเดินทางโดยสวัสดิภาพ"
 }
