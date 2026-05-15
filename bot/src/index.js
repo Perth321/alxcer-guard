@@ -3062,32 +3062,124 @@ async function announceStudyAvailable(guildId, quiz, byUserId) {
   }
 }
 
+function buildStudyPanel(guildId) {
+  const quiz = getActiveQuiz(guildId);
+  const takers = quiz ? listTakers(guildId) : [];
+  const submitted = takers.filter((t) => t.submitted);
+  const inProgress = takers.filter((t) => !t.submitted);
+
+  const lines = [];
+  if (quiz) {
+    lines.push(`📂 **ไฟล์:** \`${quiz.fileName}\``);
+    lines.push(`❓ **จำนวนข้อ:** ${quiz.questions.length}`);
+    lines.push(`👤 **อัพโดย:** <@${quiz.createdBy}>`);
+    lines.push("");
+    lines.push(`✅ ส่งแล้ว: **${submitted.length} คน**`);
+    if (submitted.length) {
+      const top = submitted
+        .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+        .slice(0, 10)
+        .map((t) => `• <@${t.userId}> — ${t.score}/${t.outOf}`)
+        .join("\n");
+      lines.push(top);
+    }
+    if (inProgress.length) {
+      lines.push(`\n🟡 กำลังทำ: **${inProgress.length} คน**`);
+    }
+  } else {
+    lines.push("_ยังไม่มีข้อสอบ — แอดมินกดปุ่ม **📤 อัพไฟล์** เพื่อสร้าง_");
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(0x6366f1)
+    .setTitle("📚 โหมดเรียนหนังสือ — Study Mode")
+    .setDescription(lines.join("\n").slice(0, 4000))
+    .setFooter({
+      text: quiz
+        ? "กด ▶️ เริ่มทำข้อสอบ ได้เลย — ทุกคนทำชุดเดียวกันแบบส่วนตัว"
+        : "เริ่มต้น: แอดมินกด 📤 อัพไฟล์ เพื่อให้บอทสร้างข้อสอบ",
+    });
+
+  // Row 1 — for everyone
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("study:start")
+      .setLabel("▶️ เริ่มทำข้อสอบ")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(!quiz),
+    new ButtonBuilder()
+      .setCustomId("study:status")
+      .setLabel("📊 ดูสถานะ + คะแนน")
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(!quiz),
+    new ButtonBuilder()
+      .setCustomId("study:refresh")
+      .setLabel("🔄 รีเฟรช")
+      .setStyle(ButtonStyle.Secondary),
+  );
+
+  // Row 2 — admin actions
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("study:upload-info")
+      .setLabel("📤 อัพไฟล์ (แอดมิน)")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("study:report")
+      .setLabel("📑 รายงานครู (AI)")
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(!quiz || !submitted.length),
+    new ButtonBuilder()
+      .setCustomId("study:reset-confirm")
+      .setLabel("🗑️ รีเซ็ตข้อสอบ")
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(!quiz),
+  );
+
+  return { embeds: [embed], components: [row1, row2] };
+}
+
 async function handleStudyCommand(interaction) {
-  const sub = interaction.options.getSubcommand();
   const guildId = interaction.guildId;
   if (!guildId) {
     await interaction.reply({ content: "ใช้ในเซิร์ฟเวอร์เท่านั้น", ephemeral: true });
     return;
   }
+  await interaction.reply({ ...buildStudyPanel(guildId), ephemeral: true });
+}
 
-  if (sub === "upload") {
-    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-      await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
-      return;
-    }
-    const att = interaction.options.getAttachment("file", true);
-    await interaction.deferReply({ ephemeral: true });
-    try {
-      const quiz = await buildQuizFromAttachment(att, { createdBy: interaction.user.id });
-      setActiveQuiz(guildId, quiz);
-      await interaction.editReply({
-        content: `✅ สร้างข้อสอบ **${quiz.questions.length} ข้อ** จากไฟล์ \`${quiz.fileName}\` แล้ว — ทุกคนพิมพ์ \`/study start\` เพื่อเริ่มทำได้เลย`,
-      });
-      announceStudyAvailable(guildId, quiz, interaction.user.id).catch(() => {});
-    } catch (err) {
-      console.error("[study:upload] error", err?.message);
-      await interaction.editReply({ content: `❌ สร้างข้อสอบไม่สำเร็จ: ${err?.message ?? "unknown"}` });
-    }
+async function handleStudyUploadCommand(interaction) {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({ content: "ใช้ในเซิร์ฟเวอร์เท่านั้น", ephemeral: true });
+    return;
+  }
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
+    return;
+  }
+  const att = interaction.options.getAttachment("file", true);
+  await interaction.deferReply({ ephemeral: true });
+  try {
+    const quiz = await buildQuizFromAttachment(att, { createdBy: interaction.user.id });
+    setActiveQuiz(guildId, quiz);
+    await interaction.editReply({
+      content: `✅ สร้างข้อสอบ **${quiz.questions.length} ข้อ** จากไฟล์ \`${quiz.fileName}\` แล้ว — พิมพ์ \`/study\` เปิดหน้ากดปุ่มได้เลย`,
+    });
+    announceStudyAvailable(guildId, quiz, interaction.user.id).catch(() => {});
+  } catch (err) {
+    console.error("[study-upload] error", err?.message);
+    await interaction.editReply({ content: `❌ สร้างข้อสอบไม่สำเร็จ: ${err?.message ?? "unknown"}` });
+  }
+}
+
+// Legacy slash subcommand handler kept temporarily for back-compat with
+// any user that still has the old /study cached — falls back to panel.
+async function _legacy_handleStudyCommandSubcommand(interaction) {
+  const sub = interaction.options.getSubcommand();
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({ content: "ใช้ในเซิร์ฟเวอร์เท่านั้น", ephemeral: true });
     return;
   }
 
@@ -3198,13 +3290,97 @@ async function handleStudyButton(interaction) {
   const guildId = interaction.guildId;
   const userId = interaction.user.id;
   const cid = interaction.customId;
-  const quiz = guildId ? getActiveQuiz(guildId) : null;
-  if (!quiz) {
-    await interaction.reply({ content: "ข้อสอบนี้หมดอายุแล้ว (อาจถูก reset หรือบอทรีสตาร์ท)", ephemeral: true });
-    return true;
-  }
   const parts = cid.split(":");
   const action = parts[1];
+
+  // ── Panel-level buttons (work even when quiz isn't loaded) ──
+  try {
+    if (action === "refresh" || action === "upload-info") {
+      if (action === "upload-info") {
+        await interaction.reply({
+          content:
+            "📤 **วิธีอัพโหลดข้อสอบ**\n" +
+            "พิมพ์ `/study-upload file:` แล้วเลือกไฟล์ `.docx`, `.xlsx`, `.pptx`, หรือ `.txt` (≤10MB)\n" +
+            "บอทจะอ่านเนื้อหา → สร้างข้อสอบให้อัตโนมัติ → ทุกคนพิมพ์ `/study` กดเริ่มทำได้เลย",
+          ephemeral: true,
+        });
+        return true;
+      }
+      await interaction.update(buildStudyPanel(guildId));
+      return true;
+    }
+
+    if (action === "status") {
+      await interaction.reply({ ...buildStudyPanel(guildId), ephemeral: true });
+      return true;
+    }
+
+    if (action === "reset-confirm") {
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
+        return true;
+      }
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("study:reset-yes").setLabel("✅ ยืนยันลบ").setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId("study:refresh").setLabel("ยกเลิก").setStyle(ButtonStyle.Secondary),
+      );
+      await interaction.reply({ content: "⚠️ ลบข้อสอบปัจจุบัน + คะแนนทุกคนเลยไหม?", components: [row], ephemeral: true });
+      return true;
+    }
+
+    if (action === "reset-yes") {
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
+        return true;
+      }
+      resetQuiz(guildId);
+      await interaction.update({ content: "🗑️ ลบข้อสอบเรียบร้อย — พิมพ์ `/study` เพื่อเริ่มใหม่", components: [] });
+      return true;
+    }
+
+    if (action === "report") {
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
+        return true;
+      }
+      await interaction.deferReply({ ephemeral: true });
+      try {
+        const report = await analyzeWeaknesses(guildId);
+        if (!report || !report.takers?.length) {
+          await interaction.editReply({ content: "ยังไม่มีคนส่งคำตอบ — รอให้นักเรียนทำเสร็จก่อน" });
+          return true;
+        }
+        const payload = buildReportEmbeds(report, { teacherRoleId: config.teacherRoleId });
+        await interaction.editReply({ content: payload.content ?? "📑 รายงาน + วิเคราะห์โดย AI", embeds: (payload.embeds ?? []).slice(0, 10) });
+      } catch (err) {
+        console.error("[study:report] error", err?.message);
+        await interaction.editReply({ content: `❌ สร้างรายงานไม่สำเร็จ: ${err?.message ?? "unknown"}` });
+      }
+      return true;
+    }
+  } catch (err) {
+    console.error("[study] panel button error", err?.message);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: `❌ ${err?.message ?? "unknown"}`, ephemeral: true }).catch(() => {});
+    }
+    return true;
+  }
+
+  // ── Quiz-taking buttons (need an active quiz) ──
+  const quiz = guildId ? getActiveQuiz(guildId) : null;
+  if (!quiz) {
+    await interaction.reply({ content: "ข้อสอบนี้หมดอายุแล้ว (อาจถูก reset หรือบอทรีสตาร์ท) — พิมพ์ `/study` เพื่อเปิดหน้าใหม่", ephemeral: true });
+    return true;
+  }
+
+  // "start" button starts the quiz for the clicker (private)
+  if (action === "start") {
+    resetUserProgress(guildId, userId);
+    const fresh = getOrCreateProgress(guildId, userId, quiz.id);
+    await interaction.reply({ ...renderQuestion(quiz, fresh), ephemeral: true });
+    return true;
+  }
+
   let progress = getProgress(guildId, userId);
 
   try {
@@ -3616,6 +3792,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.commandName === "study") {
         await handleStudyCommand(interaction);
+        return;
+      }
+      if (interaction.commandName === "study-upload") {
+        await handleStudyUploadCommand(interaction);
         return;
       }
       if (interaction.commandName === "classroom") {

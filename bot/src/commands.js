@@ -30,34 +30,26 @@ export const DEBUG_COMMAND = new SlashCommandBuilder()
   .setDMPermission(false)
   .toJSON();
 
+// Single-screen panel command — pops up an embed with all the buttons,
+// no need to remember subcommands.
 export const STUDY_COMMAND = new SlashCommandBuilder()
   .setName("study")
-  .setDescription("📚 ฟังก์ชั่นเรียนหนังสือ — อัพไฟล์เพื่อให้บอทออกข้อสอบ")
-  .addSubcommand((s) =>
-    s
-      .setName("upload")
-      .setDescription("(แอดมิน) อัพโหลดไฟล์เพื่อสร้างข้อสอบใหม่")
-      .addAttachmentOption((o) =>
-        o
-          .setName("file")
-          .setDescription("ไฟล์ .docx / .xlsx / .pptx / .txt")
-          .setRequired(true),
-      ),
+  .setDescription("📚 เปิดหน้าควบคุมโหมดเรียนหนังสือ (UI กดปุ่มได้)")
+  .setDMPermission(false)
+  .toJSON();
+
+// Upload is the only thing that needs a file attachment, so it lives
+// as its own slash command. The /study panel tells users to use this.
+export const STUDY_UPLOAD_COMMAND = new SlashCommandBuilder()
+  .setName("study-upload")
+  .setDescription("(แอดมิน) อัพโหลดไฟล์เพื่อให้บอทสร้างข้อสอบใหม่")
+  .addAttachmentOption((o) =>
+    o
+      .setName("file")
+      .setDescription("ไฟล์ .docx / .xlsx / .pptx / .txt (≤10MB)")
+      .setRequired(true),
   )
-  .addSubcommand((s) =>
-    s.setName("start").setDescription("เริ่มทำข้อสอบที่อัพไว้"),
-  )
-  .addSubcommand((s) =>
-    s.setName("status").setDescription("ดูสถานะข้อสอบปัจจุบัน + คะแนนของแต่ละคน"),
-  )
-  .addSubcommand((s) =>
-    s.setName("reset").setDescription("(แอดมิน) ลบข้อสอบปัจจุบัน"),
-  )
-  .addSubcommand((s) =>
-    s
-      .setName("report")
-      .setDescription("(แอดมิน) สรุปผลข้อสอบ + วิเคราะห์ด้วย AI ส่งให้ยศครู"),
-  )
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
   .setDMPermission(false)
   .toJSON();
 
@@ -95,8 +87,8 @@ export async function registerCommands(client) {
   const rest = new REST({ version: "10" }).setToken(client.token);
   const appId = client.application?.id ?? client.user.id;
   const guildId = client.config.guildId;
-  const body = [SETTING_COMMAND, DEBUG_COMMAND, STUDY_COMMAND, CLASSROOM_COMMAND, NOTIFY_COMMAND, ...PRANK_COMMANDS];
-  const list = ["setting", "debug", "study", "classroom", "notify", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
+  const body = [SETTING_COMMAND, DEBUG_COMMAND, STUDY_COMMAND, STUDY_UPLOAD_COMMAND, CLASSROOM_COMMAND, NOTIFY_COMMAND, ...PRANK_COMMANDS];
+  const list = ["setting", "debug", "study", "study-upload", "classroom", "notify", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
     .map((n) => "/" + n)
     .join(" ");
 
