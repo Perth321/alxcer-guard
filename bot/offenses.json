@@ -7,8 +7,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 5,
-        "lastAt": 1779032113385,
+        "count": 6,
+        "lastAt": 1779032122400,
         "history": [
           {
             "at": 1778158739624,
@@ -48,6 +48,15 @@
           },
           {
             "at": 1779032113385,
+            "severity": 7,
+            "matched": "cặc",
+            "reason": "ใช้คำต้องห้าม: \"cặc\"",
+            "excerpt": "Con cặc",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1779032122400,
             "severity": 7,
             "matched": "cặc",
             "reason": "ใช้คำต้องห้าม: \"cặc\"",
