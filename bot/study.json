@@ -94,5 +94,13 @@
       "createdBy": "1395239010720415898"
     }
   },
-  "userProgress": {}
+  "userProgress": {
+    "1485726181398548490:1395239010720415898": {
+      "quizId": "q_mp98b4q0",
+      "qIdx": 5,
+      "answers": {},
+      "submitted": false,
+      "startedAt": 1778989330536
+    }
+  }
 }
