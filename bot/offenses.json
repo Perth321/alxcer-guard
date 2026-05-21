@@ -103,7 +103,22 @@
       "lastOffenseAt": 1778239550795,
       "muteUntil": 0,
       "lastWord": "ดูหี",
-      "lastSource": "voice"
+      "lastSource": "voice",
+      "chat": {
+        "count": 1,
+        "lastAt": 1779360530178,
+        "history": [
+          {
+            "at": 1779360530178,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "ไอ้เหี้ยม",
+            "action": "timeout_failed",
+            "source": "local"
+          }
+        ]
+      }
     },
     "1491387879648264347": {
       "count": 2,
