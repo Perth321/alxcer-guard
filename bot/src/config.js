@@ -25,6 +25,8 @@ const DEFAULTS = {
   studentRoleId: "",
   teacherRoleId: "",
   classDurationMinutes: 60,
+  // Discord user ID of the bot owner — gets full admin-level trust even without the Discord Administrator role.
+  ownerId: "",
   // Voice channels where the bot should join SILENTLY (no greeting.mp3, no
   // join-beep). Useful for dedicated study/class rooms where the greeting is
   // disruptive. List of channel IDs.
@@ -66,6 +68,7 @@ export function normalize(cfg) {
     studentRoleId: cfg.studentRoleId ? String(cfg.studentRoleId) : "",
     teacherRoleId: cfg.teacherRoleId ? String(cfg.teacherRoleId) : "",
     classDurationMinutes: clampInt(cfg.classDurationMinutes, 5, 600, 60),
+    ownerId: cfg.ownerId ? String(cfg.ownerId) : "",
     silentJoinChannelIds: Array.isArray(cfg.silentJoinChannelIds)
       ? Array.from(new Set(cfg.silentJoinChannelIds.filter((x) => typeof x === "string" && x).map(String)))
       : [],
