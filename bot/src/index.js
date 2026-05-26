@@ -124,7 +124,7 @@ import {
   thaiLabel,
   annotateVideo,
 } from "./vision.js";
-import { isAdmin, runAgent } from "./agent.js";
+import { isAdmin, setOwnerId, runAgent } from "./agent.js";
 import {
   listTimers as listTimersAll,
   dueTimers,
@@ -321,6 +321,11 @@ let lastSpeakingFlag = 0;
 let lastWatchdogRejoin = 0;
 let receiverHealthLogged = false;
 let notReadyTicks = 0;
+// Timestamp until which the bot's own TTS audio may echo back through room
+// microphones. Any transcription arriving before this time is suppressed to
+// prevent the bot from hearing itself and re-triggering the wake word.
+let botSpeakingUntil = 0;
+const ECHO_SUPPRESS_MS = 3_500; // ms of suppression AFTER bot finishes speaking
 
 const WATCHDOG_SECONDS = 60;
 const WATCHDOG_COOLDOWN_MS = 3 * 60 * 1000;
@@ -350,6 +355,7 @@ const runtime = {
   setConfig: (next) => {
     config = next;
     client.config = config;
+    if (config.ownerId) setOwnerId(config.ownerId);
   },
   requestRejoin: () => {
     if (!config.guildId) return;
@@ -553,6 +559,15 @@ async function handleVoiceTranscript(text, meta) {
   if (!text) return;
   const trimmed = text.trim();
   if (!trimmed) return;
+
+  // Suppress transcription while bot is speaking (or within echo-decay window).
+  // Without this, the bot's own TTS echoes through room mics → gets transcribed
+  // → "การ์ด" in the TTS response re-triggers the wake word → infinite loop.
+  if (Date.now() < botSpeakingUntil) {
+    console.log(`[transcribe] suppressed — bot speaking/echo window user=${meta.userId} text="${trimmed.slice(0, 60)}"`);
+    return;
+  }
+
   console.log(
     `[transcribe] user=${meta.userId} dur=${meta.durationSec?.toFixed(1)}s text="${trimmed.slice(0, 200)}"`,
   );
@@ -1120,6 +1135,8 @@ const TTS_TMP_DIR = "/tmp/alxcer-tts";
 try { fs.mkdirSync(TTS_TMP_DIR, { recursive: true }); } catch {}
 
 async function speakThai(connection, text, label = "tts") {
+  // Suppress transcription while bot is synthesizing + playing + echo-decay window.
+  botSpeakingUntil = Date.now() + 45_000;
   try {
     const buf = await synthesizeThai(text);
     const file = path.join(TTS_TMP_DIR, `${label}-${Date.now()}.mp3`);
@@ -1130,6 +1147,9 @@ async function speakThai(connection, text, label = "tts") {
   } catch (err) {
     console.warn(`[${label}] tts failed: ${err?.message?.slice(0, 200)}`);
     return false;
+  } finally {
+    // After TTS finishes (or fails), add a short echo-decay window then release.
+    botSpeakingUntil = Date.now() + ECHO_SUPPRESS_MS;
   }
 }
 
