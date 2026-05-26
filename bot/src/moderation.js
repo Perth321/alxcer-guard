@@ -82,9 +82,9 @@ export async function detectProfanity({ content, extraWords, useAI = true }) {
 }
 
 // Generate sassy roast reply when deleting a profane msg.
-export async function generateRoastReply({ username, matched, severity, language = "th" }) {
+export async function generateRoastReply({ userId, matched, severity, language = "th" }) {
   if (!aiAvailable()) {
-    return `<@${username}> ระวังคำพูดด้วยครับ — ใช้คำต้องห้าม โดน timeout ไปก่อน`;
+    return `<@${userId}> ระวังคำพูดด้วยครับ — ใช้คำต้องห้าม โดน timeout ไปก่อน`;
   }
   try {
     const msg = await generateReply({
@@ -99,12 +99,12 @@ export async function generateRoastReply({ username, matched, severity, language
     let text = (msg?.content || "").trim();
     if (!text) throw new Error("empty");
     // Replace placeholder with actual mention
-    text = text.replace(/@user\b/gi, `<@${username}>`);
-    if (!text.includes(`<@${username}>`)) text = `<@${username}> ${text}`;
+    text = text.replace(/@user\b/gi, `<@${userId}>`);
+    if (!text.includes(`<@${userId}>`)) text = `<@${userId}> ${text}`;
     return text.slice(0, 1000);
   } catch (err) {
     console.warn("[mod] roast gen failed:", err?.message);
-    return `<@${username}> ใช้คำหยาบโดน timeout ไปก่อน — เตือนแล้วนะ 😤`;
+    return `<@${userId}> ใช้คำหยาบโดน timeout ไปก่อน — เตือนแล้วนะ 😤`;
   }
 }
 
