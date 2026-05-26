@@ -19,6 +19,7 @@ concurrency:
 permissions:
   contents: write
   models: read
+  actions: write
 
 jobs:
   run-bot:
@@ -30,6 +31,9 @@ jobs:
         working-directory: bot
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          filter: blob:none
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -85,12 +89,11 @@ jobs:
       - name: Self-restart (keep 24/7 online)
         if: always()
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           echo "Triggering self-restart to keep bot 24/7 online..."
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-            -H "Authorization: token ${GH_PAT}" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/alxcer-guard.yml/dispatches" \
             -d '{"ref":"main"}')
@@ -98,6 +101,6 @@ jobs:
           if [ "$HTTP_STATUS" = "204" ]; then
             echo "Self-restart triggered successfully"
           else
-            echo "Self-restart failed with status $HTTP_STATUS (GH_PAT may not have workflow scope)"
+            echo "Self-restart failed with status $HTTP_STATUS"
             exit 1
           fi
