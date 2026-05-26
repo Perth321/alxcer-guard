@@ -27,7 +27,7 @@ const TARGET_QUESTIONS = 10;
 const MIN_QUESTIONS = 5;
 const LETTERS = ["A", "B", "C", "D"];
 
-const STUDY_PATH = path.resolve(process.cwd(), "bot/study.json");
+const STUDY_PATH = path.resolve(process.cwd(), "study.json"); // process.cwd() is already bot/ in the workflow
 
 // guildId -> { id, fileName, questions[], createdAt, createdBy }
 const activeQuiz = new Map();
