@@ -1,71 +1,11 @@
 {
   "users": {
     "603182413660684321": {
-      "count": 68,
-      "lastOffenseAt": 1778091409843,
-      "muteUntil": 0,
-      "lastWord": "ขอดูหี",
-      "lastSource": "voice",
-      "chat": {
-        "count": 6,
-        "lastAt": 1779032122400,
-        "history": [
-          {
-            "at": 1778158739624,
-            "severity": 7,
-            "matched": "เยส",
-            "reason": "มีคำหยาบที่สื่อถึงการล่วงละเมิดทางเพศ",
-            "excerpt": "โดนเยสมา ไง",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1778158952688,
-            "severity": 7,
-            "matched": "ฟรีคุวย",
-            "reason": "มีคำหยาบคายที่หยาบคายมาก",
-            "excerpt": "ไม่ต้องทำหรอก ให้ ฟรีคุวยพี่ใหญ่",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1778757368096,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "ไอเหี้ยพึ่งอ่าน556655",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1778757377160,
-            "severity": 7,
-            "matched": "สัส",
-            "reason": "ใช้คำต้องห้าม: \"สัส\"",
-            "excerpt": "ไอสัส มันด่า5555",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1779032113385,
-            "severity": 7,
-            "matched": "cặc",
-            "reason": "ใช้คำต้องห้าม: \"cặc\"",
-            "excerpt": "Con cặc",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1779032122400,
-            "severity": 7,
-            "matched": "cặc",
-            "reason": "ใช้คำต้องห้าม: \"cặc\"",
-            "excerpt": "Con cặc",
-            "action": "timeout_failed",
-            "source": "local"
-          }
-        ]
-      }
+      "count": 69,
+      "lastOffenseAt": 1779772570834,
+      "muteUntil": 1779776170834,
+      "lastWord": "หี",
+      "lastSource": "voice"
     },
     "946756535936233542": {
       "count": 14,
