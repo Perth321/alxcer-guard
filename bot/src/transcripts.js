@@ -13,7 +13,7 @@ export const TRANSCRIPTS_PATH = path.resolve(
 
 const RETENTION_MS = 7 * 24 * 3600 * 1000;
 const HARD_CAP = 5000;
-const REMOTE_DEBOUNCE_MS = 60_000;
+const REMOTE_DEBOUNCE_MS = 15 * 60 * 1000; // 15 minutes — was 60s which caused a commit per minute (7,500+ commits)
 
 let buffer = [];
 let remoteCallback = null;
