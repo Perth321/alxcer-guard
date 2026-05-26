@@ -41,34 +41,47 @@ async function commitFile(filePath, contentString, message) {
 
   const branch = getBranch();
   const url = `${API}/repos/${repo.owner}/${repo.name}/contents/${filePath}`;
-
-  let sha;
-  const head = await ghFetch(`${url}?ref=${encodeURIComponent(branch)}`);
-  if (head.ok) {
-    const data = await head.json();
-    sha = data.sha;
-  } else if (head.status !== 404) {
-    const text = await head.text();
-    throw new Error(`GitHub GET failed: ${head.status} ${text}`);
-  }
-
   const contentB64 = Buffer.from(contentString, "utf8").toString("base64");
 
-  const put = await ghFetch(url, {
-    method: "PUT",
-    body: JSON.stringify({
-      message,
-      content: contentB64,
-      branch,
-      sha,
-      committer: {
-        name: "Alxcer Guard Bot",
-        email: "alxcer-guard@users.noreply.github.com",
-      },
-    }),
-  });
+  // Retry up to 3 times on 409 SHA conflict (two concurrent commits can
+  // race between the GET-sha and PUT, causing a 422/409 from GitHub).
+  const MAX_RETRIES = 3;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    let sha;
+    const head = await ghFetch(`${url}?ref=${encodeURIComponent(branch)}`);
+    if (head.ok) {
+      const data = await head.json();
+      sha = data.sha;
+    } else if (head.status !== 404) {
+      const text = await head.text();
+      throw new Error(`GitHub GET failed: ${head.status} ${text}`);
+    }
 
-  if (!put.ok) {
+    const put = await ghFetch(url, {
+      method: "PUT",
+      body: JSON.stringify({
+        message,
+        content: contentB64,
+        branch,
+        sha,
+        committer: {
+          name: "Alxcer Guard Bot",
+          email: "alxcer-guard@users.noreply.github.com",
+        },
+      }),
+    });
+
+    if (put.ok) return;
+
+    // 409 = SHA conflict — another commit landed between our GET and PUT.
+    // Re-fetch the latest SHA and try again.
+    if ((put.status === 409 || put.status === 422) && attempt < MAX_RETRIES) {
+      const delay = attempt * 1500;
+      console.warn(`[github] commitFile conflict (attempt ${attempt}/${MAX_RETRIES}) for ${filePath} — retrying in ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
+      continue;
+    }
+
     const text = await put.text();
     throw new Error(`GitHub PUT failed: ${put.status} ${text}`);
   }
