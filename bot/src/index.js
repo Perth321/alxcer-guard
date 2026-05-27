@@ -3172,18 +3172,13 @@ client.on(Events.MessageCreate, async (msg) => {
     if (isOwnerMsg) {
       const ownerMedia = collectMediaAttachments(msg);
       if (ownerMedia.images.length || ownerMedia.videos.length) {
-        const ownerText = (msg.content || "").replace(/<@!?\d+>/g, "").trim();
-        if (ownerText && ownerText.length > 2) {
-          // รูป + ข้อความ → agent (รู้จักรูปและตอบคำถาม)
+        // เจ้าของส่งรูป → vision pipeline เสมอ (YOLO + vision-LLM เห็นภาพจริง)
+        // ไม่ว่าจะมีข้อความหรือไม่ก็ตาม
+        try {
+          await handleVisionReply(msg, "owner", ownerMedia);
+        } catch (err) {
+          console.warn("[owner-vision] crashed:", err?.message?.slice(0, 200));
           await handleAgentOrChatReply(msg, "owner", ownerMedia);
-        } else {
-          // รูปอย่างเดียว → vision pipeline (YOLO + vision-LLM)
-          try {
-            await handleVisionReply(msg, "owner", ownerMedia);
-          } catch (err) {
-            console.warn("[owner-vision] crashed:", err?.message?.slice(0, 200));
-            await handleAgentOrChatReply(msg, "owner", ownerMedia);
-          }
         }
       } else {
         // ข้อความล้วน → full agent
