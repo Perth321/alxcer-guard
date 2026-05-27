@@ -2145,6 +2145,36 @@ async function applyWordBan(guild, userId, word, source, transcript) {
 client.once(Events.ClientReady, async (c) => {
   console.log(`[ready] logged in as ${c.user.tag}`);
 
+  // Auto-detect the bot application's owner from Discord API.
+  // Discord's /oauth2/applications/@me endpoint returns the application info
+  // including the owner user ID — no manual config needed.
+  try {
+    const appRes = await fetch("https://discord.com/api/v10/oauth2/applications/@me", {
+      headers: { Authorization: `Bot ${TOKEN}` },
+    });
+    if (appRes.ok) {
+      const app = await appRes.json();
+      // Support both single-owner apps and team apps
+      const detectedOwnerId = app.team ? app.team.owner_user_id : app.owner?.id;
+      if (detectedOwnerId) {
+        if (config.ownerId !== detectedOwnerId) {
+          config.ownerId = detectedOwnerId;
+          client.config = config;
+          const { writeLocal } = await import("./config.js");
+          writeLocal(config);
+          console.log(`[boot] auto-detected owner ID: ${detectedOwnerId} (${app.owner?.username ?? app.team?.name ?? "unknown"})`);
+        } else {
+          console.log(`[boot] owner ID confirmed: ${detectedOwnerId}`);
+        }
+        setOwnerId(detectedOwnerId);
+      }
+    } else {
+      console.warn(`[boot] owner auto-detect failed: ${appRes.status}`);
+    }
+  } catch (err) {
+    console.warn("[boot] owner auto-detect error:", err?.message);
+  }
+
   try {
     await registerCommands(client);
   } catch (err) {
