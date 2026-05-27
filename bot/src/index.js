@@ -49,6 +49,7 @@ import {
   handleDebugCommand,
   handlePrankSound,
   isPrankCommand,
+  handleAiCommand,
 } from "./commands.js";
 import {
   buildQuizFromAttachment,
@@ -4050,6 +4051,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (isPrankCommand(interaction.commandName)) {
         await handlePrankSound(interaction, runtime, interaction.commandName);
+        return;
+      }
+      if (interaction.commandName === "ai") {
+        await handleAiCommand(interaction, config);
         return;
       }
     }
