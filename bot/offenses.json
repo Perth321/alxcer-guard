@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "voice",
       "chat": {
-        "count": 1,
-        "lastAt": 1779878498018,
+        "count": 2,
+        "lastAt": 1779888748291,
         "history": [
           {
             "at": 1779878498018,
@@ -16,6 +16,15 @@
             "matched": "หี",
             "reason": "ใช้คำต้องห้าม: \"หี\"",
             "excerpt": "การ์ด ค้นหารูปหี",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1779888748291,
+            "severity": 7,
+            "matched": "cặc",
+            "reason": "ใช้คำต้องห้าม: \"cặc\"",
+            "excerpt": "Con cặc",
             "action": "timeout_failed",
             "source": "local"
           }
