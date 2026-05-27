@@ -3167,26 +3167,6 @@ client.on(Events.MessageCreate, async (msg) => {
       return;
     }
 
-    // ===== OWNER: เจ้าของคุยได้เลย ไม่ต้อง mention หรือพิมพ์ชื่อการ์ด =====
-    const isOwnerMsg = !!(config.ownerId && msg.author.id === config.ownerId && aiAvailable());
-    if (isOwnerMsg) {
-      const ownerMedia = collectMediaAttachments(msg);
-      if (ownerMedia.images.length || ownerMedia.videos.length) {
-        // เจ้าของส่งรูป → vision pipeline เสมอ (YOLO + vision-LLM เห็นภาพจริง)
-        // ไม่ว่าจะมีข้อความหรือไม่ก็ตาม
-        try {
-          await handleVisionReply(msg, "owner", ownerMedia);
-        } catch (err) {
-          console.warn("[owner-vision] crashed:", err?.message?.slice(0, 200));
-          await handleAgentOrChatReply(msg, "owner", ownerMedia);
-        }
-      } else {
-        // ข้อความล้วน → full agent
-        await handleAgentOrChatReply(msg, "owner");
-      }
-      return;
-    }
-
     // ===== NEW: AI reply when the bot is addressed =====
     const triggered = isBotTriggered(msg);
     if (triggered && aiAvailable()) {
@@ -3194,14 +3174,9 @@ client.on(Events.MessageCreate, async (msg) => {
       // If the message has image / video attachments, route through the
       // vision pipeline (YOLO + vision-LLM) instead of plain chat.
       const media = collectMediaAttachments(msg);
-      const rawTextForRouting = (msg.content || "").replace(/<@!?\d+>/g, "").trim();
       if (media.images.length || media.videos.length) {
-        // If user has real text with images → route to agent (image search via Guard AI)
-        if (rawTextForRouting && rawTextForRouting.length > 2) {
-          await handleAgentOrChatReply(msg, triggered, media);
-          return;
-        }
-        // Otherwise use existing YOLO vision pipeline
+        // รูป/วิดีโอ → vision pipeline เสมอ (YOLO + Vision-LLM เห็นภาพจริง)
+        // ไม่ว่าจะมีข้อความหรือไม่ก็ตาม — agent ไม่มี tool วิเคราะห์รูปจริง
         try {
           await handleVisionReply(msg, triggered, media);
         } catch (err) {
