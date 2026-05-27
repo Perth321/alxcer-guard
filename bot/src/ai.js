@@ -43,15 +43,15 @@ const GEMINI_VISION_MODELS = (process.env.GEMINI_VISION_MODELS ||
 // OpenAI-branded models placed LAST to protect persona (they claim to be ChatGPT).
 // DeepSeek R1 outputs <think> blocks — stripped before returning.
 const GH_CHAT_MODELS = (process.env.GH_CHAT_MODELS ||
-  "microsoft/phi-4,deepseek/deepseek-v3-0324,openai/gpt-4.1,openai/gpt-4o"
+  "deepseek/deepseek-r1,meta/llama-4-maverick-instruct,deepseek/deepseek-v3-0324,microsoft/phi-4,openai/gpt-4.1,openai/gpt-4o"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GH_FAST_MODELS = (process.env.GH_FAST_MODELS ||
-  "microsoft/phi-4,deepseek/deepseek-v3-0324,openai/gpt-4.1,openai/gpt-4o"
+  "deepseek/deepseek-v3-0324,microsoft/phi-4,openai/gpt-4.1-mini,openai/gpt-4o-mini"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GH_VISION_MODELS = (process.env.GH_VISION_MODELS ||
-  "meta/llama-3.2-90b-vision-instruct,microsoft/phi-4-multimodal-instruct,meta/llama-3.2-11b-vision-instruct,openai/gpt-4o"
+  "meta/llama-4-maverick-instruct,meta/llama-3.2-90b-vision-instruct,microsoft/phi-4-multimodal-instruct,meta/llama-3.2-11b-vision-instruct,openai/gpt-4o"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 // ─── OpenRouter fallback chains ───────────────────────────────────────────────
@@ -123,6 +123,45 @@ function _isCooling(provider, model) {
   return true;
 }
 function _clearCool(provider, model) { _failedModelCache.delete(`${provider}:${model}`); }
+
+// ─── Owner-controlled forced model ───────────────────────────────────────────
+// When set, this entry is injected at the FRONT of every callAI chain so the
+// owner can override the auto-selection from Discord via /ai use <model>.
+let _forcedEntry = null; // { p: "gemini"|"github"|"openrouter", m: modelId }
+
+export function forceModel(provider, model) {
+  _forcedEntry = { p: provider, m: model };
+  console.log(`[ai] owner forced model → ${provider}:${model}`);
+}
+
+export function clearForceModel() {
+  const prev = _forcedEntry;
+  _forcedEntry = null;
+  console.log(`[ai] owner cleared forced model (was ${prev?.p}:${prev?.m})`);
+}
+
+export function getAllModels() {
+  return {
+    gemini: {
+      chat:   GEMINI_CHAT_MODELS,
+      fast:   GEMINI_FAST_MODELS,
+      vision: GEMINI_VISION_MODELS,
+    },
+    github: {
+      chat:   GH_CHAT_MODELS,
+      fast:   GH_FAST_MODELS,
+      vision: GH_VISION_MODELS,
+    },
+    openrouter: {
+      chat:   OPENROUTER_CHAT_FALLBACKS,
+      fast:   OPENROUTER_FAST_FALLBACKS,
+      vision: OPENROUTER_VISION_FALLBACKS,
+    },
+    forced: _forcedEntry,
+  };
+}
+
+
 function _coolMsForError(err) {
   const status = err?.status || 0;
   const msg    = err?.message || "";
@@ -163,6 +202,8 @@ export function getModelStatus() {
     lastModel:          _modelStats.lastModel,
     lastTask:           _modelStats.lastTask,
     lastAt:             _modelStats.lastAt,
+    forcedProvider:     _forcedEntry?.p ?? null,
+    forcedModel:        _forcedEntry?.m ?? null,
     geminiAvailable:    !!process.env.GEMINI_API_KEY,
     githubAvailable:    !!process.env.GITHUB_TOKEN,
     openrouterAvailable:!!process.env.OPENROUTER_API_KEY,
@@ -524,6 +565,10 @@ async function callAI({ geminiModels, openrouterModels, githubModels, interleave
       githubModels    || [],
       openrouterModels || [],
     );
+  }
+  // Owner override: inject forced model at the very front of the chain
+  if (_forcedEntry) {
+    chain = [_forcedEntry, ...chain.filter(e => !(e.p === _forcedEntry.p && e.m === _forcedEntry.m))];
   }
 
   // Filter out providers whose env keys are absent
