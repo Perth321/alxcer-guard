@@ -135,3 +135,11 @@ export async function commitTranscripts(
     message,
   );
 }
+
+export async function commitUpdateNotes(data, message = "chore: clear update notes after posting") {
+  await commitFile(
+    "bot/update_notes.json",
+    JSON.stringify(data, null, 2) + "\n",
+    message,
+  );
+}
