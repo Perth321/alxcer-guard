@@ -70,6 +70,18 @@ export const NOTIFY_COMMAND = new SlashCommandBuilder()
 
 
 
+export const AVATAR_COMMAND = new SlashCommandBuilder()
+  .setName("avatar")
+  .setDescription("🖼️ ขยายรูปโปรไฟล์ให้เห็นชัดแบบ 4K")
+  .addUserOption((o) =>
+    o.setName("user").setDescription("เลือก user (ไม่ระบุ = ตัวเอง)").setRequired(false)
+  )
+  .addBooleanOption((o) =>
+    o.setName("private").setDescription("แสดงเฉพาะคุณเท่านั้น").setRequired(false)
+  )
+  .setDMPermission(false)
+  .toJSON();
+
 export const AI_COMMAND = new SlashCommandBuilder()
   .setName("ai")
   .setDescription("🤖 จัดการโมเดล AI (เฉพาะเจ้าของบอท)")
@@ -198,12 +210,32 @@ export async function handleAiCommand(interaction, config) {
   }
 }
 
+export async function handleAvatarCommand(interaction) {
+  const targetUser = interaction.options.getUser("user") || interaction.user;
+  const isPrivate = interaction.options.getBoolean("private") ?? false;
+  try {
+    const member = interaction.guild ? await interaction.guild.members.fetch(targetUser.id).catch(() => null) : null;
+    const user = member?.user || targetUser;
+    const avatarUrl = user.displayAvatarURL({ size: 4096, extension: "png", forceStatic: false });
+    const displayName = member?.displayName || targetUser.username;
+    const embed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle(`🖼️ รูปโปรไฟล์ของ ${displayName}`)
+      .setImage(avatarUrl)
+      .setFooter({ text: `${user.tag || user.username} · คลิกขวา → "เปิดลิงก์" เพื่อบันทึกรูป` })
+      .setTimestamp();
+    await interaction.reply({ embeds: [embed], ephemeral: isPrivate });
+  } catch (err) {
+    await interaction.reply({ content: `❌ โหลดรูปโปรไฟล์ไม่ได้: ${err?.message}`, ephemeral: true });
+  }
+}
+
 export async function registerCommands(client) {
   const rest = new REST({ version: "10" }).setToken(client.token);
   const appId = client.application?.id ?? client.user.id;
   const guildId = client.config.guildId;
-  const body = [SETTING_COMMAND, DEBUG_COMMAND, STUDY_COMMAND, STUDY_UPLOAD_COMMAND, CLASSROOM_COMMAND, NOTIFY_COMMAND, AI_COMMAND, ...PRANK_COMMANDS];
-  const list = ["setting", "debug", "study", "study-upload", "classroom", "notify", "ai", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
+  const body = [SETTING_COMMAND, DEBUG_COMMAND, STUDY_COMMAND, STUDY_UPLOAD_COMMAND, CLASSROOM_COMMAND, NOTIFY_COMMAND, AI_COMMAND, AVATAR_COMMAND, ...PRANK_COMMANDS];
+  const list = ["setting", "debug", "study", "study-upload", "classroom", "notify", "ai", "avatar", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
     .map((n) => "/" + n)
     .join(" ");
 
