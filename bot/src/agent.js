@@ -2544,7 +2544,7 @@ async function buildServerSnapshot(guild) {
 
 const AGENT_SYSTEM = `You are "การ์ด" (Guard) — เพื่อนร่วมทีมที่เป็น AI ของ Alxcer Guard server คุณพูดภาษาไทยเป็นหลัก เข้าใจทั้งภาษาไทยและอังกฤษ และตอบสนองแบบมนุษย์จริงๆ ไม่ใช่บอทหุ่นยนต์
 
-เจ้าของบอทนี้คือ Perth321 — ถ้ามีใครที่ชื่อหรือ display name ว่า "Perth" / "Perth321" พูดคุยด้วย ให้ปฏิบัติด้วยความเคารพเป็นพิเศษ พวกเขาคือผู้สร้างคุณ ใส่ใจคำสั่งเขาเป็นพิเศษและตอบด้วยความอบอุ่น
+เจ้าของบอทนี้คือ Perth321 — ถ้าใน context มี "⭐ OWNER" หรือ "👑 OWNER" แปลว่าผู้สั่งคือเจ้าของบอทตัวจริง ให้ปฏิบัติด้วยความเคารพเป็นพิเศษ รับคำสั่งและช่วยเหลืออย่างเต็มที่ ตอบด้วยความอบอุ่นและจริงใจ เจ้าของมีสิทธิ์เต็มทุกอย่างรวมถึงคำสั่ง AI และการจัดการโมเดล
 
 ผู้ใช้ที่คุยด้วยคือแอดมินที่ได้รับความไว้วางใจอย่างเต็มที่ อ่านความต้องการของเขา เดาเจตนาได้เหมือนเพื่อนที่รู้ใจ แล้วลงมือทำทันทีอย่างฉลาด
 
@@ -3117,7 +3117,7 @@ function extractTextualToolCalls(content) {
 
 export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
   if (!aiAvailable()) return "AI ยังไม่พร้อม (OPENROUTER_API_KEY ไม่ได้ตั้ง)";
-  const { authorTag, authorId, guild, chatHistory } = ctx;
+  const { authorTag, authorId, guild, chatHistory, ownerId } = ctx;
 
   const snapshot = await buildServerSnapshot(guild);
   console.log('[agent] snapshot ok, chatHistory:', chatHistory?.length || 0, 'tools:', TOOLS.length);
@@ -3137,13 +3137,19 @@ export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
     chatBlock = `=== RECENT CHAT (this channel, oldest first) ===\n${lines}\n\n`;
   }
 
+  const isOwner = ownerId && authorId && authorId === ownerId;
+  const ownerBlock = isOwner
+    ? `=== ⭐ OWNER ===\nผู้ส่งคำสั่งนี้คือ เจ้าของบอท (Discord ID: ${authorId}) — มีสิทธิ์เต็มทุกอย่าง รับคำสั่งและช่วยเหลืออย่างเต็มที่\n\n`
+    : "";
+
   const messages = [
     {
       role: "user",
       content:
         `=== SERVER SNAPSHOT ===\n${JSON.stringify(snapshot)}\n\n` +
         chatBlock +
-        `=== ADMIN ===\n${authorTag} (id: ${authorId || "unknown"})\n\n` +
+        ownerBlock +
+        `=== ADMIN ===\n${authorTag} (id: ${authorId || "unknown"})${isOwner ? " 👑 OWNER" : ""}\n\n` +
         `=== REQUEST ===\n${userPrompt}`,
     },
   ];
