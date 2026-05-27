@@ -14,6 +14,7 @@ import {
   TextInputStyle,
 } from "discord.js";
 import { writeLocal, normalize } from "./config.js";
+import { getModelStatus, getAllModels, forceModel, clearForceModel } from "./ai.js";
 import { canPersistRemotely, commitConfig } from "./github.js";
 
 export const SETTING_COMMAND = new SlashCommandBuilder()
@@ -68,6 +69,37 @@ export const NOTIFY_COMMAND = new SlashCommandBuilder()
   .toJSON();
 
 
+
+export const AI_COMMAND = new SlashCommandBuilder()
+  .setName("ai")
+  .setDescription("🤖 จัดการโมเดล AI (เฉพาะเจ้าของบอท)")
+  .addSubcommand(sub =>
+    sub.setName("status").setDescription("ดูสถานะโมเดลปัจจุบัน")
+  )
+  .addSubcommand(sub =>
+    sub.setName("models").setDescription("ดูโมเดลทั้งหมด (จัดเรียงฉลาดสุด→โง่สุด)")
+  )
+  .addSubcommand(sub =>
+    sub.setName("use")
+      .setDescription("บังคับใช้โมเดลเฉพาะ (override auto-selection)")
+      .addStringOption(o =>
+        o.setName("provider").setDescription("provider: gemini / github / openrouter").setRequired(true)
+          .addChoices(
+            { name: "gemini", value: "gemini" },
+            { name: "github", value: "github" },
+            { name: "openrouter", value: "openrouter" },
+          )
+      )
+      .addStringOption(o =>
+        o.setName("model").setDescription("ชื่อโมเดล เช่น gemini-2.5-pro / openai/gpt-4.1").setRequired(true)
+      )
+  )
+  .addSubcommand(sub =>
+    sub.setName("reset").setDescription("กลับไปใช้ auto-selection (ยกเลิก override)")
+  )
+  .setDMPermission(false)
+  .toJSON();
+
 export const PRANK_COMMAND_DEFS = [
   { name: "rung", emoji: "🔔", desc: "เล่นเสียงกริ่งในห้องเสียง (เฉพาะแอดมิน)" },
   { name: "jinny", emoji: "🧞", desc: "เล่นเสียงของ Jinny ในห้องเสียง (เฉพาะแอดมิน)" },
@@ -83,12 +115,95 @@ export const PRANK_COMMANDS = PRANK_COMMAND_DEFS.map((p) =>
     .toJSON(),
 );
 
+
+export async function handleAiCommand(interaction, config) {
+  const ownerId = config?.ownerId;
+  if (!ownerId || interaction.user.id !== ownerId) {
+    await interaction.reply({
+      content: "❌ คำสั่งนี้สำหรับเจ้าของบอทเท่านั้น",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const sub = interaction.options.getSubcommand();
+
+  if (sub === "status") {
+    const s = getModelStatus();
+    const forced = s.forcedModel ? `🔒 **Forced:** \`${s.forcedProvider}:${s.forcedModel}\`\n` : "";
+    const lastUsed = s.lastModel
+      ? `⚡ **Last used:** \`${s.lastProvider}:${s.lastModel}\` (task: ${s.lastTask})`
+      : "ยังไม่มีการใช้งาน";
+    const providers = [
+      s.geminiAvailable    ? "✅ Gemini"    : "❌ Gemini",
+      s.githubAvailable    ? "✅ GitHub"    : "❌ GitHub",
+      s.openrouterAvailable? "✅ OpenRouter": "❌ OpenRouter",
+    ].join("  |  ");
+    const topList = s.top.length
+      ? s.top.map((t, i) => `${i+1}. \`${t.provider}:${t.model}\` × ${t.uses}`).join("\n")
+      : "_ยังไม่มีข้อมูล_";
+
+    const embed = new EmbedBuilder()
+      .setColor(0x6366f1)
+      .setTitle("🤖 AI Model Status")
+      .setDescription(`${forced}${lastUsed}\n\n**Providers:**\n${providers}`)
+      .addFields({ name: "📊 Top used models", value: topList });
+    await interaction.reply({ embeds: [embed], ephemeral: true });
+    return;
+  }
+
+  if (sub === "models") {
+    const all = getAllModels();
+    const fmt = (list) => list.map((m, i) => `${i+1}. \`${m}\``).join("\n");
+    const forced = all.forced ? `\n> 🔒 **Override active:** \`${all.forced.p}:${all.forced.m}\`\n` : "";
+
+    const embed = new EmbedBuilder()
+      .setColor(0x10b981)
+      .setTitle("🤖 โมเดลทั้งหมด (ฉลาดสุด → โง่สุด)")
+      .setDescription(`_เรียงลำดับตาม capability tier จากสูงสุดลงต่ำสุด_${forced}`)
+      .addFields(
+        { name: "🟦 Gemini — Chat", value: fmt(all.gemini.chat) || "_none_", inline: true },
+        { name: "🟦 Gemini — Fast", value: fmt(all.gemini.fast) || "_none_", inline: true },
+        { name: "🟦 Gemini — Vision", value: fmt(all.gemini.vision) || "_none_", inline: true },
+        { name: "🟩 GitHub — Chat", value: fmt(all.github.chat) || "_none_", inline: true },
+        { name: "🟩 GitHub — Fast", value: fmt(all.github.fast) || "_none_", inline: true },
+        { name: "🟩 GitHub — Vision", value: fmt(all.github.vision) || "_none_", inline: true },
+        { name: "🟧 OpenRouter — Chat", value: fmt(all.openrouter.chat) || "_none_", inline: true },
+        { name: "🟧 OpenRouter — Fast", value: fmt(all.openrouter.fast) || "_none_", inline: true },
+        { name: "🟧 OpenRouter — Vision", value: fmt(all.openrouter.vision) || "_none_", inline: true },
+      )
+      .setFooter({ text: "ใช้ /ai use <provider> <model> เพื่อ override" });
+    await interaction.reply({ embeds: [embed], ephemeral: true });
+    return;
+  }
+
+  if (sub === "use") {
+    const provider = interaction.options.getString("provider");
+    const model    = interaction.options.getString("model");
+    forceModel(provider, model);
+    await interaction.reply({
+      content: `✅ Override เรียบร้อย — บอทจะใช้ \`${provider}:${model}\` ก่อนเป็นอันดับแรกจนกว่าจะ reset\n⚠️ ถ้าโมเดลนี้ล้มเหลว บอทจะ fallback ไปโมเดลถัดไปอัตโนมัติ`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (sub === "reset") {
+    clearForceModel();
+    await interaction.reply({
+      content: "✅ Reset แล้ว — กลับไปใช้ auto-selection ตาม interleaved chain ปกติ",
+      ephemeral: true,
+    });
+    return;
+  }
+}
+
 export async function registerCommands(client) {
   const rest = new REST({ version: "10" }).setToken(client.token);
   const appId = client.application?.id ?? client.user.id;
   const guildId = client.config.guildId;
-  const body = [SETTING_COMMAND, DEBUG_COMMAND, STUDY_COMMAND, STUDY_UPLOAD_COMMAND, CLASSROOM_COMMAND, NOTIFY_COMMAND, ...PRANK_COMMANDS];
-  const list = ["setting", "debug", "study", "study-upload", "classroom", "notify", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
+  const body = [SETTING_COMMAND, DEBUG_COMMAND, STUDY_COMMAND, STUDY_UPLOAD_COMMAND, CLASSROOM_COMMAND, NOTIFY_COMMAND, AI_COMMAND, ...PRANK_COMMANDS];
+  const list = ["setting", "debug", "study", "study-upload", "classroom", "notify", "ai", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
     .map((n) => "/" + n)
     .join(" ");
 
