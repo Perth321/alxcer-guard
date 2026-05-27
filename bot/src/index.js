@@ -1,3 +1,4 @@
+// avatar command imported below
 import {
   Client,
   GatewayIntentBits,
@@ -50,7 +51,7 @@ import {
   handlePrankSound,
   isPrankCommand,
   handleAiCommand,
-} from "./commands.js";
+, handleAvatarCommand } from "./commands.js";
 import {
   buildQuizFromAttachment,
   getActiveQuiz,
@@ -2899,6 +2900,8 @@ const TOOL_LABEL = {
   read_own_log:     "📋 อ่าน Log",
   read_own_source:  "📁 อ่านซอร์ส",
   write_own_source: "✍️ แก้โค้ด + Repush",
+  generate_image:    "🎨 สร้างรูป AI",
+  get_avatar:        "🖼️ ขยายรูปโปรไฟล์",
   // Discord tools
   voice_mute:        "🔇 ปิดไมค์",
   voice_unmute:      "🎙️ เปิดไมค์",
@@ -4083,6 +4086,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       if (interaction.commandName === "ai") {
         await handleAiCommand(interaction, config);
+        return;
+      }
+      if (interaction.commandName === "avatar") {
+        await handleAvatarCommand(interaction);
         return;
       }
     }
