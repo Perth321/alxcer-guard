@@ -99,6 +99,7 @@ import {
   canPersistRemotely,
   commitOffenses,
   commitTranscripts,
+  commitUpdateNotes,
 } from "./github.js";
 import {
   isAvailable as isTranscriberAvailable,
@@ -2204,6 +2205,36 @@ client.once(Events.ClientReady, async (c) => {
   } catch (err) {
     console.error("[commands] register failed", err?.message);
   }
+  // ── Post update announcement if update_notes.json has pending notes ──────────
+  try {
+    const notesPath = path.join(__dirname, "..", "update_notes.json");
+    if (fs.existsSync(notesPath)) {
+      const notes = JSON.parse(fs.readFileSync(notesPath, "utf8"));
+      if (notes.pending && Array.isArray(notes.notes) && notes.notes.length) {
+        const guild = config.guildId ? await client.guilds.fetch(config.guildId).catch(() => null) : null;
+        const notifyCh = guild && config.notifyChannelId
+          ? await guild.channels.fetch(config.notifyChannelId).catch(() => null)
+          : null;
+        if (notifyCh?.isTextBased?.()) {
+          const embed = new EmbedBuilder()
+            .setColor(0x5865f2)
+            .setTitle("🤖 Alxcer Guard อัพเดทแล้ว!")
+            .setDescription(notes.notes.join("\n"))
+            .setFooter({ text: `v${notes.version || "?"} · ${notes.updatedAt || ""} · ✅ บอทพร้อมใช้งาน` })
+            .setTimestamp();
+          await notifyCh.send({ embeds: [embed] }).catch(() => {});
+          console.log("[boot] posted update announcement to", config.notifyChannelId);
+        }
+        // Clear pending flag and commit back so next restart doesn't re-post
+        const cleared = { ...notes, pending: false };
+        fs.writeFileSync(notesPath, JSON.stringify(cleared, null, 2) + "\n");
+        commitUpdateNotes(cleared).catch((e) => console.warn("[boot] commitUpdateNotes failed:", e?.message));
+      }
+    }
+  } catch (err) {
+    console.warn("[boot] update announcement failed:", err?.message);
+  }
+
 
   if (!config.guildId) return;
 
@@ -3133,6 +3164,31 @@ client.on(Events.MessageCreate, async (msg) => {
     });
     if (detection.profane) {
       await handleProfanityChat(msg, detection);
+      return;
+    }
+
+    // ===== OWNER: เจ้าของคุยได้เลย ไม่ต้อง mention หรือพิมพ์ชื่อการ์ด =====
+    const isOwnerMsg = !!(config.ownerId && msg.author.id === config.ownerId && aiAvailable());
+    if (isOwnerMsg) {
+      const ownerMedia = collectMediaAttachments(msg);
+      if (ownerMedia.images.length || ownerMedia.videos.length) {
+        const ownerText = (msg.content || "").replace(/<@!?\d+>/g, "").trim();
+        if (ownerText && ownerText.length > 2) {
+          // รูป + ข้อความ → agent (รู้จักรูปและตอบคำถาม)
+          await handleAgentOrChatReply(msg, "owner", ownerMedia);
+        } else {
+          // รูปอย่างเดียว → vision pipeline (YOLO + vision-LLM)
+          try {
+            await handleVisionReply(msg, "owner", ownerMedia);
+          } catch (err) {
+            console.warn("[owner-vision] crashed:", err?.message?.slice(0, 200));
+            await handleAgentOrChatReply(msg, "owner", ownerMedia);
+          }
+        }
+      } else {
+        // ข้อความล้วน → full agent
+        await handleAgentOrChatReply(msg, "owner");
+      }
       return;
     }
 
