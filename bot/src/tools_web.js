@@ -283,7 +283,7 @@ export async function generateImage(prompt, { width = 1024, height = 1024 } = {}
   if (!prompt) return { error: "prompt required" };
   const w = Math.min(Math.max(Number(width) || 1024, 256), 2048);
   const h = Math.min(Math.max(Number(height) || 1024, 256), 2048);
-  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=${w}&height=${h}&nologo=true&enhance=false&seed=${Math.floor(Math.random()*9999)}`;
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=${w}&height=${h}&model=flux&nologo=true&enhance=false&seed=${Math.floor(Math.random()*9999)}`;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
     if (!res.ok) return { error: `Pollinations returned ${res.status}` };
