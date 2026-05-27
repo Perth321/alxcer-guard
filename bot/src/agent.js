@@ -769,6 +769,21 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "get_avatar",
+      description: "ดูรูปโปรไฟล์ (avatar) ของ Discord user แบบขนาดใหญ่ชัด 4096px ส่งเป็น embed สวยงามทันที ใช้สำหรับ 'ขยายรูปโปรไฟล์ @user', 'รูป profile ของ X', 'ดูรูป avatar', 'โปรไฟล์ใคร'",
+      parameters: {
+        type: "object",
+        required: ["user_id"],
+        properties: {
+          user_id:    { type: "string", description: "Discord user ID" },
+          channel_id: { type: "string", description: "ส่งไปห้องไหน (default: ห้องปัจจุบัน)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "get_bot_info",
       description: "ดูสถานะบอท: uptime, ping, memory, guilds ใช้สำหรับ 'สถานะบอท', 'bot status', 'บอทโอเคไหม', 'ping เท่าไหร่'",
       parameters: { type: "object", properties: {} },
@@ -2191,6 +2206,30 @@ async function execTool(name, args, ctx) {
         .setTimestamp();
       await targetCh.send({ embeds: [embed], files: [attachment] });
       return { ok: true, prompt: args.prompt };
+    }
+
+    // ─── get_avatar ───────────────────────────────────────────────────────────
+    case "get_avatar": {
+      const targetCh = args.channel_id
+        ? await ctx.guild.channels.fetch(args.channel_id).catch(() => null)
+        : ctx.channel;
+      if (!targetCh?.isTextBased?.()) return { error: "channel not found" };
+      try {
+        const member = await ctx.guild.members.fetch(args.user_id);
+        const user = member.user;
+        const avatarUrl = user.displayAvatarURL({ size: 4096, extension: "png", forceStatic: false });
+        const { EmbedBuilder: _EB } = await import("discord.js");
+        const embed = new _EB()
+          .setColor(0x5865f2)
+          .setTitle(`🖼️ รูปโปรไฟล์ของ ${member.displayName}`)
+          .setImage(avatarUrl)
+          .setFooter({ text: `${user.tag || user.username} · คลิกขวา → "เปิดลิงก์" เพื่อดูรูปต้นฉบับ 4K` })
+          .setTimestamp();
+        await targetCh.send({ embeds: [embed] });
+        return { ok: true, user: member.displayName, avatar_url: avatarUrl };
+      } catch (err) {
+        return { error: err?.message || "get_avatar failed" };
+      }
     }
 
     // ─── create_poll ──────────────────────────────────────────────────────────
