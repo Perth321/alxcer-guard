@@ -736,6 +736,7 @@ async function handleWakeCommand({ userId, username, command, raw, isFollowUp })
           channel: replyChannel,
           authorTag: username || userId,
           authorId: userId,
+          ownerId: config.ownerId || null,
           offenses,
           persistOffenses: async () => persistOffenses(),
           chatHistory: [],
@@ -3004,6 +3005,7 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
           persistOffenses: async () => persistOffenses(),
           // Pass the last 50 messages so the agent has rich conversation
           // memory — references like "ทำอีกที", "คนเดิม", "ห้องเดิม" work.
+          ownerId: config.ownerId || null,
           chatHistory: recent.slice(-50).map((m) => ({
             author: m.author,
             authorId: m.authorId,
