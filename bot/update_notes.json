@@ -1,12 +1,12 @@
 {
-  "pending": false,
-  "version": "2.1.0",
+  "pending": true,
+  "version": "2.2.0",
   "updatedAt": "2026-05-27",
   "notes": [
-    "👑 **เจ้าของคุยกับบอทได้เลย** — ไม่ต้อง @mention หรือพิมพ์ 'การ์ด' บอทตอบทันทีเสมอ",
-    "🖼️ **Vision AI สำหรับเจ้าของ** — ส่งรูปมาได้เลย บอทจะวิเคราะห์ภาพจริง YOLO + Vision-LLM",
-    "🧠 **เรียงโมเดลฉลาดสุด → โง่สุด** — DeepSeek R1, Llama 4 Maverick, DeepSeek V3, Phi-4 ... (GitHub+Gemini+OpenRouter)",
-    "🤖 **คำสั่ง `/ai` ใหม่** (เฉพาะเจ้าของ) — `/ai status`, `/ai models`, `/ai use`, `/ai reset`",
-    "⚡ **รีสตาร์ทอัตโนมัติ** — push code ใหม่ บอทรีสตาร์ทได้เลย ไม่ต้องรอ 6 ชั่วโมง"
+    "🔧 **แก้ GitHub Models URL** — อัพเดทเป็น endpoint ใหม่ (models.github.ai)",
+    "🆔 **แก้ชื่อโมเดลให้ถูกต้อง** — llama-4-maverick, grok-3, mistral-medium รุ่นล่าสุด",
+    "🖼️ **Vision ทำงานแล้ว** — GitHub Models แปลงรูปเป็น base64 อัตโนมัติ ไม่ต้องส่ง URL",
+    "🔔 **เรียกการ์ดตามปกติ** — พิมพ์ 'การ์ด' หรือ @mention เหมือนเดิม ประหยัด token",
+    "👁️ **Vision ทุกรูป** — ส่งรูป+ข้อความก็เห็นภาพจริงแล้ว ไม่แค่รูปอย่างเดียว"
   ]
 }
