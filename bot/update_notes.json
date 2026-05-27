@@ -1,0 +1,12 @@
+{
+  "pending": true,
+  "version": "2.1.0",
+  "updatedAt": "2026-05-27",
+  "notes": [
+    "👑 **เจ้าของคุยกับบอทได้เลย** — ไม่ต้อง @mention หรือพิมพ์ 'การ์ด' บอทตอบทันทีเสมอ",
+    "🖼️ **Vision AI สำหรับเจ้าของ** — ส่งรูปมาได้เลย บอทจะวิเคราะห์ภาพจริง YOLO + Vision-LLM",
+    "🧠 **เรียงโมเดลฉลาดสุด → โง่สุด** — DeepSeek R1, Llama 4 Maverick, DeepSeek V3, Phi-4 ... (GitHub+Gemini+OpenRouter)",
+    "🤖 **คำสั่ง `/ai` ใหม่** (เฉพาะเจ้าของ) — `/ai status`, `/ai models`, `/ai use`, `/ai reset`",
+    "⚡ **รีสตาร์ทอัตโนมัติ** — push code ใหม่ บอทรีสตาร์ทได้เลย ไม่ต้องรอ 6 ชั่วโมง"
+  ]
+}
