@@ -22,7 +22,7 @@
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const GEMINI_BASE    = "https://generativelanguage.googleapis.com/v1beta/models";
-const GH_BASE        = "https://models.inference.ai.azure.com";
+const GH_BASE        = "https://models.github.ai/inference";
 
 // ─── Gemini model lists ───────────────────────────────────────────────────────
 // Keep 2.5/2.0 as deep fallbacks — their quotas are separate from the 3.x pool.
@@ -43,7 +43,7 @@ const GEMINI_VISION_MODELS = (process.env.GEMINI_VISION_MODELS ||
 // OpenAI-branded models placed LAST to protect persona (they claim to be ChatGPT).
 // DeepSeek R1 outputs <think> blocks — stripped before returning.
 const GH_CHAT_MODELS = (process.env.GH_CHAT_MODELS ||
-  "deepseek/deepseek-r1,meta/llama-4-maverick-instruct,deepseek/deepseek-v3-0324,microsoft/phi-4,openai/gpt-4.1,openai/gpt-4o"
+  "deepseek/deepseek-r1,deepseek/deepseek-v3-0324,meta/llama-4-maverick-17b-128e-instruct-fp8,meta/llama-4-scout-17b-16e-instruct,xai/grok-3,xai/grok-3-mini,microsoft/phi-4,openai/gpt-4.1,openai/gpt-4o"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GH_FAST_MODELS = (process.env.GH_FAST_MODELS ||
@@ -51,7 +51,7 @@ const GH_FAST_MODELS = (process.env.GH_FAST_MODELS ||
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GH_VISION_MODELS = (process.env.GH_VISION_MODELS ||
-  "meta/llama-4-maverick-instruct,meta/llama-3.2-90b-vision-instruct,microsoft/phi-4-multimodal-instruct,meta/llama-3.2-11b-vision-instruct,openai/gpt-4o"
+  "meta/llama-4-maverick-17b-128e-instruct-fp8,meta/llama-4-scout-17b-16e-instruct,openai/gpt-4.1,openai/gpt-4o,mistral-ai/mistral-medium-2505,meta/llama-3.2-90b-vision-instruct,microsoft/phi-4-multimodal-instruct,meta/llama-3.2-11b-vision-instruct"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 // ─── OpenRouter fallback chains ───────────────────────────────────────────────
@@ -289,11 +289,49 @@ function _stripThinkBlocks(text) {
   return text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 }
 
+async function _fetchImageAsBase64(url) {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(`fetch ${url} → ${r.status}`);
+    const ct = r.headers.get("content-type") || "image/jpeg";
+    const mime = ct.split(";")[0] || "image/jpeg";
+    const buf = Buffer.from(await r.arrayBuffer());
+    return `data:${mime};base64,${buf.toString("base64")}`;
+  } catch { return url; }
+}
+
+async function _prepareMessagesForGH(messages) {
+  const out = [];
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) { out.push(msg); continue; }
+    const parts = [];
+    for (const part of msg.content) {
+      if (part.type === "image_url") {
+        const url = part.image_url?.url || "";
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+          const b64 = await _fetchImageAsBase64(url);
+          parts.push({ type:"image_url", image_url:{ url: b64 } });
+        } else {
+          parts.push(part);
+        }
+      } else {
+        parts.push(part);
+      }
+    }
+    out.push({ ...msg, content: parts });
+  }
+  return out;
+}
+
 async function _callGitHubModelsOnce({ model, messages, tools, tool_choice, max_tokens, temperature, response_format }) {
   const token = process.env.GITHUB_TOKEN;
   if (!token) throw new Error("GITHUB_TOKEN not set");
 
-  const body = { model, messages, max_tokens, temperature };
+  // GitHub Models doesn't accept remote image URLs — pre-fetch to base64
+  const hasImages = messages.some(m => Array.isArray(m.content) && m.content.some(p => p.type === "image_url"));
+  const safeMessages = hasImages ? await _prepareMessagesForGH(messages) : messages;
+
+  const body = { model, messages: safeMessages, max_tokens, temperature };
   if (tools?.length) { body.tools = tools; if (tool_choice) body.tool_choice = tool_choice; }
   if (response_format) body.response_format = response_format;
 
