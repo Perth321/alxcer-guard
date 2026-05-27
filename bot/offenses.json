@@ -38,26 +38,17 @@
       "lastWord": "หี",
       "lastSource": "voice",
       "chat": {
-        "count": 2,
-        "lastAt": 1778765852802,
+        "count": 1,
+        "lastAt": 1779888770954,
         "history": [
           {
-            "at": 1778765142480,
+            "at": 1779888770954,
             "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "ฟังเรื่องหี",
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควยควย",
             "action": "timeout_failed",
             "source": "local"
-          },
-          {
-            "at": 1778765852802,
-            "severity": 8,
-            "matched": "กะเทย",
-            "reason": "ใช้คำหยาบคายต่อคน",
-            "excerpt": "เล็กเป็นกะเทยใช่ไหม",
-            "action": "timeout_failed",
-            "source": "ai"
           }
         ]
       }
