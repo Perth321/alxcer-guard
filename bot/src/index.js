@@ -1,4 +1,3 @@
-// avatar command imported below
 import {
   Client,
   GatewayIntentBits,
@@ -51,7 +50,8 @@ import {
   handlePrankSound,
   isPrankCommand,
   handleAiCommand,
-, handleAvatarCommand } from "./commands.js";
+  handleAvatarCommand,
+} from "./commands.js";
 import {
   buildQuizFromAttachment,
   getActiveQuiz,
@@ -3009,7 +3009,7 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
   // Admin agent path — try first, but if it fails fall through to plain chat
   let attemptedAgent = false;
   console.log('[agent] checking isAdmin for', author.tag, '| member perms bitfield:', member?.permissions?.bitfield?.toString(16));
-  if (isAdmin(member)) {
+  if (author.id === (config.ownerId || "")) {
     attemptedAgent = true;
     // Real-time thinking display
     let thinkingMsg = null;
