@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "voice",
       "chat": {
-        "count": 2,
-        "lastAt": 1779888748291,
+        "count": 3,
+        "lastAt": 1780108612412,
         "history": [
           {
             "at": 1779878498018,
@@ -25,6 +25,15 @@
             "matched": "cặc",
             "reason": "ใช้คำต้องห้าม: \"cặc\"",
             "excerpt": "Con cặc",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1780108612412,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "ไอเหี้จเมืาอคืน ผมดูหนังจนหลับ",
             "action": "timeout_failed",
             "source": "local"
           }
