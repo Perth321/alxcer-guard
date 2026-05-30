@@ -890,6 +890,26 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "stylize_text",
+      description: "แปลงข้อความเป็น Unicode font สวยๆ สำหรับชื่อ category, voice channel, role, embed ใน Discord ใช้สำหรับ 'เปลี่ยนฟอนต์', 'ฟอนต์สวยๆ', 'ตัวอักษรแฟนซี', 'ชื่อห้องสวยๆ', 'font discord'",
+      parameters: {
+        type: "object",
+        required: ["text"],
+        properties: {
+          text:  { type: "string", description: "ข้อความที่ต้องการแปลง" },
+          style: {
+            type: "string",
+            description: "สไตล์ฟอนต์",
+            enum: ["bold","italic","bold_italic","script","bold_script","fraktur","double","mono","wide","small_caps"],
+          },
+          show_all: { type: "boolean", description: "true = แสดงทุกสไตล์พร้อมกัน (เพื่อให้เลือก)" },
+        },
+      },
+    },
+  },
 ];
 ];
 ;
@@ -1036,7 +1056,33 @@ async function execTool(name, args, ctx) {
   // hierarchy, missing perms, etc.), and those errors will surface
   // naturally to the agent so it can explain them.
 
-  switch (name) {
+  
+// ─── Unicode font conversion utility ─────────────────────────────────────────
+function _fontify(text, style) {
+  const T = {
+    bold:        { a:0x1D41A, A:0x1D400, n:0x1D7CE },
+    italic:      { a:0x1D44E, A:0x1D434, ex:{ h:'\u210E', B:'\u212C', E:'\u2130', F:'\u2131', H:'\u210B', I:'\u2110', L:'\u2112', M:'\u2133', R:'\u211B' } },
+    bold_italic: { a:0x1D482, A:0x1D468, n:0x1D7CE },
+    script:      { a:0x1D4B6, A:0x1D49C, ex:{ B:'\u212C', E:'\u2130', F:'\u2131', H:'\u210B', I:'\u2110', L:'\u2112', M:'\u2133', R:'\u211B', e:'\u212F', g:'\u210A', o:'\u2134' } },
+    bold_script: { a:0x1D4EA, A:0x1D4D0 },
+    fraktur:     { a:0x1D51E, A:0x1D504, ex:{ C:'\u212D', H:'\u210C', I:'\u2111', R:'\u211C', Z:'\u2128' } },
+    double:      { a:0x1D552, A:0x1D538, n:0x1D7D8, ex:{ C:'\u2102', H:'\u210D', N:'\u2115', P:'\u2119', Q:'\u211A', R:'\u211D', Z:'\u2124' } },
+    mono:        { a:0x1D68A, A:0x1D670, n:0x1D7F6 },
+  };
+  if (style === 'wide') return [...text].map(c => { const code=c.charCodeAt(0); if(code>=0x21&&code<=0x7E) return String.fromCodePoint(code-0x21+0xFF01); return c===' '?'\u3000':c; }).join('');
+  if (style === 'small_caps') { const m={a:'ᴀ',b:'ʙ',c:'ᴄ',d:'ᴅ',e:'ᴇ',f:'ꜰ',g:'ɢ',h:'ʜ',i:'ɪ',j:'ᴊ',k:'ᴋ',l:'ʟ',m:'ᴍ',n:'ɴ',o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',s:'s',t:'ᴛ',u:'ᴜ',v:'ᴠ',w:'ᴡ',x:'x',y:'ʏ',z:'ᴢ'}; return [...text].map(c=>m[c.toLowerCase()]||c).join(''); }
+  const tbl=T[style]; if(!tbl) return text;
+  return [...text].map(c => {
+    if(tbl.ex?.[c]) return tbl.ex[c];
+    const code=c.charCodeAt(0);
+    if(code>=97&&code<=122) return String.fromCodePoint(tbl.a+code-97);
+    if(code>=65&&code<=90)  return String.fromCodePoint(tbl.A+code-65);
+    if(tbl.n&&code>=48&&code<=57) return String.fromCodePoint(tbl.n+code-48);
+    return c;
+  }).join('');
+}
+
+switch (name) {
     case "resolve_user": {
       const found = await fuzzyFindMembers(guild, args.query);
       return {
@@ -2148,6 +2194,48 @@ async function execTool(name, args, ctx) {
       }
 
       return { ok: true, steps: log.length, log: log.slice(0, 30) };
+    }
+
+
+    // ─── stylize_text ─────────────────────────────────────────────────────────
+    case "stylize_text": {
+      const STYLE_LABELS = {
+        bold:        "𝗕𝗼𝗹𝗱",
+        italic:      "𝐼𝑡𝑎𝑙𝑖𝑐",
+        bold_italic: "𝙱𝚘𝚕𝚍 𝙸𝚝𝚊𝚕𝚒𝚌",
+        script:      "𝒮𝒸𝓇𝒾𝓅𝓉",
+        bold_script: "𝓑𝓸𝓵𝓭 𝓢𝓬𝓻𝓲𝓹𝓽",
+        fraktur:     "𝔉𝔯𝔞𝔨𝔱𝔲𝔯",
+        double:      "𝔻𝕠𝕦𝕓𝕝𝕖",
+        mono:        "𝙼𝚘𝚗𝚘",
+        wide:        "Ｗｉｄｅ",
+        small_caps:  "Sᴍᴀʟʟ ᴄᴀᴘs",
+      };
+      const inputText = String(args.text || "").slice(0, 80);
+      if (!inputText) return { error: "text required" };
+
+      if (args.show_all) {
+        // Show all styles as an embed
+        const { EmbedBuilder: _SE } = await import("discord.js");
+        const fields = Object.entries(STYLE_LABELS).map(([key, label]) => ({
+          name: label,
+          value: `\`${_fontify(inputText, key)}\``,
+          inline: false,
+        }));
+        const embed = new _SE()
+          .setColor(0x9b59b6)
+          .setTitle("✨ Unicode Font Styles")
+          .setDescription(`ข้อความ: **${inputText}**
+เลือกสไตล์แล้วบอกการ์ด เช่น "เอาแบบ bold_script"`)
+          .addFields(fields)
+          .setFooter({ text: "ใช้ได้กับชื่อ category · voice channel · role · embed" });
+        await ctx.channel.send({ embeds: [embed] });
+        return { ok: true, preview: "แสดงทุกสไตล์แล้ว" };
+      }
+
+      const style = args.style || "bold_script";
+      const result = _fontify(inputText, style);
+      return { ok: true, original: inputText, style, result, tip: "ใช้ชื่อนี้ได้กับ: category, voice channel, role, embed title" };
     }
 
     case "create_file": {
