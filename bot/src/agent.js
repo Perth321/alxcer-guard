@@ -943,7 +943,6 @@ const TOOLS = [
     },
   },
 ];
-];
 ;
 
 
@@ -2219,8 +2218,7 @@ switch (name) {
       if (args.announce_channel) {
         const annCh = channelMap[args.announce_channel] || guild.channels.cache.find(c => c.name === args.announce_channel);
         if (annCh?.isTextBased()) {
-          const embed = new _FSEmbed().setColor(0x2ecc71).setTitle("✅ Setup เสร็จแล้ว!").setDescription(log.join("
-").slice(0, 2000)).setTimestamp();
+          const embed = new _FSEmbed().setColor(0x2ecc71).setTitle("✅ Setup เสร็จแล้ว!").setDescription(log.join("\n").slice(0, 2000)).setTimestamp();
           await annCh.send({ embeds: [embed] });
         }
       }
@@ -2353,8 +2351,7 @@ switch (name) {
 
       // Send preview embed
       const { EmbedBuilder: _BE } = await import("discord.js");
-      const previewText = previews.slice(0, 20).join('
-') + (previews.length > 20 ? `
+      const previewText = previews.slice(0, 20).join('\n') + (previews.length > 20 ? `
 …+${previews.length-20} รายการ` : '');
       const embed = new _BE()
         .setColor(preview ? 0xf39c12 : 0x2ecc71)
@@ -2366,7 +2363,7 @@ switch (name) {
           { name: preview ? 'จะ rename' : 'Renamed', value: `${preview?previews.length:renamed} ห้อง`, inline: true },
         );
       if (preview) embed.setFooter({ text: 'พูด "ยืนยัน beautify" หรือ "ทำเลย" เพื่อ rename จริง' });
-      await ctx.channel.send({ embeds: [embed] });
+      await channel.send({ embeds: [embed] });
 
       return preview
         ? { ok: true, preview: true, will_rename: previews.length }
@@ -2405,7 +2402,7 @@ switch (name) {
 เลือกสไตล์แล้วบอกการ์ด เช่น "เอาแบบ bold_script"`)
           .addFields(fields)
           .setFooter({ text: "ใช้ได้กับชื่อ category · voice channel · role · embed" });
-        await ctx.channel.send({ embeds: [embed] });
+        await channel.send({ embeds: [embed] });
         return { ok: true, preview: "แสดงทุกสไตล์แล้ว" };
       }
 
