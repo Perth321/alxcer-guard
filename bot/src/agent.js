@@ -20,6 +20,29 @@ import {
   formatClockBangkok,
 } from "./timers.js";
 
+// ─── Role panel button toggle handler (called from index.js InteractionCreate) ───
+export async function handleRolePanelButton(interaction) {
+  // customId = "role_panel:<role_id>"
+  const roleId = interaction.customId.split(":")[1];
+  if (!roleId) return false;
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    const role = interaction.guild.roles.cache.get(roleId);
+    if (!role) { await interaction.editReply({ content: "❌ ยศนี้ไม่มีแล้วในเซิร์ฟเวอร์" }); return true; }
+    const member = interaction.member;
+    if (member.roles.cache.has(roleId)) {
+      await member.roles.remove(role);
+      await interaction.editReply({ content: `✅ คืนยศ **${role.name}** แล้ว` });
+    } else {
+      await member.roles.add(role);
+      await interaction.editReply({ content: `✅ ได้รับยศ **${role.name}** แล้ว 🎉` });
+    }
+  } catch (err) {
+    await interaction.editReply({ content: `❌ ${err?.message || "เกิดข้อผิดพลาด"}` }).catch(() => {});
+  }
+  return true;
+}
+
 // Owner ID (set at startup from config.ownerId). Owner gets full admin trust
 // even without the Discord Administrator permission flag.
 let _ownerId = "";
@@ -788,7 +811,86 @@ const TOOLS = [
       description: "ดูสถานะบอท: uptime, ping, memory, guilds ใช้สำหรับ 'สถานะบอท', 'bot status', 'บอทโอเคไหม', 'ping เท่าไหร่'",
       parameters: { type: "object", properties: {} },
     },
-  }
+  },
+  {
+    type: "function",
+    function: {
+      name: "setup_role_panel",
+      description: "สร้างปุ่มรับยศ (role panel) ใน channel ที่กำหนด ผู้ใช้กดปุ่มเพื่อรับ/คืนยศได้เอง รองรับหลายยศพร้อมกัน ใช้สำหรับ 'สร้างที่กดรับยศ', 'ทำปุ่มยศ', 'role panel', 'self-role', 'เพศ/ที่อยู่/สี role'",
+      parameters: {
+        type: "object",
+        required: ["roles"],
+        properties: {
+          channel_id: { type: "string", description: "ห้องที่จะโพสต์ panel (default: ห้องปัจจุบัน)" },
+          title:      { type: "string", description: "หัวข้อ embed เช่น '🎮 เลือกยศเกม'" },
+          description:{ type: "string", description: "คำอธิบายใต้หัวข้อ" },
+          color:      { type: "string", description: "สีแถบ embed เช่น 'blue','purple','#ff6b6b'" },
+          roles: {
+            type: "array",
+            description: "รายการยศ [{role_id, label, emoji?}]",
+            items: {
+              type: "object",
+              properties: {
+                role_id: { type: "string" },
+                label:   { type: "string", description: "ชื่อบนปุ่ม เช่น 'เพศชาย'" },
+                emoji:   { type: "string", description: "emoji หน้าปุ่ม เช่น '♂️'" },
+              },
+              required: ["role_id", "label"],
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "set_channel_permissions",
+      description: "ตั้งสิทธิ์ channel สำหรับ role หรือ user เฉพาะ — allow/deny/neutral สำหรับ view, send, react, attach, connect, speak, manage ใช้สำหรับ 'ล็อค channel', 'ห้ามพิมพ์ใน X', 'ให้เฉพาะยศ A เห็น', 'ซ่อน channel'",
+      parameters: {
+        type: "object",
+        required: ["channel_id", "target_id"],
+        properties: {
+          channel_id: { type: "string" },
+          target_id:  { type: "string", description: "Role ID หรือ User ID" },
+          target_type:{ type: "string", enum: ["role","member"], description: "default: role" },
+          allow:  { type: "array", items:{ type:"string" }, description: "สิทธิ์ที่จะ allow: view_channel, send_messages, add_reactions, attach_files, connect, speak, manage_messages" },
+          deny:   { type: "array", items:{ type:"string" }, description: "สิทธิ์ที่จะ deny" },
+          neutral:{ type: "array", items:{ type:"string" }, description: "สิทธิ์ที่จะ reset (inherit)" },
+          reason: { type: "string" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "full_server_setup",
+      description: "Setup เซิร์ฟเวอร์แบบครบจบในคำสั่งเดียว: สร้าง roles, channels, permissions, role panels ตาม spec ที่กำหนด Alex ใช้คำสั่งนี้เพื่อสร้าง/จัดระเบียบเซิร์ฟเวอร์ใหม่ทั้งหมด",
+      parameters: {
+        type: "object",
+        properties: {
+          roles: {
+            type: "array",
+            description: "roles ที่จะสร้าง [{name, color?, hoist?, mentionable?, permissions?}]",
+            items: { type: "object" },
+          },
+          categories: {
+            type: "array",
+            description: "categories + channels [{name, channels:[{name, type?, topic?, view_roles?, send_roles?, deny_roles?}]}]",
+            items: { type: "object" },
+          },
+          role_panels: {
+            type: "array",
+            description: "role panels ที่จะสร้างหลัง setup [{channel_name, title, roles:[{role_name, label, emoji?}]}]",
+            items: { type: "object" },
+          },
+          announce_channel: { type: "string", description: "ชื่อ channel สำหรับประกาศว่า setup เสร็จแล้ว" },
+        },
+      },
+    },
+  },
+];
 ];
 ;
 
@@ -1857,6 +1959,195 @@ async function execTool(name, args, ctx) {
         }
       }
       return { ok: true, theme: args.theme, ...result };
+    }
+
+    // ─── setup_role_panel ────────────────────────────────────────────────────
+    case "setup_role_panel": {
+      const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder: _RPEmbed } = await import("discord.js");
+      const targetCh = args.channel_id
+        ? await guild.channels.fetch(args.channel_id).catch(() => channel)
+        : channel;
+      if (!targetCh?.isTextBased?.()) return { error: "channel not found or not text" };
+      const roles = args.roles || [];
+      if (!roles.length) return { error: "roles array required" };
+      
+    const COLOR_MAP = { red:0xe74c3c, blue:0x3498db, green:0x2ecc71, yellow:0xf1c40f,
+      purple:0x9b59b6, orange:0xe67e22, pink:0xff6b9d, gold:0xf39c12, cyan:0x1abc9c, white:0xffffff, black:0x2c2f33 };
+    function resolveColor(c) {
+      if (!c) return 0x5865f2;
+      if (/^#[0-9a-f]{6}$/i.test(c)) return parseInt(c.slice(1), 16);
+      return COLOR_MAP[c.toLowerCase()] ?? 0x5865f2;
+    }
+      const embed = new _RPEmbed()
+        .setColor(resolveColor(args.color))
+        .setTitle(args.title || "🎭 เลือกยศของคุณ")
+        .setDescription(args.description || "กดปุ่มด้านล่างเพื่อรับหรือคืนยศ")
+        .setFooter({ text: "กดซ้ำเพื่อคืนยศ" });
+      // Build button rows (max 5 per row, max 5 rows = 25 buttons)
+      const rows = [];
+      for (let i = 0; i < Math.min(roles.length, 25); i += 5) {
+        const chunk = roles.slice(i, i + 5);
+        const row = new ActionRowBuilder().addComponents(
+          chunk.map(r => {
+            const btn = new ButtonBuilder()
+              .setCustomId(`role_panel:${r.role_id}`)
+              .setLabel(String(r.label).slice(0, 80))
+              .setStyle(ButtonStyle.Secondary);
+            if (r.emoji) try { btn.setEmoji(r.emoji); } catch {}
+            return btn;
+          })
+        );
+        rows.push(row);
+      }
+      const panelMsg = await targetCh.send({ embeds: [embed], components: rows });
+      return { ok: true, message_id: panelMsg.id, channel: targetCh.name, role_count: roles.length };
+    }
+
+    // ─── set_channel_permissions ─────────────────────────────────────────────
+    case "set_channel_permissions": {
+      const { PermissionsBitField } = await import("discord.js");
+      const PERM_MAP = {
+        view_channel: "ViewChannel", send_messages: "SendMessages",
+        add_reactions: "AddReactions", attach_files: "AttachFiles",
+        connect: "Connect", speak: "Speak", manage_messages: "ManageMessages",
+        embed_links: "EmbedLinks", read_message_history: "ReadMessageHistory",
+        use_slash_commands: "UseApplicationCommands",
+      };
+      const ch = await guild.channels.fetch(args.channel_id).catch(() => null);
+      if (!ch) return { error: "channel not found" };
+      const targetType = args.target_type || "role";
+      let target;
+      if (targetType === "member") {
+        target = await guild.members.fetch(args.target_id).catch(() => null);
+      } else {
+        target = guild.roles.cache.get(args.target_id) || await guild.roles.fetch(args.target_id).catch(() => null);
+      }
+      if (!target) return { error: "role/member not found" };
+      const toFlags = (list) => {
+        const flags = {};
+        for (const p of (list || [])) {
+          const key = PERM_MAP[p] || p;
+          flags[key] = true;
+        }
+        return flags;
+      };
+      const allow = toFlags(args.allow);
+      const deny  = {};
+      for (const p of (args.deny || [])) { const key = PERM_MAP[p] || p; deny[key] = false; }
+      const neutral = {};
+      for (const p of (args.neutral || [])) { const key = PERM_MAP[p] || p; neutral[key] = null; }
+      await ch.permissionOverwrites.edit(target, { ...allow, ...deny, ...neutral }, { reason: args.reason || "Admin request" });
+      return { ok: true, channel: ch.name, target: target.name || target.displayName };
+    }
+
+    // ─── full_server_setup ───────────────────────────────────────────────────
+    case "full_server_setup": {
+      const { ChannelType: _CT, PermissionsBitField: _PBF, ActionRowBuilder: _ARB, ButtonBuilder: _BB, ButtonStyle: _BS, EmbedBuilder: _FSEmbed } = await import("discord.js");
+      const log = [];
+      const roleMap = {}; // name → role object
+
+      // Step 1: Create roles
+      for (const roleDef of (args.roles || [])) {
+        try {
+          const existing = guild.roles.cache.find(r => r.name === roleDef.name);
+          let role = existing;
+          if (!existing) {
+            role = await guild.roles.create({
+              name: roleDef.name,
+              color: roleDef.color || null,
+              hoist: roleDef.hoist ?? false,
+              mentionable: roleDef.mentionable ?? false,
+              reason: "full_server_setup",
+            });
+            log.push(`✅ ยศ: ${role.name}`);
+          } else {
+            log.push(`⏭️ ยศมีแล้ว: ${roleDef.name}`);
+          }
+          roleMap[roleDef.name] = role;
+        } catch(e) { log.push(`❌ ยศ ${roleDef.name}: ${e.message}`); }
+      }
+
+      // Step 2: Create categories + channels
+      const channelMap = {}; // name → channel
+      for (const catDef of (args.categories || [])) {
+        let cat;
+        try {
+          cat = guild.channels.cache.find(c => c.name === catDef.name && c.type === _CT.GuildCategory);
+          if (!cat) {
+            cat = await guild.channels.create({ name: catDef.name, type: _CT.GuildCategory, reason: "full_server_setup" });
+            log.push(`✅ หมวด: ${cat.name}`);
+          }
+        } catch(e) { log.push(`❌ หมวด ${catDef.name}: ${e.message}`); continue; }
+
+        for (const chDef of (catDef.channels || [])) {
+          try {
+            const chType = (chDef.type||"text")==="voice" ? _CT.GuildVoice : _CT.GuildText;
+            let ch = guild.channels.cache.find(c => c.name === chDef.name && c.parentId === cat.id);
+            if (!ch) {
+              ch = await guild.channels.create({
+                name: chDef.name, type: chType, parent: cat.id,
+                topic: chDef.topic || undefined, reason: "full_server_setup",
+              });
+              log.push(`✅ ห้อง: ${ch.name}`);
+            }
+            channelMap[chDef.name] = ch;
+            // Apply permissions
+            if (chDef.deny_roles) {
+              for (const rn of chDef.deny_roles) {
+                const r = roleMap[rn] || guild.roles.cache.find(x => x.name === rn);
+                if (r) await ch.permissionOverwrites.edit(r, { ViewChannel: false });
+              }
+            }
+            if (chDef.view_roles) {
+              // deny @everyone first, then allow listed roles
+              await ch.permissionOverwrites.edit(guild.roles.everyone, { ViewChannel: false });
+              for (const rn of chDef.view_roles) {
+                const r = roleMap[rn] || guild.roles.cache.find(x => x.name === rn);
+                if (r) await ch.permissionOverwrites.edit(r, { ViewChannel: true });
+              }
+            }
+          } catch(e) { log.push(`❌ ห้อง ${chDef.name}: ${e.message}`); }
+        }
+      }
+
+      // Step 3: Create role panels
+      for (const panel of (args.role_panels || [])) {
+        try {
+          const panelCh = channelMap[panel.channel_name] || guild.channels.cache.find(c => c.name === panel.channel_name);
+          if (!panelCh) { log.push(`❌ panel channel ${panel.channel_name} not found`); continue; }
+          const panelRoles = (panel.roles || []).map(pr => {
+            const r = roleMap[pr.role_name] || guild.roles.cache.find(x => x.name === pr.role_name);
+            return r ? { role_id: r.id, label: pr.label || r.name, emoji: pr.emoji } : null;
+          }).filter(Boolean);
+          if (!panelRoles.length) { log.push(`⚠️ panel ${panel.title}: ไม่มี role ที่ใช้ได้`); continue; }
+          const rows = [];
+          for (let i = 0; i < Math.min(panelRoles.length, 25); i += 5) {
+            const row = new _ARB().addComponents(
+              panelRoles.slice(i, i+5).map(r => {
+                const btn = new _BB().setCustomId(`role_panel:${r.role_id}`).setLabel(r.label).setStyle(_BS.Secondary);
+                if (r.emoji) try { btn.setEmoji(r.emoji); } catch {}
+                return btn;
+              })
+            );
+            rows.push(row);
+          }
+          const embed = new _FSEmbed().setColor(0x5865f2).setTitle(panel.title || "🎭 เลือกยศ").setDescription("กดปุ่มเพื่อรับหรือคืนยศ").setFooter({ text: "กดซ้ำเพื่อคืนยศ" });
+          await panelCh.send({ embeds: [embed], components: rows });
+          log.push(`✅ role panel: ${panel.title} ใน ${panelCh.name}`);
+        } catch(e) { log.push(`❌ role panel ${panel.title}: ${e.message}`); }
+      }
+
+      // Step 4: Announce
+      if (args.announce_channel) {
+        const annCh = channelMap[args.announce_channel] || guild.channels.cache.find(c => c.name === args.announce_channel);
+        if (annCh?.isTextBased()) {
+          const embed = new _FSEmbed().setColor(0x2ecc71).setTitle("✅ Setup เสร็จแล้ว!").setDescription(log.join("
+").slice(0, 2000)).setTimestamp();
+          await annCh.send({ embeds: [embed] });
+        }
+      }
+
+      return { ok: true, steps: log.length, log: log.slice(0, 30) };
     }
 
     case "create_file": {
