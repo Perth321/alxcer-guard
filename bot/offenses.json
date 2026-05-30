@@ -1,77 +1,23 @@
 {
   "users": {
     "603182413660684321": {
-      "count": 69,
-      "lastOffenseAt": 1779772570834,
-      "muteUntil": 1779776170834,
+      "count": 70,
+      "lastOffenseAt": 1780126235542,
+      "muteUntil": 1780129835542,
       "lastWord": "หี",
-      "lastSource": "voice",
+      "lastSource": "chat",
       "chat": {
-        "count": 7,
-        "lastAt": 1780124188909,
+        "count": 1,
+        "lastAt": 1780126236513,
         "history": [
           {
-            "at": 1779878498018,
+            "at": 1780126236513,
             "severity": 7,
             "matched": "หี",
             "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "การ์ด ค้นหารูปหี",
+            "excerpt": "หี",
             "action": "timeout_failed",
             "source": "local"
-          },
-          {
-            "at": 1779888748291,
-            "severity": 7,
-            "matched": "cặc",
-            "reason": "ใช้คำต้องห้าม: \"cặc\"",
-            "excerpt": "Con cặc",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1780108612412,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "ไอเหี้จเมืาอคืน ผมดูหนังจนหลับ",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1780110023179,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "เอาเข้าหี",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1780110636728,
-            "severity": 7,
-            "matched": "เย็ด",
-            "reason": "ใช้คำต้องห้าม: \"เย็ด\"",
-            "excerpt": "!th เย็ดแม่นะพี่ไป",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1780123022461,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "เปิดหีุ ได้ยินเสียงพี่รุ้งคราง",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1780124188909,
-            "severity": 7,
-            "matched": "du ma",
-            "reason": "ข้อความนี้มีคำหยาบคายที่ใช้ในการดูถูกและคุกคาม",
-            "excerpt": "Ai nói du ma",
-            "action": "timeout_failed",
-            "source": "ai"
           }
         ]
       }
