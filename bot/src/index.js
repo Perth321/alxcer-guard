@@ -2670,6 +2670,14 @@ function _stripThink(text) {
 
 async function safeReply(msg, content) {
   content = _stripThink(content);
+  // Auto-trim: if reply is very long (wall-of-text), cut at last sentence boundary ≤600 chars
+  if (content && content.length > 600) {
+    const cutoff = content.slice(0, 600);
+    const lastPeriod = Math.max(cutoff.lastIndexOf("。"), cutoff.lastIndexOf("ๆ "), cutoff.lastIndexOf(". "), cutoff.lastIndexOf("! "), cutoff.lastIndexOf("? "), cutoff.lastIndexOf("ค่ะ"), cutoff.lastIndexOf("ครับ"), cutoff.lastIndexOf("นะ"), cutoff.lastIndexOf("
+
+"));
+    content = lastPeriod > 300 ? content.slice(0, lastPeriod + 1).trim() : cutoff.trim();
+  }
   try {
     await msg.reply({
       content: (content || aiFallbackLine()).slice(0, 2000),
@@ -2865,7 +2873,7 @@ async function handleVisionReply(msg, triggerReason, media) {
         detectionContext: mode === "detect" ? detectionSummaries.join(" | ") : "",
         systemExtra,
       });
-      descriptionText = (reply?.content || "").trim();
+      descriptionText = _stripThink((reply?.content || "").trim());
     } catch (err) {
       console.warn(`[vision] LLM describe failed: ${err.message?.slice(0, 200)}`);
     }
