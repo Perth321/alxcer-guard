@@ -2730,7 +2730,16 @@ function _stripThink(text) {
   return out.trim();
 }
 
+const _lastSentByChannel = new Map(); // channelId -> last text sent
+
 async function safeReply(msg, content) {
+  if (!content) return;
+  const key = msg.channel?.id;
+  if (key && _lastSentByChannel.get(key) === content.trim()) {
+    console.warn("[safeReply] dedup: identical to last sent, skipping");
+    return;
+  }
+  if (key) _lastSentByChannel.set(key, content.trim());
   content = _stripThink(content);
   // Auto-trim: if reply is very long (wall-of-text), cut at last sentence boundary ≤600 chars
   if (content && content.length > 600) {
@@ -3109,29 +3118,28 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
         }
       } catch {}
     };
+    const agentCtx = {
+        guild,
+        channel,
+        authorTag: author.tag,
+        authorDisplayName: member?.displayName || author.globalName || author.username,
+        authorId: author.id,
+        offenses,
+        persistOffenses: async () => persistOffenses(),
+        ownerId: config.ownerId || null,
+        chatHistory: recent.slice(-50).map((m) => ({
+          author: m.author,
+          authorId: m.authorId,
+          content: m.content,
+          isBot: !!m.isBot,
+          at: m.at,
+        })),
+      };
     try {
       const result = await runAgent({
         userPrompt,
         onToolCall,
-        ctx: {
-          guild,
-          channel,
-          authorTag: author.tag,
-          authorDisplayName: member?.displayName || author.globalName || author.username,
-          authorId: author.id,
-          offenses,
-          persistOffenses: async () => persistOffenses(),
-          // Pass the last 50 messages so the agent has rich conversation
-          // memory — references like "ทำอีกที", "คนเดิม", "ห้องเดิม" work.
-          ownerId: config.ownerId || null,
-          chatHistory: recent.slice(-50).map((m) => ({
-            author: m.author,
-            authorId: m.authorId,
-            content: m.content,
-            isBot: !!m.isBot,
-            at: m.at,
-          })),
-        },
+        ctx: agentCtx,
       });
       // Delete thinking embed and show final answer
       if (thinkingMsg) {
@@ -3139,14 +3147,17 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
         thinkingMsg = null;
       }
       const trimmed = _stripThink((result || "").trim());
-      if (trimmed) {
+      // If tool already sent a message (_toolSentMessage), keep reply short
+      if (agentCtx._toolSentMessage && trimmed && trimmed.length > 20) {
+        // Skip long echoes after tools that already sent to channel
+      } else if (trimmed) {
         await safeReply(msg, trimmed);
-        return;
       }
-      console.warn("[agent] returned empty — falling through to plain chat");
+      return; // Agent ran — don't fall through to plain chat regardless of result
     } catch (err) {
       if (thinkingMsg) await thinkingMsg.delete().catch(() => {});
       console.warn("[agent] failed:", err?.message?.slice(0, 200));
+      // Exception only → fall through to plain chat below
     }
   }
 
@@ -3242,7 +3253,7 @@ client.on(Events.MessageCreate, async (msg) => {
     const legacyWord = findBannedWord(msg.content);
     if (legacyWord) {
       await applyWordBan(msg.guild, msg.author.id, legacyWord, "chat");
-      // Continue — also run new chat moderation to also delete + timeout text-side.
+      return; // Stop here — don't also run extended profanity (prevents double message)
     }
 
     // ===== NEW: extended profanity detection (multi-language + AI) =====
