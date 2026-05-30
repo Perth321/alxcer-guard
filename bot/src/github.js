@@ -143,3 +143,11 @@ export async function commitUpdateNotes(data, message = "chore: clear update not
     message,
   );
 }
+
+export async function commitAutomations(data, message = "chore: persist automation schedules") {
+  await commitFile(
+    "bot/automations.json",
+    JSON.stringify(data, null, 2) + "\n",
+    message,
+  );
+}
