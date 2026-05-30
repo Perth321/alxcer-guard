@@ -1,12 +1,13 @@
 {
-  "pending": false,
-  "version": "2.3.0",
-  "updatedAt": "2026-05-27",
+  "pending": true,
+  "version": "2.4.0",
+  "updatedAt": "2026-05-30",
   "notes": [
-    "🎨 **สร้างรูป AI ได้แล้ว** — พิมพ์ 'วาดรูป X' หรือ 'สร้างภาพ Y' ให้การ์ด (ใช้ Flux AI ฟรี)",
-    "🖼️ **ขยายรูปโปรไฟล์** — `/avatar @user` หรือพูดกับการ์ดว่า 'ขยายรูปโปรไฟล์ @Alex' → ได้รูป 4K",
-    "🔧 **GitHub Models URL ถูกต้อง** — ใช้ endpoint ใหม่ models.github.ai ทำให้โมเดลทำงานได้จริง",
-    "📋 **ชื่อโมเดลถูกต้องทั้งหมด** — llama-4-maverick, grok-3, mistral-medium อัพเดทแล้ว",
-    "👁️ **Vision ทุกกรณี** — ส่งรูป+ข้อความ บอทเห็นภาพจริงเสมอ ไม่แค่รูปอย่างเดียว"
+    "🏗️ **full_server_setup** — บอก Alex ว่าอยากได้เซิร์ฟเวอร์แบบไหน ระบบสร้าง roles + channels + permissions + role panels ให้ทั้งหมดในคำสั่งเดียว",
+    "🎭 **setup_role_panel** — สร้างปุ่มกดรับ/คืนยศใน channel พูดว่า 'สร้างที่กดรับยศ เพศ/สี/ที่อยู่ ใน #channel'",
+    "🔒 **set_channel_permissions** — ตั้งสิทธิ์ channel ได้ละเอียด (allow/deny view, send, connect ฯลฯ ต่อ role)",
+    "🧠 **think-block fix ครบทุก provider** — Gemini, OpenRouter, GitHub Models ไม่รั่ว <think> อีกแล้ว",
+    "⚡ **DeepSeek R1 ย้ายท้าย chain** — ตอบเร็วขึ้น ใช้ R1 เฉพาะเมื่อตัวอื่นล้มเหลว",
+    "✂️ **ตัด response ยาวอัตโนมัติ** — ถ้าบอทตอบยาวเกิน ตัดที่จุดสิ้นสุดประโยค ไม่ตัดกลางคำ"
   ]
 }
