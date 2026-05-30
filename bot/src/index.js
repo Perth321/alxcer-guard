@@ -101,7 +101,15 @@ import {
   commitOffenses,
   commitTranscripts,
   commitUpdateNotes,
+  commitAutomations,
 } from "./github.js";
+import {
+  loadAutomations,
+  allAutomations,
+  getDueAutomations,
+  markFiredAutomation,
+  writeAutomationsLocal,
+} from "./automations.js";
 import {
   isAvailable as isTranscriberAvailable,
   enqueueTranscription,
@@ -343,6 +351,7 @@ const MAX_UTTERANCE_SEC = 5;
 const IDLE_FLUSH_MS = 1500;
 
 const offenses = loadOffenses();
+loadAutomations();
 loadTranscriptsFromDisk();
 if (canPersistRemotely()) {
   setTranscriptRemotePersist((data) => commitTranscripts(data));
@@ -1543,6 +1552,48 @@ async function fireTimer(t) {
   }
 }
 
+async function tickAutomations(discordClient) {
+  const due = getDueAutomations();
+  if (!due.length) return;
+  for (const auto of due) {
+    markFiredAutomation(auto.id);
+    try {
+      writeAutomationsLocal(allAutomations());
+      commitAutomations(allAutomations()).catch(() => {});
+    } catch {}
+    const guild = await discordClient.guilds.fetch(auto.guildId).catch(() => null);
+    if (!guild) continue;
+    const channel = await guild.channels.fetch(auto.channelId).catch(() => null);
+    if (!channel) continue;
+    const h = String(auto.hour).padStart(2,"0");
+    const m = String(auto.minute).padStart(2,"0");
+    try {
+      await channel.send(`⏰ **Automation: ${auto.label}** (${h}:${m}) — กำลังทำงาน...`);
+    } catch {}
+    try {
+      const result = await runAgent({
+        userPrompt: auto.task,
+        ctx: {
+          guild,
+          channel,
+          authorTag: "automation",
+          authorId: auto.createdBy || config.ownerId || "",
+          ownerId: config.ownerId || null,
+          offenses,
+          persistOffenses: async () => persistOffenses(),
+          chatHistory: [],
+        },
+      });
+      if (result?.trim()) {
+        try { await channel.send(result.slice(0, 2000)); } catch {}
+      }
+    } catch (err) {
+      console.warn(`[automation:${auto.id}] run error:`, err?.message);
+      try { await channel.send(`⚠️ Automation "${auto.label}" ล้มเหลว: ${err?.message?.slice(0,200)}`); } catch {}
+    }
+  }
+}
+
 async function tickTimers() {
   const due = dueTimers();
   if (!due.length) return;
@@ -2290,6 +2341,11 @@ client.once(Events.ClientReady, async (c) => {
         console.error("[transcripts] prune error", err?.message);
       }
     }, 60 * 60 * 1000);
+
+    // Automation tick — every 60s. Fires recurring tasks at scheduled Bangkok time.
+    setInterval(() => {
+      tickAutomations(client).catch(err => console.error("[automations] tick error", err?.message));
+    }, 60_000);
 
     // Scheduled notifications tick — every 30s. Items fire once per day at
     // their configured Asia/Bangkok time.
