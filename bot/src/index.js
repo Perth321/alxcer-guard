@@ -2673,9 +2673,7 @@ async function safeReply(msg, content) {
   // Auto-trim: if reply is very long (wall-of-text), cut at last sentence boundary ≤600 chars
   if (content && content.length > 600) {
     const cutoff = content.slice(0, 600);
-    const lastPeriod = Math.max(cutoff.lastIndexOf("。"), cutoff.lastIndexOf("ๆ "), cutoff.lastIndexOf(". "), cutoff.lastIndexOf("! "), cutoff.lastIndexOf("? "), cutoff.lastIndexOf("ค่ะ"), cutoff.lastIndexOf("ครับ"), cutoff.lastIndexOf("นะ"), cutoff.lastIndexOf("
-
-"));
+    const lastPeriod = Math.max(cutoff.lastIndexOf("。"), cutoff.lastIndexOf("ๆ "), cutoff.lastIndexOf(". "), cutoff.lastIndexOf("! "), cutoff.lastIndexOf("? "), cutoff.lastIndexOf("ค่ะ"), cutoff.lastIndexOf("ครับ"), cutoff.lastIndexOf("นะ"), cutoff.lastIndexOf("\n"));
     content = lastPeriod > 300 ? content.slice(0, lastPeriod + 1).trim() : cutoff.trim();
   }
   try {
