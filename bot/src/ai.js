@@ -43,7 +43,7 @@ const GEMINI_VISION_MODELS = (process.env.GEMINI_VISION_MODELS ||
 // OpenAI-branded models placed LAST to protect persona (they claim to be ChatGPT).
 // DeepSeek R1 outputs <think> blocks — stripped before returning.
 const GH_CHAT_MODELS = (process.env.GH_CHAT_MODELS ||
-  "deepseek/deepseek-r1,deepseek/deepseek-v3-0324,meta/llama-4-maverick-17b-128e-instruct-fp8,meta/llama-4-scout-17b-16e-instruct,xai/grok-3,xai/grok-3-mini,microsoft/phi-4,openai/gpt-4.1,openai/gpt-4o"
+  "deepseek/deepseek-v3-0324,meta/llama-4-maverick-17b-128e-instruct-fp8,meta/llama-4-scout-17b-16e-instruct,xai/grok-3,xai/grok-3-mini,microsoft/phi-4,openai/gpt-4.1,openai/gpt-4o,deepseek/deepseek-r1"
 ).split(",").map(s => s.trim()).filter(Boolean);
 
 const GH_FAST_MODELS = (process.env.GH_FAST_MODELS ||
@@ -646,6 +646,10 @@ async function callAI({ geminiModels, openrouterModels, githubModels, interleave
       _recordUse(p, m, _task);
       if (m !== available[0]?.m || p !== available[0]?.p) {
         console.log(`[ai] using ${p}:${m} (task=${_task})`);
+      }
+      // Strip think-blocks from ALL providers (DeepSeek R1, QwQ, reasoning models)
+      if (result && typeof result.content === "string") {
+        result.content = _stripThinkBlocks(result.content);
       }
       return result;
     } catch (err) {
