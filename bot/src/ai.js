@@ -286,7 +286,16 @@ async function callOpenRouter({ model, models, messages, tools, tool_choice, max
 // DeepSeek R1 wraps reasoning in <think>…</think> — we strip those before returning.
 
 function _stripThinkBlocks(text) {
-  return text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+  if (typeof text !== "string" || !text) return text;
+  // 1. Complete <think>…</think> blocks
+  let out = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  // 2. Orphaned </think> — reasoning leaked from previous turn, strip everything up to it
+  out = out.replace(/^[\s\S]*?<\/think>\s*/i, "");
+  // 3. Orphaned <think> — unfinished block, strip tag and trailing reasoning
+  out = out.replace(/<think>[\s\S]*/i, "");
+  // 4. Any stray leftover tags
+  out = out.replace(/<\/?think>/gi, "");
+  return out.trim();
 }
 
 async function _fetchImageAsBase64(url) {
