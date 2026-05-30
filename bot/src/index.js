@@ -127,7 +127,7 @@ import {
   thaiLabel,
   annotateVideo,
 } from "./vision.js";
-import { isAdmin, setOwnerId, runAgent } from "./agent.js";
+import { isAdmin, setOwnerId, runAgent, handleRolePanelButton } from "./agent.js";
 import {
   listTimers as listTimersAll,
   dueTimers,
@@ -2918,7 +2918,10 @@ const TOOL_LABEL = {
   read_own_log:     "📋 อ่าน Log",
   read_own_source:  "📁 อ่านซอร์ส",
   write_own_source: "✍️ แก้โค้ด + Repush",
-  generate_image:    "🎨 สร้างรูป AI",
+  generate_image:       "🎨 สร้างรูป AI",
+  setup_role_panel:     "🎭 สร้างปุ่มรับยศ",
+  set_channel_permissions: "🔒 ตั้งสิทธิ์ห้อง",
+  full_server_setup:    "🏗️ Setup เซิร์ฟเวอร์",
   get_avatar:        "🖼️ ขยายรูปโปรไฟล์",
   // Discord tools
   voice_mute:        "🔇 ปิดไมค์",
@@ -4128,6 +4131,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     ) {
       const handledNotify = await handleNotifyComponent(interaction);
       if (handledNotify) return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith("role_panel:")) {
+      await handleRolePanelButton(interaction);
+      return;
     }
 
     if (interaction.isButton() && interaction.customId.startsWith("study:")) {
