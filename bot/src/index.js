@@ -2687,7 +2687,7 @@ async function handleProfanityChat(msg, detection) {
     const memberForRoast = await msg.guild.members.fetch(userId).catch(() => null);
     const displayForRoast = memberForRoast?.displayName || msg.author.globalName || msg.author.username || userId;
     roast = await generateRoastReply({
-      username: displayForRoast,
+      userId: userId,
       matched: detection.matched ?? "คำหยาบ",
       severity: detection.severity ?? 7,
     });
