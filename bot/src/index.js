@@ -2921,6 +2921,7 @@ const TOOL_LABEL = {
   generate_image:       "🎨 สร้างรูป AI",
   setup_role_panel:     "🎭 สร้างปุ่มรับยศ",
   stylize_text:         "✨ แปลงฟอนต์",
+  beautify_server:      "🌸 ตกแต่งทุกห้อง",
   set_channel_permissions: "🔒 ตั้งสิทธิ์ห้อง",
   full_server_setup:    "🏗️ Setup เซิร์ฟเวอร์",
   get_avatar:        "🖼️ ขยายรูปโปรไฟล์",
