@@ -2659,7 +2659,17 @@ function aiFallbackLine() {
   return lines[Math.floor(Math.random() * lines.length)];
 }
 
+function _stripThink(text) {
+  if (typeof text !== "string") return text;
+  let out = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  out = out.replace(/^[\s\S]*?<\/think>\s*/i, "");
+  out = out.replace(/<think>[\s\S]*/i, "");
+  out = out.replace(/<\/?think>/gi, "");
+  return out.trim();
+}
+
 async function safeReply(msg, content) {
+  content = _stripThink(content);
   try {
     await msg.reply({
       content: (content || aiFallbackLine()).slice(0, 2000),
@@ -3054,7 +3064,7 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
         await thinkingMsg.delete().catch(() => {});
         thinkingMsg = null;
       }
-      const trimmed = (result || "").trim();
+      const trimmed = _stripThink((result || "").trim());
       if (trimmed) {
         await safeReply(msg, trimmed);
         return;
@@ -3081,7 +3091,7 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
       // short because PERSONA caps casual chat at 1–2 sentences.
       max_tokens: 500,
     });
-    const text = (reply?.content || "").trim();
+    const text = _stripThink((reply?.content || "").trim());
     if (text) {
       await safeReply(msg, text);
       return;
@@ -3122,7 +3132,7 @@ async function maybeSpontaneousChime(msg) {
       max_tokens: 200,
     });
     const text = (reply?.content || "").trim();
-    if (text) await msg.channel.send({ content: text.slice(0, 500) });
+    if (text) { const _ct = _stripThink(text); if (_ct) await msg.channel.send({ content: _ct.slice(0, 500) }); }
     else lastSpontaneousAt.set(msg.channel.id, 0); // empty result — release cooldown
   } catch (err) {
     console.warn("[chime] failed:", err?.message?.slice(0, 200));
