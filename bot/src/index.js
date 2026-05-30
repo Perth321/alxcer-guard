@@ -2109,6 +2109,7 @@ function formatDuration(seconds) {
 }
 
 async function applyWordBan(guild, userId, word, source, transcript) {
+  if (!userId) { console.warn("[wordban] userId undefined, skipping"); return; }
   const prev = offenses.users[userId] ?? {
     count: 0,
     lastOffenseAt: 0,
@@ -2167,7 +2168,9 @@ async function applyWordBan(guild, userId, word, source, transcript) {
     ? `⚠️ คำเตือน — ${sourceLabel}`
     : `🚫 ทำผิดซ้ำ — ${sourceLabel}`;
   const color = isFirst ? 0xfacc15 : 0xef4444;
-  const lines = [`<@${userId}> ใช้คำต้องห้าม \`${word}\``, ""];
+  const memberForAnn = await guild.members.fetch(userId).catch(() => null);
+  const displayForAnn = memberForAnn?.displayName || userId;
+  const lines = [userId ? `<@${userId}> (**${displayForAnn}**) ใช้คำต้องห้าม \`${word}\`` : `ใช้คำต้องห้าม \`${word}\``, ""];
   if (muteApplied) {
     lines.push(`ปิดไมค์ไว้ **${durationLabel}**`);
   } else if (muteError) {
@@ -2640,6 +2643,7 @@ function collectMediaAttachments(msg) {
 }
 
 async function handleProfanityChat(msg, detection) {
+  if (!msg.author?.id) { console.warn("[profanity] msg.author undefined, skipping"); return; }
   const userId = msg.author.id;
   const guild = msg.guild;
   // Existing chat-offense count (with 7-day decay)
@@ -2680,13 +2684,15 @@ async function handleProfanityChat(msg, detection) {
   // Roast reply (sassy but controlled)
   let roast;
   try {
+    const memberForRoast = await msg.guild.members.fetch(userId).catch(() => null);
+    const displayForRoast = memberForRoast?.displayName || msg.author.globalName || msg.author.username || userId;
     roast = await generateRoastReply({
-      username: userId,
+      username: displayForRoast,
       matched: detection.matched ?? "คำหยาบ",
       severity: detection.severity ?? 7,
     });
   } catch {
-    roast = `<@${userId}> โดน timeout ${formatHumanDuration(seconds)} เพราะใช้คำหยาบ`;
+    roast = `<@${userId}> โดน timeout ${formatHumanDuration(seconds)} เพราะใช้คำหยาบครับ`;
   }
 
   // Append the consequence so the user knows
@@ -3111,6 +3117,7 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
           guild,
           channel,
           authorTag: author.tag,
+          authorDisplayName: member?.displayName || author.globalName || author.username,
           authorId: author.id,
           offenses,
           persistOffenses: async () => persistOffenses(),
@@ -3217,8 +3224,10 @@ client.on(Events.MessageCreate, async (msg) => {
     // a faithful conversation log to reason over. Without this, when the
     // admin says "ทำอีกที" or "ใช่นั่นแหละ" the agent only sees its own
     // questions vanishing into a void.
+    const _trackedMember = msg.guild?.members?.cache?.get(msg.author.id);
+    const _trackedName = _trackedMember?.displayName || msg.author.globalName || msg.author.username;
     pushRecent(msg.channel.id, {
-      author: msg.author.username,
+      author: _trackedName,
       authorId: msg.author.id,
       content: msg.content.slice(0, 500),
       at: Date.now(),
