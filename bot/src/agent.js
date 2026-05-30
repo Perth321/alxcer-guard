@@ -2844,6 +2844,7 @@ switch (name) {
 
     // ─── announce ─────────────────────────────────────────────────────────────
     case "announce": {
+      ctx._toolSentMessage = true;
       const targetCh = args.channel_id
         ? await ctx.guild.channels.fetch(args.channel_id).catch(() => null)
         : ctx.channel;
@@ -2869,6 +2870,7 @@ switch (name) {
 
     // ─── generate_image ───────────────────────────────────────────────────────
     case "generate_image": {
+      ctx._toolSentMessage = true;
       const targetCh = args.channel_id
         ? await ctx.guild.channels.fetch(args.channel_id).catch(() => null)
         : ctx.channel;
@@ -2915,6 +2917,7 @@ switch (name) {
 
     // ─── create_poll ──────────────────────────────────────────────────────────
     case "create_poll": {
+      ctx._toolSentMessage = true;
       const targetCh = args.channel_id
         ? await ctx.guild.channels.fetch(args.channel_id).catch(() => null)
         : ctx.channel;
@@ -3091,6 +3094,7 @@ switch (name) {
 
     // ─── chart ────────────────────────────────────────────────────────────────
     case "chart": {
+      ctx._toolSentMessage = true;
       const targetCh = args.channel_id
         ? await ctx.guild.channels.fetch(args.channel_id).catch(() => null)
         : ctx.channel;
@@ -3150,6 +3154,7 @@ switch (name) {
 
     // ─── trivia ───────────────────────────────────────────────────────────────
     case "trivia": {
+      ctx._toolSentMessage = true;
       const targetCh = args.channel_id
         ? await ctx.guild.channels.fetch(args.channel_id).catch(() => null)
         : ctx.channel;
@@ -3379,6 +3384,12 @@ NEVER write sentences like "We need to...", "The tool for...", "Possibly that is
 If you catch yourself about to explain your reasoning → DELETE it and just call the tool directly.
 If no single tool can fully fulfil the request → call the CLOSEST tool and report what you did in 1 Thai sentence.
 For single-channel decoration requests like "ตกแต่งห้อง X ให้หน่อย" → use beautify_server with target_channel_id.
+
+== ANTI-REPEAT RULE (CRITICAL) ==
+NEVER send the same text twice. NEVER echo the content of an embed or announcement back as a separate text message.
+หลังจาก call: announce / generate_image / chart / create_poll / trivia → reply แค่ 1–3 คำสั้นๆ เช่น "เรียบร้อยครับ" หรือ "ส่งแล้วครับ" — ห้าม echo เนื้อหาซ้ำ
+หลังจาก call voice_mute/ban/kick/timeout → reply 1 ประโยคสั้นเท่านั้น ห้ามพูดซ้ำในข้อความถัดไป
+ถ้า reply ล่าสุดของตัวเองใน RECENT CHAT เพิ่งบอก "ปิดไมค์ X แล้ว" → อย่าพูดซ้ำในรอบต่อไปถ้าไม่มีคำสั่งใหม่
 
 == CORE RULES ==
 1. JUST DO IT. If the request is clear ("ปิดไมค์ @Alex"), fire the tool immediately. No confirmation, no "are you sure?", no preamble.
@@ -3927,7 +3938,7 @@ export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
 
     const toolCalls = reply.tool_calls || [];
     if (!toolCalls.length) {
-      return (reply.content || "").trim() || "เสร็จแล้วครับ";
+      return (reply.content || "").trim();
     }
     for (const call of toolCalls) {
       let parsedArgs = {};
