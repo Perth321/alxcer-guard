@@ -19,6 +19,13 @@ import {
   formatDurationShort,
   formatClockBangkok,
 } from "./timers.js";
+import {
+  createAutomation,
+  cancelAutomationById,
+  listAutomations,
+  allAutomations,
+  writeAutomationsLocal,
+} from "./automations.js";
 
 // ─── Role panel button toggle handler (called from index.js InteractionCreate) ───
 export async function handleRolePanelButton(interaction) {
@@ -590,6 +597,46 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "set_automation",
+      description: "สร้าง automation ทำงานซ้ำตามเวลาที่กำหนด เช่น 'ทุกวัน 10 โมงเช้า สรุปข่าว', 'ทุกวันจันทร์ 9 โมง ส่งรายงาน'. รองรับ daily/weekdays/weekends/วันเฉพาะ",
+      parameters: {
+        type: "object",
+        required: ["label", "hour", "minute", "task"],
+        properties: {
+          label:      { type: "string",  description: "ชื่อ automation เช่น 'สรุปข่าวเช้า'" },
+          hour:       { type: "integer", description: "ชั่วโมง 0-23 (เวลาไทย Bangkok UTC+7)" },
+          minute:     { type: "integer", description: "นาที 0-59" },
+          days:       { type: "array",   items: { type: "string" },
+                        description: "['daily']=ทุกวัน | ['weekdays']=จันทร์-ศุกร์ | ['weekends']=เสาร์-อาทิตย์ | ['mon','wed','fri'] เป็นต้น" },
+          task:       { type: "string",  description: "งานที่จะทำ เป็น natural language เช่น 'ค้นหาข่าวเด่นวันนี้แล้วสรุปเป็นภาษาไทย 5 ข้อ'" },
+          channel_id: { type: "string",  description: "channel ที่จะโพสต์ — ถ้าไม่ระบุใช้ channel ปัจจุบัน" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_automations",
+      description: "ดูรายการ automation ทั้งหมดที่ตั้งไว้ใน server นี้",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "cancel_automation",
+      description: "ยกเลิก automation ตาม id (ได้จาก list_automations)",
+      parameters: {
+        type: "object",
+        required: ["automation_id"],
+        properties: { automation_id: { type: "string" } },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "web_search",
       description:
         "Search the internet using DuckDuckGo. Use this whenever the admin or user asks about news, facts, current events, prices, or anything that needs up-to-date web information. Returns titles, URLs, and snippets. No API key needed.",
@@ -938,6 +985,7 @@ const TOOLS = [
           custom_ch_prefix:   { type: "string", description: "prefix หน้าชื่อห้อง เช่น '· '" },
           custom_ch_suffix:   { type: "string", description: "suffix หลังชื่อห้อง เช่น ' ·'" },
           preview_only: { type: "boolean", description: "true = แสดงตัวอย่างก่อน ไม่ได้ rename จริง" },
+          target_channel_id: { type: "string", description: "ถ้าระบุ channel_id = ตกแต่งเฉพาะห้องนั้น ไม่แตะห้องอื่น" },
         },
       },
     },
@@ -1642,6 +1690,65 @@ switch (name) {
       const ok = cancelTimer(args.timer_id);
       return { ok, type: t.type, label: t.label };
     }
+
+    // ===== Automation tools =====
+    case "set_automation": {
+      const h = Number(args.hour);
+      const m = Number(args.minute);
+      if (!Number.isInteger(h) || h < 0 || h > 23) return { error: "hour must be 0-23 (Bangkok time)" };
+      if (!Number.isInteger(m) || m < 0 || m > 59) return { error: "minute must be 0-59" };
+      if (!args.task?.trim()) return { error: "task is required" };
+      const channelId = args.channel_id || ctx.channel?.id;
+      if (!channelId) return { error: "channel_id is required" };
+      const rec = createAutomation({
+        label: args.label || args.task.slice(0, 40),
+        guildId: ctx.guild.id,
+        channelId,
+        createdBy: ctx.authorId || "",
+        hour: h,
+        minute: m,
+        days: args.days || ["daily"],
+        task: args.task.trim(),
+      });
+      try {
+        const all = allAutomations();
+        writeAutomationsLocal(all);
+        const { commitAutomations } = await import("./github.js");
+        commitAutomations(all).catch(e => console.warn("[auto] remote persist failed:", e?.message));
+      } catch (e) { console.warn("[auto] persist error:", e?.message); }
+      const bangkokHH = String(h).padStart(2, "0");
+      const bangkokMM = String(m).padStart(2, "0");
+      const daysStr = (args.days || ["daily"]).join(", ");
+      return { ok: true, automation_id: rec.id, label: rec.label, fires_at: `${bangkokHH}:${bangkokMM} (Bangkok)`, days: daysStr };
+    }
+    case "list_automations": {
+      const list = listAutomations({ guildId: ctx.guild.id });
+      if (!list.length) return { count: 0, automations: [], message: "ยังไม่มี automation ตั้งไว้ครับ" };
+      return {
+        count: list.length,
+        automations: list.map(a => ({
+          id: a.id,
+          label: a.label,
+          time: `${String(a.hour).padStart(2, "0")}:${String(a.minute).padStart(2, "0")} (Bangkok)`,
+          days: a.days.join(", "),
+          task: a.task.slice(0, 80),
+          last_fired: a.lastFiredAt ? new Date(a.lastFiredAt).toISOString() : "ยังไม่เคยยิง",
+          channel_id: a.channelId,
+        })),
+      };
+    }
+    case "cancel_automation": {
+      const okAuto = cancelAutomationById(args.automation_id);
+      if (!okAuto) return { error: "ไม่เจอ automation นั้น (อาจถูกยกเลิกไปแล้ว)" };
+      try {
+        const all = allAutomations();
+        writeAutomationsLocal(all);
+        const { commitAutomations } = await import("./github.js");
+        commitAutomations(all).catch(e => console.warn("[auto] remote persist failed:", e?.message));
+      } catch (e) { console.warn("[auto] persist error:", e?.message); }
+      return { ok: true, cancelled_id: args.automation_id };
+    }
+
     case "get_current_ai_model": {
       const s = getModelStatus();
       return {
@@ -2020,6 +2127,13 @@ switch (name) {
         ).join("\n\n");
         return { dry_run: true, preview, total_channels: plan.reduce((s, p) => s + p.chs.length, 0) };
       }
+      // clear_existing: delete all non-essential channels/categories before rebuilding
+      if (args.clear_existing) {
+        const allCh = [...guild.channels.cache.values()];
+        for (const ch of allCh) {
+          try { await ch.delete("rebuild_server clear_existing"); await new Promise(r => setTimeout(r, 400)); } catch {}
+        }
+      }
       const result = { categories: [], channels: [] };
       for (const section of plan) {
         const catCh = await guild.channels.create({ name: section.cat, type: ChannelType.GuildCategory });
@@ -2252,6 +2366,21 @@ switch (name) {
       const fStyle  = args.font_style || "bold";
       const scope   = args.scope || "all";
       const preview = args.preview_only ?? false;
+
+      // Single-channel mode: if target_channel_id is set, only decorate that one channel
+      if (args.target_channel_id) {
+        const targetCh = await guild.channels.fetch(args.target_channel_id).catch(() => null);
+        if (!targetCh) return { error: "ไม่เจอ channel นั้น" };
+        const preset2 = PRESETS[args.preset || "aesthetic"];
+        const base2   = cleanName(targetCh.name);
+        const isCategory = targetCh.type === _BCT.GuildCategory;
+        const newName2 = isCategory
+          ? `${preset2.catPre}${applyFont(base2, args.font_style || "bold")}${preset2.catSuf}`
+          : `${preset2.chPre}${base2}${preset2.chSuf}`;
+        if (args.preview_only) return { ok: true, preview: true, old_name: targetCh.name, new_name: newName2 };
+        await targetCh.setName(newName2, "decorate_channel");
+        return { ok: true, old_name: targetCh.name, new_name: newName2, channel_id: targetCh.id };
+      }
 
       // Collect channels/categories (position-sorted)
       const allChannels = [...guild.channels.cache.values()].sort((a,b)=>a.position-b.position);
@@ -3196,6 +3325,13 @@ Timers / alarms / sleep mode:
   • "ดูตัวจับเวลา" / "list timers" / "มีอันไหนตั้งอยู่บ้าง"                          → list_timers()
   • "ยกเลิกตัวจับเวลา <id>" / "cancel timer <id>"                                 → cancel_timer({timer_id})
 
+Automations (recurring tasks):
+  • "ทุกวัน 10 โมงเช้า สรุปข่าว" / "every day 10am news summary"                  → set_automation({label, hour:10, minute:0, days:["daily"], task})
+  • "ทุกวันจันทร์ 9 โมง ทำ X" / "every monday 9am do X"                            → set_automation({label, hour:9, minute:0, days:["mon"], task})
+  • "ทุกวันธรรมดา 8:30 ส่งรายงาน" / "weekdays 8:30 report"                         → set_automation({..., days:["weekdays"]})
+  • "ดู automation" / "list automations" / "มี schedule อะไรบ้าง"                    → list_automations()
+  • "ยกเลิก automation <id>" / "cancel automation <id>"                              → cancel_automation({automation_id})
+
 Content & Media (NEW):
   • "ประกาศว่า X" / "โพสต์ข่าว" / "สร้าง embed" / "แจ้งเตือน"                    → announce({title, description?, color?, channel_id?, thumbnail_url?, image_url?, footer?, fields?, mention?})
   • "วาดรูป X" / "สร้างภาพ Y" / "generate image" / "AI art"                        → generate_image({prompt, width?, height?, channel_id?})
@@ -3235,6 +3371,13 @@ NEVER swap "ปิด" and "เปิด". They are opposites. "ปิด" = tur
   • The admin's message may include "[mentioned users in this message]: Name (id: 123...), ..." — those are REAL Discord mentions. ALWAYS use those IDs directly. Do NOT call resolve_user for users already in the mention list.
   • Names mentioned but NOT in the list → call resolve_user once, then act.
   • The RECENT CHAT block shows the last ~50 messages in this room (real users + your own past replies). Treat it as your short-term memory.
+
+== NO-REASONING RULE (CRITICAL) ==
+NEVER output your internal reasoning, chain-of-thought, or thinking process as a reply.
+NEVER write sentences like "We need to...", "The tool for...", "Possibly that is...", "I should...", "Let me think..."
+If you catch yourself about to explain your reasoning → DELETE it and just call the tool directly.
+If no single tool can fully fulfil the request → call the CLOSEST tool and report what you did in 1 Thai sentence.
+For single-channel decoration requests like "ตกแต่งห้อง X ให้หน่อย" → use beautify_server with target_channel_id.
 
 == CORE RULES ==
 1. JUST DO IT. If the request is clear ("ปิดไมค์ @Alex"), fire the tool immediately. No confirmation, no "are you sure?", no preamble.
