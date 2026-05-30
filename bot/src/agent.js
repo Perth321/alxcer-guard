@@ -910,6 +910,38 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "beautify_server",
+      description: "ตกแต่งชื่อทุกห้องและ category ในเซิร์ฟเวอร์ด้วย emoji decorator + Unicode font สวยๆ พูดว่า 'ตกแต่งทุกห้อง', 'เปลี่ยนชื่อทุกห้องให้สวย', 'beautify server', 'ตกแต่งเซิร์ฟ' เลือก preset ได้หลายแบบ เช่น aesthetic, elegant, cute, minimal, freedom, dark",
+      parameters: {
+        type: "object",
+        properties: {
+          preset: {
+            type: "string",
+            description: "รูปแบบตกแต่ง: aesthetic (✦·), elegant (「」◦), cute (✿˚), minimal (—·), freedom (คล้ายในรูป ♡·ℓ), dark (⊱⌬), kawaii (❝♡❞), custom",
+            enum: ["aesthetic","elegant","cute","minimal","freedom","dark","kawaii","custom"],
+          },
+          font_style: {
+            type: "string",
+            description: "ฟอนต์ Unicode สำหรับชื่อ category (ชื่อห้องจะเป็น plain text + decorator)",
+            enum: ["bold","italic","bold_italic","script","bold_script","fraktur","double","mono","wide","small_caps","none"],
+          },
+          scope: {
+            type: "string",
+            description: "ขอบเขต: all=ทั้งหมด, categories=เฉพาะหมวด, channels=เฉพาะห้อง",
+            enum: ["all","categories","channels"],
+          },
+          custom_cat_prefix:  { type: "string", description: "prefix หน้า category (custom preset เท่านั้น) เช่น '「 '" },
+          custom_cat_suffix:  { type: "string", description: "suffix หลัง category เช่น ' 」'" },
+          custom_ch_prefix:   { type: "string", description: "prefix หน้าชื่อห้อง เช่น '· '" },
+          custom_ch_suffix:   { type: "string", description: "suffix หลังชื่อห้อง เช่น ' ·'" },
+          preview_only: { type: "boolean", description: "true = แสดงตัวอย่างก่อน ไม่ได้ rename จริง" },
+        },
+      },
+    },
+  },
 ];
 ];
 ;
@@ -2196,6 +2228,150 @@ switch (name) {
       return { ok: true, steps: log.length, log: log.slice(0, 30) };
     }
 
+
+    // ─── beautify_server ──────────────────────────────────────────────────────
+    case "beautify_server": {
+      const { ChannelType: _BCT } = await import("discord.js");
+
+      // Preset templates: { catPre, catSuf, chPre, chSuf }
+      const PRESETS = {
+        aesthetic: { catPre:"✦ ", catSuf:" ✦",   chPre:"· ",  chSuf:"" },
+        elegant:   { catPre:"「 ", catSuf:" 」",   chPre:"◦ ",  chSuf:"" },
+        cute:      { catPre:"✿ ", catSuf:" ✿",   chPre:"˚ ",  chSuf:" ˚" },
+        minimal:   { catPre:"— ", catSuf:" —",   chPre:"· ",  chSuf:"" },
+        freedom:   { catPre:"𝗴 𝗮  ", catSuf:" ✧", chPre:"♡ ♧ · ", chSuf:"" },
+        dark:      { catPre:"⊱ ", catSuf:" ⊰",   chPre:"⌬ ", chSuf:"" },
+        kawaii:    { catPre:"❝ ", catSuf:" ❞",   chPre:"♡ ",  chSuf:" ♡" },
+        custom:    {
+          catPre: args.custom_cat_prefix ?? "✦ ",
+          catSuf: args.custom_cat_suffix ?? " ✦",
+          chPre:  args.custom_ch_prefix  ?? "· ",
+          chSuf:  args.custom_ch_suffix  ?? "",
+        },
+      };
+
+      const preset  = PRESETS[args.preset || "aesthetic"];
+      const fStyle  = args.font_style || "bold";
+      const scope   = args.scope || "all";
+      const preview = args.preview_only ?? false;
+
+      // Collect channels/categories (position-sorted)
+      const allChannels = [...guild.channels.cache.values()].sort((a,b)=>a.position-b.position);
+      const categories  = allChannels.filter(c => c.type === _BCT.GuildCategory);
+      const channels    = allChannels.filter(c => c.type !== _BCT.GuildCategory);
+
+      // Strip old decoration: remove known decorator chars from start/end
+      const STRIP_RE = /^[✦✿◦˚—「」❝❞⊱⊰⌬♡♧·𝗴𝗮ℓ·✧°•*~∘∙‣▸►○●◆◇✓✔✕✗❯❮→←⇒⇐⟨⟩⟪⟫『』【】〔〕《》⁺⁻⁼⁽⁾₊₋₌₍₎s!?]+|[✦✿◦˚—「」❝❞⊱⊰⌬♡♧·𝗴𝗮ℓ·✧°•*~∘∙‣▸►○●◆◇✓✔✕✗❯❮→←⇒⇐⟨⟩⟪⟫『』【】〔〕《》⁺⁻⁼⁽⁾₊₋₌₍₎s!?]+$/gu;
+      function stripDeco(name) { return name.replace(STRIP_RE, '').trim() || name.trim(); }
+
+      // Strip Unicode math chars (restore to ASCII)
+      function stripFont(name) {
+        // Convert math unicode letters back to ASCII a-z A-Z 0-9
+        return [...name].map(c => {
+          const cp = c.codePointAt(0);
+          // Bold a-z 1D41A-1D433
+          if(cp>=0x1D41A&&cp<=0x1D433) return String.fromCharCode(cp-0x1D41A+97);
+          // Bold A-Z 1D400-1D419
+          if(cp>=0x1D400&&cp<=0x1D419) return String.fromCharCode(cp-0x1D400+65);
+          // Italic a-z 1D44E-1D467
+          if(cp>=0x1D44E&&cp<=0x1D467) return String.fromCharCode(cp-0x1D44E+97);
+          // Italic A-Z 1D434-1D44D
+          if(cp>=0x1D434&&cp<=0x1D44D) return String.fromCharCode(cp-0x1D434+65);
+          // Bold italic a 1D482-1D49B
+          if(cp>=0x1D482&&cp<=0x1D49B) return String.fromCharCode(cp-0x1D482+97);
+          if(cp>=0x1D468&&cp<=0x1D481) return String.fromCharCode(cp-0x1D468+65);
+          // Script a 1D4B6-1D4CF
+          if(cp>=0x1D4B6&&cp<=0x1D4CF) return String.fromCharCode(cp-0x1D4B6+97);
+          if(cp>=0x1D49C&&cp<=0x1D4B5) return String.fromCharCode(cp-0x1D49C+65);
+          // Bold script 1D4EA-1D503 / 1D4D0-1D4E9
+          if(cp>=0x1D4EA&&cp<=0x1D503) return String.fromCharCode(cp-0x1D4EA+97);
+          if(cp>=0x1D4D0&&cp<=0x1D4E9) return String.fromCharCode(cp-0x1D4D0+65);
+          // Fraktur 1D51E-1D537 / 1D504-1D51D
+          if(cp>=0x1D51E&&cp<=0x1D537) return String.fromCharCode(cp-0x1D51E+97);
+          if(cp>=0x1D504&&cp<=0x1D51D) return String.fromCharCode(cp-0x1D504+65);
+          // Double 1D552-1D56B / 1D538-1D551
+          if(cp>=0x1D552&&cp<=0x1D56B) return String.fromCharCode(cp-0x1D552+97);
+          if(cp>=0x1D538&&cp<=0x1D551) return String.fromCharCode(cp-0x1D538+65);
+          // Mono 1D68A-1D6A3 / 1D670-1D689
+          if(cp>=0x1D68A&&cp<=0x1D6A3) return String.fromCharCode(cp-0x1D68A+97);
+          if(cp>=0x1D670&&cp<=0x1D689) return String.fromCharCode(cp-0x1D670+65);
+          // Fullwidth A-Z FF21-FF3A / a-z FF41-FF5A
+          if(cp>=0xFF21&&cp<=0xFF3A) return String.fromCharCode(cp-0xFF21+65);
+          if(cp>=0xFF41&&cp<=0xFF5A) return String.fromCharCode(cp-0xFF41+97);
+          return c;
+        }).join('');
+      }
+
+      function cleanName(name) { return stripFont(stripDeco(name)); }
+
+      // Apply font to category name
+      function applyFont(name, style) {
+        if (!style || style === 'none') return name.toUpperCase();
+        return _fontify(name.toUpperCase(), style);
+      }
+
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      const log = [], previews = [];
+      let renamed = 0, skipped = 0;
+
+      // Rename categories
+      if (scope === 'all' || scope === 'categories') {
+        for (const cat of categories) {
+          const base = cleanName(cat.name);
+          const newName = `${preset.catPre}${applyFont(base, fStyle)}${preset.catSuf}`;
+          if (newName === cat.name) { skipped++; continue; }
+          previews.push(`📁 ${cat.name} → ${newName}`);
+          if (!preview) {
+            try {
+              await cat.setName(newName, 'beautify_server');
+              renamed++;
+              log.push(`✅ ${newName}`);
+            } catch(e) { log.push(`❌ ${cat.name}: ${e.message}`); }
+            await sleep(600); // respect Discord rate limit
+          }
+        }
+      }
+
+      // Rename channels
+      if (scope === 'all' || scope === 'channels') {
+        for (const ch of channels) {
+          const base = cleanName(ch.name);
+          if (!base) { skipped++; continue; }
+          const newName = `${preset.chPre}${base}${preset.chSuf}`;
+          if (newName === ch.name) { skipped++; continue; }
+          previews.push(`${ch.type===2?'🔊':'#'} ${ch.name} → ${newName}`);
+          if (!preview) {
+            try {
+              await ch.setName(newName, 'beautify_server');
+              renamed++;
+              log.push(`✅ ${newName}`);
+            } catch(e) { log.push(`❌ ${ch.name}: ${e.message}`); }
+            await sleep(600);
+          }
+        }
+      }
+
+      // Send preview embed
+      const { EmbedBuilder: _BE } = await import("discord.js");
+      const previewText = previews.slice(0, 20).join('
+') + (previews.length > 20 ? `
+…+${previews.length-20} รายการ` : '');
+      const embed = new _BE()
+        .setColor(preview ? 0xf39c12 : 0x2ecc71)
+        .setTitle(preview ? `👁️ ตัวอย่าง — ${args.preset||'aesthetic'} (ยังไม่ได้ rename)` : `✅ ตกแต่งเสร็จแล้ว!`)
+        .setDescription(previewText || 'ไม่มีห้องที่ต้องเปลี่ยน')
+        .addFields(
+          { name: 'Preset', value: args.preset||'aesthetic', inline: true },
+          { name: 'Font', value: fStyle, inline: true },
+          { name: preview ? 'จะ rename' : 'Renamed', value: `${preview?previews.length:renamed} ห้อง`, inline: true },
+        );
+      if (preview) embed.setFooter({ text: 'พูด "ยืนยัน beautify" หรือ "ทำเลย" เพื่อ rename จริง' });
+      await ctx.channel.send({ embeds: [embed] });
+
+      return preview
+        ? { ok: true, preview: true, will_rename: previews.length }
+        : { ok: true, renamed, skipped, preset: args.preset||'aesthetic', font: fStyle };
+    }
 
     // ─── stylize_text ─────────────────────────────────────────────────────────
     case "stylize_text": {
