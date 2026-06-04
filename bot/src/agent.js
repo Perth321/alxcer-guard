@@ -55,10 +55,36 @@ export async function handleRolePanelButton(interaction) {
 let _ownerId = "";
 export function setOwnerId(id) { _ownerId = id ? String(id) : ""; }
 
+function memberUserId(member) {
+  return member?.id || member?.user?.id || member?.userId || "";
+}
+
+export function memberHasPermission(member, permission) {
+  const perms = member?.permissions;
+  if (!perms) return false;
+  if (typeof perms.has === "function") {
+    try {
+      return perms.has(permission);
+    } catch {}
+  }
+  try {
+    const bits = typeof perms === "bigint" ? perms : BigInt(perms);
+    return (bits & BigInt(permission)) === BigInt(permission);
+  } catch {
+    return false;
+  }
+}
+
 export function isAdmin(member) {
   if (!member) return false;
-  if (_ownerId && member.id === _ownerId) return true;
-  return member.permissions?.has?.(PermissionFlagsBits.Administrator) === true;
+  const id = memberUserId(member);
+  if (_ownerId && id === _ownerId) return true;
+  return memberHasPermission(member, PermissionFlagsBits.Administrator);
+}
+
+export function canManageBot(member) {
+  if (isAdmin(member)) return true;
+  return memberHasPermission(member, PermissionFlagsBits.ManageGuild);
 }
 
 // ===== TOOL DEFINITIONS (OpenAI-compatible JSON schema) =====

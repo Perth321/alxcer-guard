@@ -1,13 +1,20 @@
-// In-memory timer/alarm/sleep/auto-mute manager.
+// Timer/alarm/sleep/auto-mute manager.
 //
 // All long-running per-user actions go through here so we can:
 //   - List & cancel them via Discord buttons or agent tools
 //   - Survive across multiple ticks without leaking
 //   - Render pretty embeds with live countdowns
 //
-// Persistence: alarms/timers are NOT persisted across bot restarts on purpose
-// (this bot runs in a 6-hour GitHub Actions container). Keep durations short
-// enough to fit a single run.
+// Persistence: active timers are stored in bot/timers.json and can be pushed
+// back to GitHub by index.js, so timers survive GitHub Actions restarts.
+
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DATA_FILE = path.join(__dirname, "..", "timers.json");
+const STALE_AFTER_MS = 12 * 3600 * 1000;
 
 const TYPES = new Set(["timer", "alarm", "sleep_disconnect", "group_sleep", "auto_unmute", "wake_alarm"]);
 
@@ -17,6 +24,9 @@ function nextId() {
 }
 
 const _timers = new Map(); // id -> record
+let _remotePersist = null;
+let _remotePersistHandle = null;
+let _lastPersistSignature = "";
 
 /**
  * @typedef {Object} TimerRecord
@@ -35,6 +45,141 @@ const _timers = new Map(); // id -> record
  * @property {boolean} cancelled
  * @property {string|null} ownerId         Who created it (admin)
  */
+
+export function loadTimers() {
+  _timers.clear();
+  try {
+    if (!fs.existsSync(DATA_FILE)) {
+      _lastPersistSignature = JSON.stringify([]);
+      return _timers;
+    }
+    const parsed = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+    const list = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.timers)
+        ? parsed.timers
+        : Array.isArray(parsed?.items)
+          ? parsed.items
+          : [];
+    const now = Date.now();
+    let restored = 0;
+    let dropped = 0;
+    for (const raw of list) {
+      const rec = normalizeRecord(raw);
+      if (!rec) {
+        dropped++;
+        continue;
+      }
+      if (rec.fireAt < now - STALE_AFTER_MS) {
+        dropped++;
+        continue;
+      }
+      _timers.set(rec.id, rec);
+      restored++;
+    }
+    _lastPersistSignature = signature();
+    console.log(`[timers] loaded ${restored} persisted timer(s)${dropped ? `, dropped ${dropped} stale/invalid` : ""}`);
+  } catch (err) {
+    console.warn("[timers] load failed:", err?.message);
+    _lastPersistSignature = JSON.stringify([]);
+  }
+  return _timers;
+}
+
+export function setRemotePersist(fn) {
+  _remotePersist = typeof fn === "function" ? fn : null;
+}
+
+export function writeTimersLocal(data = serializeTimers()) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2) + "\n");
+  _lastPersistSignature = JSON.stringify((data?.timers || []).map((t) => sanitizeRecord(t)));
+}
+
+export function allTimers() {
+  return serializeTimers();
+}
+
+function normalizeRecord(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if (!TYPES.has(raw.type)) return null;
+  const fireAt = Number(raw.fireAt);
+  if (!Number.isFinite(fireAt)) return null;
+  const id = raw.id ? String(raw.id) : nextId();
+  return {
+    id,
+    type: raw.type,
+    createdAt: Number.isFinite(Number(raw.createdAt)) ? Number(raw.createdAt) : Date.now(),
+    fireAt,
+    label: String(raw.label || "").slice(0, 200),
+    guildId: raw.guildId ? String(raw.guildId) : "",
+    channelId: raw.channelId ? String(raw.channelId) : null,
+    userId: raw.userId ? String(raw.userId) : null,
+    mentionUserId: raw.mentionUserId ? String(raw.mentionUserId) : null,
+    payload: raw.payload && typeof raw.payload === "object" ? raw.payload : {},
+    messageId: raw.messageId ? String(raw.messageId) : null,
+    fired: false,
+    cancelled: false,
+    ownerId: raw.ownerId ? String(raw.ownerId) : null,
+  };
+}
+
+function sanitizeRecord(rec) {
+  return {
+    id: rec.id,
+    type: rec.type,
+    createdAt: rec.createdAt,
+    fireAt: rec.fireAt,
+    label: rec.label || "",
+    guildId: rec.guildId,
+    channelId: rec.channelId || null,
+    userId: rec.userId || null,
+    mentionUserId: rec.mentionUserId || null,
+    payload: rec.payload || {},
+    messageId: rec.messageId || null,
+    ownerId: rec.ownerId || null,
+  };
+}
+
+function activeRecords() {
+  return [..._timers.values()]
+    .filter((t) => !t.cancelled && !t.fired)
+    .sort((a, b) => a.fireAt - b.fireAt)
+    .map(sanitizeRecord);
+}
+
+function serializeTimers() {
+  return {
+    version: 1,
+    updatedAt: Date.now(),
+    timers: activeRecords(),
+  };
+}
+
+function signature() {
+  return JSON.stringify(activeRecords());
+}
+
+function persistTimers({ remote = true } = {}) {
+  const nextSignature = signature();
+  if (nextSignature === _lastPersistSignature) return;
+  const data = serializeTimers();
+  writeTimersLocal(data);
+  if (remote) scheduleRemotePersist();
+}
+
+function scheduleRemotePersist() {
+  if (!_remotePersist) return;
+  if (_remotePersistHandle) clearTimeout(_remotePersistHandle);
+  _remotePersistHandle = setTimeout(async () => {
+    _remotePersistHandle = null;
+    try {
+      await _remotePersist(serializeTimers());
+    } catch (err) {
+      console.warn("[timers] remote persist failed:", err?.message);
+    }
+  }, 1500);
+  _remotePersistHandle.unref?.();
+}
 
 export function createTimer({
   type,
@@ -69,6 +214,7 @@ export function createTimer({
     ownerId,
   };
   _timers.set(id, rec);
+  persistTimers();
   return rec;
 }
 
@@ -81,6 +227,7 @@ export function cancelTimer(id) {
   if (!t) return false;
   t.cancelled = true;
   _timers.delete(id);
+  persistTimers();
   return true;
 }
 
@@ -93,12 +240,17 @@ export function markFired(id) {
 }
 
 export function deleteTimer(id) {
-  return _timers.delete(id);
+  const ok = _timers.delete(id);
+  if (ok) persistTimers();
+  return ok;
 }
 
 export function setMessageId(id, messageId) {
   const t = _timers.get(id);
-  if (t) t.messageId = messageId;
+  if (t) {
+    t.messageId = messageId;
+    persistTimers();
+  }
 }
 
 export function listTimers({ userId, guildId, type, includeFired = false } = {}) {

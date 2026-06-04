@@ -151,3 +151,11 @@ export async function commitAutomations(data, message = "chore: persist automati
     message,
   );
 }
+
+export async function commitTimers(data, message = "chore: persist active timers") {
+  await commitFile(
+    "bot/timers.json",
+    JSON.stringify(data, null, 2) + "\n",
+    message,
+  );
+}

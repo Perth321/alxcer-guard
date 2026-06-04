@@ -1,13 +1,11 @@
 {
-  "pending": false,
-  "version": "2.4.0",
-  "updatedAt": "2026-05-30",
+  "pending": true,
+  "version": "2.5.0",
+  "updatedAt": "2026-06-04",
   "notes": [
-    "🏗️ **full_server_setup** — บอก Alex ว่าอยากได้เซิร์ฟเวอร์แบบไหน ระบบสร้าง roles + channels + permissions + role panels ให้ทั้งหมดในคำสั่งเดียว",
-    "🎭 **setup_role_panel** — สร้างปุ่มกดรับ/คืนยศใน channel พูดว่า 'สร้างที่กดรับยศ เพศ/สี/ที่อยู่ ใน #channel'",
-    "🔒 **set_channel_permissions** — ตั้งสิทธิ์ channel ได้ละเอียด (allow/deny view, send, connect ฯลฯ ต่อ role)",
-    "🧠 **think-block fix ครบทุก provider** — Gemini, OpenRouter, GitHub Models ไม่รั่ว <think> อีกแล้ว",
-    "⚡ **DeepSeek R1 ย้ายท้าย chain** — ตอบเร็วขึ้น ใช้ R1 เฉพาะเมื่อตัวอื่นล้มเหลว",
-    "✂️ **ตัด response ยาวอัตโนมัติ** — ถ้าบอทตอบยาวเกิน ตัดที่จุดสิ้นสุดประโยค ไม่ตัดกลางคำ"
+    "Admin access fix - Discord Administrator users can use agent commands, not only ownerId.",
+    "Persistent timers - timer, alarm, sleep mode, and auto-unmute are saved to the repo and restored after GitHub Actions restarts.",
+    "Mute-for reliability - temporary voice mutes such as 30 minutes no longer disappear silently when the runner restarts.",
+    "Cleaner boot logs - startup now reports restored active timers and whether repo persistence is available."
   ]
 }

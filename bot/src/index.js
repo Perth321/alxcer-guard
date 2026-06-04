@@ -102,6 +102,7 @@ import {
   commitTranscripts,
   commitUpdateNotes,
   commitAutomations,
+  commitTimers,
 } from "./github.js";
 import {
   loadAutomations,
@@ -146,6 +147,8 @@ import {
   getTimer,
   formatDurationShort,
   formatClockBangkok,
+  loadTimers,
+  setRemotePersist as setTimerRemotePersist,
 } from "./timers.js";
 import { synthesizeThai } from "./tts.js";
 import { getModelStatus } from "./ai.js";
@@ -216,6 +219,7 @@ if (!transcriptionAvailable) {
 }
 
 let config = loadConfig();
+if (config.ownerId) setOwnerId(config.ownerId);
 const TOKEN = process.env.DISCORD_PERSONAL_ACCESS_TOKEN;
 
 if (!TOKEN) {
@@ -352,12 +356,16 @@ const IDLE_FLUSH_MS = 1500;
 
 const offenses = loadOffenses();
 loadAutomations();
+loadTimers();
 loadTranscriptsFromDisk();
 if (canPersistRemotely()) {
   setTranscriptRemotePersist((data) => commitTranscripts(data));
+  setTimerRemotePersist((data) => commitTimers(data));
   console.log("[boot] transcripts will be persisted to repo (7-day retention, auto-prune)");
+  console.log("[boot] active timers will be persisted to repo");
 } else {
   console.log("[boot] transcripts kept in-memory only (no GITHUB_TOKEN to persist)");
+  console.log("[boot] active timers kept local only (no GITHUB_TOKEN to persist)");
 }
 const wordBanTimers = new Map();
 let offensesPersistTimer = null;
@@ -3100,8 +3108,9 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
 
   // Admin agent path — try first, but if it fails fall through to plain chat
   let attemptedAgent = false;
-  console.log('[agent] checking isAdmin for', author.tag, '| member perms bitfield:', member?.permissions?.bitfield?.toString(16));
-  if (author.id === (config.ownerId || "")) {
+  const canUseAgent = isAdmin(member);
+  console.log('[agent] checking isAdmin for', author.tag, '| allowed:', canUseAgent, '| member perms bitfield:', member?.permissions?.bitfield?.toString(16));
+  if (canUseAgent) {
     attemptedAgent = true;
     // Real-time thinking display
     let thinkingMsg = null;
@@ -3124,6 +3133,7 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
         authorTag: author.tag,
         authorDisplayName: member?.displayName || author.globalName || author.username,
         authorId: author.id,
+        authorMember: member,
         offenses,
         persistOffenses: async () => persistOffenses(),
         ownerId: config.ownerId || null,
