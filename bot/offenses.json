@@ -1,35 +1,11 @@
 {
   "users": {
     "603182413660684321": {
-      "count": 70,
-      "lastOffenseAt": 1780126235542,
-      "muteUntil": 0,
-      "lastWord": "หี",
-      "lastSource": "chat",
-      "chat": {
-        "count": 2,
-        "lastAt": 1780214395037,
-        "history": [
-          {
-            "at": 1780126236513,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "หี",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1780214395037,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "อมควย",
-            "action": "timeout_failed",
-            "source": "local"
-          }
-        ]
-      }
+      "count": 71,
+      "lastOffenseAt": 1780540112907,
+      "muteUntil": 1780543712907,
+      "lastWord": "ดูหี",
+      "lastSource": "chat"
     },
     "946756535936233542": {
       "count": 14,
