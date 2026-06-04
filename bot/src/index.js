@@ -444,6 +444,44 @@ function getNotifyChannel(guild) {
   return guild.channels.cache.get(config.notifyChannelId) ?? null;
 }
 
+function canSendToChannel(channel, guild) {
+  if (!channel?.isTextBased?.()) return false;
+  const me = guild.members.me;
+  if (!me) return false;
+  const perms = channel.permissionsFor(me);
+  return (
+    perms?.has(PermissionFlagsBits.ViewChannel) &&
+    perms?.has(PermissionFlagsBits.SendMessages)
+  );
+}
+
+async function findAnnouncementChannel(guild) {
+  if (!guild) return null;
+  await guild.members.fetchMe().catch(() => null);
+  if (config.notifyChannelId) {
+    const configured = await guild.channels
+      .fetch(config.notifyChannelId)
+      .catch(() => null);
+    if (canSendToChannel(configured, guild)) return configured;
+    console.warn(
+      `[announce] configured notify channel ${config.notifyChannelId} is unavailable or not sendable`,
+    );
+  }
+
+  if (canSendToChannel(guild.systemChannel, guild)) return guild.systemChannel;
+
+  const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
+  for (const ch of channels.values()) {
+    if (
+      ch?.type === ChannelType.GuildText ||
+      ch?.type === ChannelType.GuildAnnouncement
+    ) {
+      if (canSendToChannel(ch, guild)) return ch;
+    }
+  }
+  return null;
+}
+
 async function announce(guild, payload) {
   const ch = getNotifyChannel(guild);
   if (!ch || !ch.isTextBased()) return;
@@ -2285,7 +2323,7 @@ client.once(Events.ClientReady, async (c) => {
             .setDescription(notes.notes.join("\n"))
             .setFooter({ text: `v${notes.version || "?"} · ${notes.updatedAt || ""} · ✅ บอทพร้อมใช้งาน` })
             .setTimestamp();
-          await notifyCh.send({ embeds: [embed] }).catch(() => {});
+          await notifyCh.send({ embeds: [embed] });
           console.log("[boot] posted update announcement to", config.notifyChannelId);
         }
         // Clear pending flag and commit back so next restart doesn't re-post
@@ -2296,6 +2334,33 @@ client.once(Events.ClientReady, async (c) => {
     }
   } catch (err) {
     console.warn("[boot] update announcement failed:", err?.message);
+  }
+
+  try {
+    const guild = config.guildId ? await client.guilds.fetch(config.guildId).catch(() => null) : null;
+    const bootChannel = guild ? await findAnnouncementChannel(guild) : null;
+    if (bootChannel?.isTextBased?.()) {
+      const sha = (process.env.GITHUB_SHA || "").slice(0, 7) || "local";
+      const runId = process.env.GITHUB_RUN_ID || "";
+      const footer = [`commit ${sha}`, runId ? `run ${runId}` : null]
+        .filter(Boolean)
+        .join(" | ");
+      const embed = new EmbedBuilder()
+        .setColor(0x22c55e)
+        .setTitle("Alxcer Guard restarted")
+        .setDescription("รีแล้วครับ - บอทพร้อมรับคำสั่งแล้ว")
+        .setFooter({ text: footer || "ready" })
+        .setTimestamp();
+      await bootChannel.send({
+        content: "✅ รีแล้วครับ - Alxcer Guard พร้อมใช้งาน",
+        embeds: [embed],
+      });
+      console.log("[boot] posted restart announcement to", bootChannel.id);
+    } else {
+      console.warn("[boot] restart announcement skipped: no sendable text channel found");
+    }
+  } catch (err) {
+    console.warn("[boot] restart announcement failed:", err?.message);
   }
 
 
