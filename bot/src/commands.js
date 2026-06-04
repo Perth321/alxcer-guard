@@ -16,6 +16,7 @@ import {
 import { writeLocal, normalize } from "./config.js";
 import { getModelStatus, getAllModels, forceModel, clearForceModel } from "./ai.js";
 import { canPersistRemotely, commitConfig } from "./github.js";
+import { canManageBot } from "./agent.js";
 
 export const SETTING_COMMAND = new SlashCommandBuilder()
   .setName("setting")
@@ -122,7 +123,7 @@ export const PRANK_COMMANDS = PRANK_COMMAND_DEFS.map((p) =>
   new SlashCommandBuilder()
     .setName(p.name)
     .setDescription(`${p.emoji} ${p.desc}`)
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator.toString())
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
     .setDMPermission(false)
     .toJSON(),
 );
@@ -253,9 +254,9 @@ export function isPrankCommand(name) {
 }
 
 export async function handlePrankSound(interaction, runtime, soundName) {
-  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+  if (!canManageBot(interaction.member, interaction.memberPermissions)) {
     await interaction.reply({
-      content: "❌ ต้องมีสิทธิ์ **Administrator** เท่านั้นถึงจะใช้คำสั่งนี้ได้",
+      content: "❌ ต้องมีสิทธิ์ **Administrator** หรือ **Manage Server** ถึงจะใช้คำสั่งนี้ได้",
       ephemeral: true,
     });
     return;
@@ -457,7 +458,7 @@ export async function handleSettingComponent(interaction, runtime) {
   const id = interaction.customId;
   if (!id.startsWith("setting:")) return false;
 
-  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+  if (!canManageBot(interaction.member, interaction.memberPermissions)) {
     await interaction.reply({
       content: "ต้องมีสิทธิ์ Manage Server เท่านั้น",
       ephemeral: true,

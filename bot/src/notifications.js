@@ -22,6 +22,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
+import { canManageBot } from "./agent.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -338,7 +339,7 @@ export async function handleNotifyComponent(interaction) {
   const id = interaction.customId;
   if (!id || (!id.startsWith("notify:"))) return false;
 
-  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+  if (!canManageBot(interaction.member, interaction.memberPermissions)) {
     await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
     return true;
   }
@@ -446,7 +447,7 @@ export async function handleNotifyComponent(interaction) {
 }
 
 export async function handleNotifyCommand(interaction) {
-  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+  if (!canManageBot(interaction.member, interaction.memberPermissions)) {
     await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
     return;
   }

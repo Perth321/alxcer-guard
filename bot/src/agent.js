@@ -59,8 +59,7 @@ function memberUserId(member) {
   return member?.id || member?.user?.id || member?.userId || "";
 }
 
-export function memberHasPermission(member, permission) {
-  const perms = member?.permissions;
+export function permissionSetHas(perms, permission) {
   if (!perms) return false;
   if (typeof perms.has === "function") {
     try {
@@ -75,6 +74,10 @@ export function memberHasPermission(member, permission) {
   }
 }
 
+export function memberHasPermission(member, permission) {
+  return permissionSetHas(member?.permissions, permission);
+}
+
 export function isAdmin(member) {
   if (!member) return false;
   const id = memberUserId(member);
@@ -82,9 +85,11 @@ export function isAdmin(member) {
   return memberHasPermission(member, PermissionFlagsBits.Administrator);
 }
 
-export function canManageBot(member) {
+export function canManageBot(member, fallbackPermissions = null) {
   if (isAdmin(member)) return true;
-  return memberHasPermission(member, PermissionFlagsBits.ManageGuild);
+  if (memberHasPermission(member, PermissionFlagsBits.ManageGuild)) return true;
+  if (permissionSetHas(fallbackPermissions, PermissionFlagsBits.Administrator)) return true;
+  return permissionSetHas(fallbackPermissions, PermissionFlagsBits.ManageGuild);
 }
 
 // ===== TOOL DEFINITIONS (OpenAI-compatible JSON schema) =====

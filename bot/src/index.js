@@ -136,7 +136,7 @@ import {
   thaiLabel,
   annotateVideo,
 } from "./vision.js";
-import { isAdmin, setOwnerId, runAgent, handleRolePanelButton } from "./agent.js";
+import { isAdmin, canManageBot, setOwnerId, runAgent, handleRolePanelButton } from "./agent.js";
 import {
   listTimers as listTimersAll,
   dueTimers,
@@ -3108,7 +3108,7 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
 
   // Admin agent path — try first, but if it fails fall through to plain chat
   let attemptedAgent = false;
-  const canUseAgent = isAdmin(member);
+  const canUseAgent = canManageBot(member);
   console.log('[agent] checking isAdmin for', author.tag, '| allowed:', canUseAgent, '| member perms bitfield:', member?.permissions?.bitfield?.toString(16));
   if (canUseAgent) {
     attemptedAgent = true;
@@ -3426,7 +3426,7 @@ async function handleStudyUploadCommand(interaction) {
     await interaction.reply({ content: "ใช้ในเซิร์ฟเวอร์เท่านั้น", ephemeral: true });
     return;
   }
-  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+  if (!canManageBot(interaction.member, interaction.memberPermissions)) {
     await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
     return;
   }
@@ -3512,7 +3512,7 @@ async function _legacy_handleStudyCommandSubcommand(interaction) {
   }
 
   if (sub === "report") {
-    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    if (!canManageBot(interaction.member, interaction.memberPermissions)) {
       await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
       return;
     }
@@ -3544,7 +3544,7 @@ async function _legacy_handleStudyCommandSubcommand(interaction) {
   }
 
   if (sub === "reset") {
-    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    if (!canManageBot(interaction.member, interaction.memberPermissions)) {
       await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
       return;
     }
@@ -3588,7 +3588,7 @@ async function handleStudyButton(interaction) {
     }
 
     if (action === "reset-confirm") {
-      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      if (!canManageBot(interaction.member, interaction.memberPermissions)) {
         await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
         return true;
       }
@@ -3601,7 +3601,7 @@ async function handleStudyButton(interaction) {
     }
 
     if (action === "reset-yes") {
-      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      if (!canManageBot(interaction.member, interaction.memberPermissions)) {
         await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
         return true;
       }
@@ -3611,7 +3611,7 @@ async function handleStudyButton(interaction) {
     }
 
     if (action === "report") {
-      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      if (!canManageBot(interaction.member, interaction.memberPermissions)) {
         await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
         return true;
       }
@@ -3827,7 +3827,7 @@ async function handleClassroomCommand(interaction) {
 async function handleClassroomComponent(interaction) {
   const cid = interaction.customId;
   if (!cid.startsWith("classroom:")) return false;
-  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+  if (!canManageBot(interaction.member, interaction.memberPermissions)) {
     await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
     return true;
   }
