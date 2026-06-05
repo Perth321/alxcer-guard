@@ -70,7 +70,22 @@
       "lastOffenseAt": 1777704722847,
       "muteUntil": 1777708322847,
       "lastWord": "หี",
-      "lastSource": "voice"
+      "lastSource": "voice",
+      "chat": {
+        "count": 1,
+        "lastAt": 1780669246909,
+        "history": [
+          {
+            "at": 1780669246909,
+            "severity": 7,
+            "matched": "Biến thái",
+            "reason": "ข้อความนี้มีคำหยาบที่ใช้กล่าวหาหรือคุกคาม",
+            "excerpt": "Biến thái",
+            "action": "timeout_failed",
+            "source": "ai"
+          }
+        ]
+      }
     },
     "1489131578314461205": {
       "count": 4,
