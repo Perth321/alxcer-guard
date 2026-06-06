@@ -1,20 +1,5 @@
 {
   "version": 1,
-  "updatedAt": 1780718807362,
-  "timers": [
-    {
-      "id": "tmq1tzzsb1",
-      "type": "timer",
-      "createdAt": 1780718805227,
-      "fireAt": 1780718865227,
-      "label": "ปลุกพี่รุ้ง",
-      "guildId": "1485726181398548490",
-      "channelId": "1485726181973037129",
-      "userId": "967120879689551873",
-      "mentionUserId": "1512006615627468852",
-      "payload": {},
-      "messageId": "1512669050793361568",
-      "ownerId": "967120879689551873"
-    }
-  ]
+  "updatedAt": 1780718871050,
+  "timers": []
 }
