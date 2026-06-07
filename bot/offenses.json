@@ -87,8 +87,8 @@
       "lastWord": "หี",
       "lastSource": "voice",
       "chat": {
-        "count": 1,
-        "lastAt": 1780669246909,
+        "count": 2,
+        "lastAt": 1780831414145,
         "history": [
           {
             "at": 1780669246909,
@@ -96,6 +96,15 @@
             "matched": "Biến thái",
             "reason": "ข้อความนี้มีคำหยาบที่ใช้กล่าวหาหรือคุกคาม",
             "excerpt": "Biến thái",
+            "action": "timeout_failed",
+            "source": "ai"
+          },
+          {
+            "at": 1780831414145,
+            "severity": 6,
+            "matched": "Mấy con màu trắng á",
+            "reason": "ใช้คำเหยียดสีผิว",
+            "excerpt": "Mấy con màu trắng á",
             "action": "timeout_failed",
             "source": "ai"
           }
