@@ -45,35 +45,11 @@
       }
     },
     "967120879689551873": {
-      "count": 19,
-      "lastOffenseAt": 1778239550795,
-      "muteUntil": 0,
-      "lastWord": "ดูหี",
-      "lastSource": "voice",
-      "chat": {
-        "count": 2,
-        "lastAt": 1780940710338,
-        "history": [
-          {
-            "at": 1780511621627,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1780940710338,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          }
-        ]
-      }
+      "count": 20,
+      "lastOffenseAt": 1780940750869,
+      "muteUntil": 1780944350869,
+      "lastWord": "หี",
+      "lastSource": "chat"
     },
     "1491387879648264347": {
       "count": 2,
@@ -200,7 +176,7 @@
     "1512006615627468852": {
       "count": 1,
       "lastOffenseAt": 1780940688907,
-      "muteUntil": 1780940748907,
+      "muteUntil": 0,
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
