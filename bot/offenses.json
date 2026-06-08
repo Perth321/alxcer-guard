@@ -51,11 +51,20 @@
       "lastWord": "ดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 1,
-        "lastAt": 1780511621627,
+        "count": 2,
+        "lastAt": 1780940710338,
         "history": [
           {
             "at": 1780511621627,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควย",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1780940710338,
             "severity": 7,
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
