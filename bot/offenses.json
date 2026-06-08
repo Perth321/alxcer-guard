@@ -189,21 +189,11 @@
       "lastSource": "voice"
     },
     "1512006615627468852": {
-      "chat": {
-        "count": 1,
-        "lastAt": 1780718870256,
-        "history": [
-          {
-            "at": 1780718870256,
-            "severity": 7,
-            "matched": "คุณแม่บลิลี่",
-            "reason": "เรียกชื่อในลักษณะด่า",
-            "excerpt": "คุณแม่บลิลี่",
-            "action": "timeout_failed",
-            "source": "ai"
-          }
-        ]
-      }
+      "count": 1,
+      "lastOffenseAt": 1780940688907,
+      "muteUntil": 1780940748907,
+      "lastWord": "หี",
+      "lastSource": "chat"
     }
   }
 }
