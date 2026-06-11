@@ -30,16 +30,16 @@
       "lastSource": "voice",
       "chat": {
         "count": 1,
-        "lastAt": 1779888770954,
+        "lastAt": 1781171150181,
         "history": [
           {
-            "at": 1779888770954,
+            "at": 1781171150181,
             "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควยควย",
+            "matched": "หาพ่อ",
+            "reason": "ข้อความนี้เป็นการดูหมิ่นและคุกคามทางเพศอย่างรุนแรง",
+            "excerpt": "ไผหาพ่อก่อน",
             "action": "timeout_failed",
-            "source": "local"
+            "source": "ai"
           }
         ]
       }
