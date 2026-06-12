@@ -7,8 +7,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 4,
-        "lastAt": 1781258811250,
+        "count": 5,
+        "lastAt": 1781258862034,
         "history": [
           {
             "at": 1781258704766,
@@ -43,6 +43,15 @@
             "matched": "kẻ tâm thần",
             "reason": "ใช้คำหยาบเรียกบุคคล",
             "excerpt": "Chị Rung là một kẻ tâm thần",
+            "action": "timeout_failed",
+            "source": "ai"
+          },
+          {
+            "at": 1781258862034,
+            "severity": 6,
+            "matched": "đụ",
+            "reason": "มีคำหยาบชัดเจน",
+            "excerpt": "Cj rung la đụ má",
             "action": "timeout_failed",
             "source": "ai"
           }
