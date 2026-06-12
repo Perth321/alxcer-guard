@@ -216,8 +216,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 1,
-        "lastAt": 1780940724630,
+        "count": 2,
+        "lastAt": 1781258884918,
         "history": [
           {
             "at": 1780940724630,
@@ -227,6 +227,15 @@
             "excerpt": "ควย",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1781258884918,
+            "severity": 6,
+            "matched": "Du ma",
+            "reason": "คำหยาบชัดเจน",
+            "excerpt": "Alex Du ma",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
