@@ -5,7 +5,22 @@
       "lastOffenseAt": 1781361307499,
       "muteUntil": 1781364907499,
       "lastWord": "ดูหี",
-      "lastSource": "voice"
+      "lastSource": "voice",
+      "chat": {
+        "count": 1,
+        "lastAt": 1781361720740,
+        "history": [
+          {
+            "at": 1781361720740,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "ยศเด็กเหี้ยไง",
+            "action": "timeout_failed",
+            "source": "local"
+          }
+        ]
+      }
     },
     "946756535936233542": {
       "count": 14,
