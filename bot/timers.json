@@ -1,5 +1,20 @@
 {
   "version": 1,
-  "updatedAt": 1781439947783,
-  "timers": []
+  "updatedAt": 1781439961648,
+  "timers": [
+    {
+      "id": "tmqdrcubs2",
+      "type": "timer",
+      "createdAt": 1781439959944,
+      "fireAt": 1781440139944,
+      "label": "Timer",
+      "guildId": "1485726181398548490",
+      "channelId": "1485726181973037129",
+      "userId": "1512006615627468852",
+      "mentionUserId": "1512006615627468852",
+      "payload": {},
+      "messageId": "1515693791162531942",
+      "ownerId": "1512006615627468852"
+    }
+  ]
 }
