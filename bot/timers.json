@@ -1,22 +1,5 @@
 {
   "version": 1,
-  "updatedAt": 1781428426952,
-  "timers": [
-    {
-      "id": "tmqdkhm0b3",
-      "type": "alarm",
-      "createdAt": 1781428425131,
-      "fireAt": 1781430600000,
-      "label": "Alarm",
-      "guildId": "1485726181398548490",
-      "channelId": "1485726181973037129",
-      "userId": "1512006615627468852",
-      "mentionUserId": "1512006615627468852",
-      "payload": {
-        "play_wake_music": false
-      },
-      "messageId": "1515645410801090570",
-      "ownerId": "1512006615627468852"
-    }
-  ]
+  "updatedAt": 1781430606814,
+  "timers": []
 }
