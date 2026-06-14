@@ -1,20 +1,5 @@
 {
   "version": 1,
-  "updatedAt": 1781439944723,
-  "timers": [
-    {
-      "id": "tmqdrcgz51",
-      "type": "timer",
-      "createdAt": 1781439942642,
-      "fireAt": 1781440242641,
-      "label": "Timer",
-      "guildId": "1485726181398548490",
-      "channelId": "1485726181973037129",
-      "userId": "1512006615627468852",
-      "mentionUserId": "1512006615627468852",
-      "payload": {},
-      "messageId": "1515693719918084126",
-      "ownerId": "1512006615627468852"
-    }
-  ]
+  "updatedAt": 1781439947783,
+  "timers": []
 }
