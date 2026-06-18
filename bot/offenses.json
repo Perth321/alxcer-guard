@@ -7,8 +7,8 @@
       "lastWord": "ดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 1,
-        "lastAt": 1781361720740,
+        "count": 2,
+        "lastAt": 1781785392664,
         "history": [
           {
             "at": 1781361720740,
@@ -18,6 +18,15 @@
             "excerpt": "ยศเด็กเหี้ยไง",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1781785392664,
+            "severity": 7,
+            "matched": "ไล่พ่อไป",
+            "reason": "ข้อความนี้เป็นการด่าทอและไล่พ่อของผู้อื่นไป ซึ่งถือเป็นการดูหมิ่นอย่างรุนแรง",
+            "excerpt": "ไล่พ่อไป",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
