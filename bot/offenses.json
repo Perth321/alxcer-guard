@@ -69,8 +69,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 1,
-        "lastAt": 1781880111381,
+        "count": 2,
+        "lastAt": 1781880542437,
         "history": [
           {
             "at": 1781880111381,
@@ -80,6 +80,15 @@
             "excerpt": "มึงถูกมากมั้งควาย",
             "action": "timeout_failed",
             "source": "ai"
+          },
+          {
+            "at": 1781880542437,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "ไอ้เหี้ยแม่กุ",
+            "action": "timeout_failed",
+            "source": "local"
           }
         ]
       }
