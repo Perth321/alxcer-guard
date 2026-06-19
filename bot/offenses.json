@@ -7,8 +7,8 @@
       "lastWord": "ดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 2,
-        "lastAt": 1781785392664,
+        "count": 3,
+        "lastAt": 1781866215930,
         "history": [
           {
             "at": 1781361720740,
@@ -27,6 +27,15 @@
             "excerpt": "ไล่พ่อไป",
             "action": "timeout_failed",
             "source": "ai"
+          },
+          {
+            "at": 1781866215930,
+            "severity": 7,
+            "matched": "cặc",
+            "reason": "ใช้คำต้องห้าม: \"cặc\"",
+            "excerpt": "Con cặc",
+            "action": "timeout_failed",
+            "source": "local"
           }
         ]
       }
