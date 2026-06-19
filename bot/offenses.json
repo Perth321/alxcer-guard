@@ -1,44 +1,11 @@
 {
   "users": {
     "603182413660684321": {
-      "count": 75,
-      "lastOffenseAt": 1781361307499,
-      "muteUntil": 0,
-      "lastWord": "ดูหี",
-      "lastSource": "voice",
-      "chat": {
-        "count": 3,
-        "lastAt": 1781866215930,
-        "history": [
-          {
-            "at": 1781361720740,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "ยศเด็กเหี้ยไง",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1781785392664,
-            "severity": 7,
-            "matched": "ไล่พ่อไป",
-            "reason": "ข้อความนี้เป็นการด่าทอและไล่พ่อของผู้อื่นไป ซึ่งถือเป็นการดูหมิ่นอย่างรุนแรง",
-            "excerpt": "ไล่พ่อไป",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1781866215930,
-            "severity": 7,
-            "matched": "cặc",
-            "reason": "ใช้คำต้องห้าม: \"cặc\"",
-            "excerpt": "Con cặc",
-            "action": "timeout_failed",
-            "source": "local"
-          }
-        ]
-      }
+      "count": 76,
+      "lastOffenseAt": 1781891445954,
+      "muteUntil": 1781895045954,
+      "lastWord": "ขอดูหี",
+      "lastSource": "voice"
     },
     "946756535936233542": {
       "count": 14,
