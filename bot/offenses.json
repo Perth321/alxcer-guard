@@ -36,8 +36,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 2,
-        "lastAt": 1781880542437,
+        "count": 3,
+        "lastAt": 1781948197148,
         "history": [
           {
             "at": 1781880111381,
@@ -56,6 +56,15 @@
             "excerpt": "ไอ้เหี้ยแม่กุ",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1781948197148,
+            "severity": 7,
+            "matched": "ด่า",
+            "reason": "การเรียกให้ด่ากันอาจเป็นการกระตุ้นการด่าทอ",
+            "excerpt": "ไหน ลองด่าเราสิ",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
