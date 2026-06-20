@@ -36,8 +36,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 4,
-        "lastAt": 1781963322182,
+        "count": 5,
+        "lastAt": 1781963348928,
         "history": [
           {
             "at": 1781880111381,
@@ -74,6 +74,15 @@
             "excerpt": "7โมงไอ้สัส",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1781963348928,
+            "severity": 6,
+            "matched": "ai sas, hee",
+            "reason": "มีคำหยาบชัดเจนในข้อความ",
+            "excerpt": "7โมงเช้า ai sas alex na hee",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
