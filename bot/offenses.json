@@ -36,8 +36,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 3,
-        "lastAt": 1781948197148,
+        "count": 4,
+        "lastAt": 1781963322182,
         "history": [
           {
             "at": 1781880111381,
@@ -65,6 +65,15 @@
             "excerpt": "ไหน ลองด่าเราสิ",
             "action": "timeout_failed",
             "source": "ai"
+          },
+          {
+            "at": 1781963322182,
+            "severity": 7,
+            "matched": "สัส",
+            "reason": "ใช้คำต้องห้าม: \"สัส\"",
+            "excerpt": "7โมงไอ้สัส",
+            "action": "timeout_failed",
+            "source": "local"
           }
         ]
       }
