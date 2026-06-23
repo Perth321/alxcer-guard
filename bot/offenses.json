@@ -60,8 +60,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 6,
-        "lastAt": 1781971828390,
+        "count": 7,
+        "lastAt": 1782215149689,
         "history": [
           {
             "at": 1781880111381,
@@ -114,6 +114,15 @@
             "matched": "มึง",
             "reason": "คำสาปแช่งที่รุนแรง",
             "excerpt": "กุขอให้มึงเจอผีคืนนี้",
+            "action": "timeout_failed",
+            "source": "ai"
+          },
+          {
+            "at": 1782215149689,
+            "severity": 7,
+            "matched": "แม่ด่า",
+            "reason": "คำหยาบชัดเจน",
+            "excerpt": "แม่ด่า6151515155115",
             "action": "timeout_failed",
             "source": "ai"
           }
