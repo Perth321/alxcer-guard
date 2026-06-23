@@ -5,7 +5,31 @@
       "lastOffenseAt": 1781891445954,
       "muteUntil": 0,
       "lastWord": "ขอดูหี",
-      "lastSource": "voice"
+      "lastSource": "voice",
+      "chat": {
+        "count": 2,
+        "lastAt": 1782193880540,
+        "history": [
+          {
+            "at": 1782193879821,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควย",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1782193880540,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควย",
+            "action": "timeout_failed",
+            "source": "local"
+          }
+        ]
+      }
     },
     "946756535936233542": {
       "count": 14,
