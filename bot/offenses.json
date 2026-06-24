@@ -7,8 +7,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 2,
-        "lastAt": 1782193880540,
+        "count": 3,
+        "lastAt": 1782278281157,
         "history": [
           {
             "at": 1782193879821,
@@ -25,6 +25,15 @@
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
             "excerpt": "ควย",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1782278281157,
+            "severity": 7,
+            "matched": "สัส",
+            "reason": "ใช้คำต้องห้าม: \"สัส\"",
+            "excerpt": "ไอสัสเน้ตที่โรงอาหารยังกาก",
             "action": "timeout_failed",
             "source": "local"
           }
