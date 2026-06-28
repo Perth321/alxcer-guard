@@ -48,14 +48,14 @@
       "lastSource": "voice",
       "chat": {
         "count": 1,
-        "lastAt": 1781171150181,
+        "lastAt": 1782652223324,
         "history": [
           {
-            "at": 1781171150181,
+            "at": 1782652223324,
             "severity": 7,
-            "matched": "หาพ่อ",
-            "reason": "ข้อความนี้เป็นการดูหมิ่นและคุกคามทางเพศอย่างรุนแรง",
-            "excerpt": "ไผหาพ่อก่อน",
+            "matched": "ตัดลิ้น",
+            "reason": "คำพูดที่มีความรุนแรง",
+            "excerpt": "เดี๋ยวตัดลิ้น",
             "action": "timeout_failed",
             "source": "ai"
           }
