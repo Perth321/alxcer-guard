@@ -45,7 +45,22 @@
       "lastOffenseAt": 1782652500838,
       "muteUntil": 0,
       "lastWord": "หี",
-      "lastSource": "chat"
+      "lastSource": "chat",
+      "chat": {
+        "count": 1,
+        "lastAt": 1782664246515,
+        "history": [
+          {
+            "at": 1782664246515,
+            "severity": 6,
+            "matched": "ไอ้เขี้ยยยย",
+            "reason": "คำหยาบชัดเจน",
+            "excerpt": "ไอ้เขี้ยยยย",
+            "action": "timeout_failed",
+            "source": "ai"
+          }
+        ]
+      }
     },
     "967120879689551873": {
       "count": 20,
