@@ -41,26 +41,11 @@
       }
     },
     "946756535936233542": {
-      "count": 14,
-      "lastOffenseAt": 1777729049857,
-      "muteUntil": 0,
+      "count": 15,
+      "lastOffenseAt": 1782652500838,
+      "muteUntil": 1782656100838,
       "lastWord": "หี",
-      "lastSource": "voice",
-      "chat": {
-        "count": 1,
-        "lastAt": 1782652223324,
-        "history": [
-          {
-            "at": 1782652223324,
-            "severity": 7,
-            "matched": "ตัดลิ้น",
-            "reason": "คำพูดที่มีความรุนแรง",
-            "excerpt": "เดี๋ยวตัดลิ้น",
-            "action": "timeout_failed",
-            "source": "ai"
-          }
-        ]
-      }
+      "lastSource": "chat"
     },
     "967120879689551873": {
       "count": 20,
