@@ -7,8 +7,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 4,
-        "lastAt": 1782696855018,
+        "count": 5,
+        "lastAt": 1782739329971,
         "history": [
           {
             "at": 1782193879821,
@@ -43,6 +43,15 @@
             "matched": "สัส",
             "reason": "ใช้คำต้องห้าม: \"สัส\"",
             "excerpt": "ไอสัส",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1782739329971,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "!th ตัวเหี้ย",
             "action": "timeout_failed",
             "source": "local"
           }
