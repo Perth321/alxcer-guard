@@ -114,69 +114,15 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 7,
-        "lastAt": 1782215149689,
+        "count": 1,
+        "lastAt": 1782893369745,
         "history": [
           {
-            "at": 1781880111381,
-            "severity": 6,
-            "matched": "มึงถูกมากมั้งควาย",
-            "reason": "ใช้คำหยาบและด่าทอ",
-            "excerpt": "มึงถูกมากมั้งควาย",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1781880542437,
+            "at": 1782893369745,
             "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "ไอ้เหี้ยแม่กุ",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1781948197148,
-            "severity": 7,
-            "matched": "ด่า",
-            "reason": "การเรียกให้ด่ากันอาจเป็นการกระตุ้นการด่าทอ",
-            "excerpt": "ไหน ลองด่าเราสิ",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1781963322182,
-            "severity": 7,
-            "matched": "สัส",
-            "reason": "ใช้คำต้องห้าม: \"สัส\"",
-            "excerpt": "7โมงไอ้สัส",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1781963348928,
-            "severity": 6,
-            "matched": "ai sas, hee",
-            "reason": "มีคำหยาบชัดเจนในข้อความ",
-            "excerpt": "7โมงเช้า ai sas alex na hee",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1781971828390,
-            "severity": 7,
-            "matched": "มึง",
-            "reason": "คำสาปแช่งที่รุนแรง",
-            "excerpt": "กุขอให้มึงเจอผีคืนนี้",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1782215149689,
-            "severity": 7,
-            "matched": "แม่ด่า",
-            "reason": "คำหยาบชัดเจน",
-            "excerpt": "แม่ด่า6151515155115",
+            "matched": "ไอ้เหรี้ย",
+            "reason": "มีคำหยาบคายที่ใช้เรียกบุคคลโดยตรง",
+            "excerpt": "แม่ใช้เรยไอ้เหรี้ย",
             "action": "timeout_failed",
             "source": "ai"
           }
