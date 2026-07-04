@@ -7,8 +7,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 5,
-        "lastAt": 1782739329971,
+        "count": 6,
+        "lastAt": 1783170940599,
         "history": [
           {
             "at": 1782193879821,
@@ -52,6 +52,15 @@
             "matched": "หี",
             "reason": "ใช้คำต้องห้าม: \"หี\"",
             "excerpt": "!th ตัวเหี้ย",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1783170940599,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "แต่ว่าอันนี้เป็นคนพูดคนเดียวไอ้เหี้ยโคตรเวอร์อ่ะ",
             "action": "timeout_failed",
             "source": "local"
           }
