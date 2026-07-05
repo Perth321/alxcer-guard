@@ -74,8 +74,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 4,
-        "lastAt": 1782738995421,
+        "count": 5,
+        "lastAt": 1783224384783,
         "history": [
           {
             "at": 1782664246515,
@@ -112,6 +112,15 @@
             "excerpt": "เจอคนควยๆมา",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1783224384783,
+            "severity": 7,
+            "matched": "ไอ้เชี้ยยยยย",
+            "reason": "มีคำหยาบคายที่ใช้ด่าทอโดยตรง",
+            "excerpt": "ไอ้เชี้ยยยยย",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
