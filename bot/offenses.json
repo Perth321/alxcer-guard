@@ -7,8 +7,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 7,
-        "lastAt": 1783225137210,
+        "count": 8,
+        "lastAt": 1783313577646,
         "history": [
           {
             "at": 1782193879821,
@@ -72,6 +72,15 @@
             "excerpt": "ดาร์คสัส",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1783313577646,
+            "severity": 6,
+            "matched": "ครวย",
+            "reason": "มีการใช้คำหยาบคายที่สื่อถึงอวัยวะเพศ",
+            "excerpt": "ครวยไม่เล้ก",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
