@@ -154,7 +154,22 @@
       "lastOffenseAt": 1781072918603,
       "muteUntil": 0,
       "lastWord": "หี",
-      "lastSource": "voice"
+      "lastSource": "voice",
+      "chat": {
+        "count": 1,
+        "lastAt": 1783313400467,
+        "history": [
+          {
+            "at": 1783313400467,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควยพุดไม่ได้จารย์สอนอยุ่",
+            "action": "timeout_failed",
+            "source": "local"
+          }
+        ]
+      }
     },
     "1464586313444495503": {
       "count": 2,
