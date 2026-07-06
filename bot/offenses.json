@@ -77,62 +77,11 @@
       }
     },
     "946756535936233542": {
-      "count": 15,
-      "lastOffenseAt": 1782652500838,
-      "muteUntil": 0,
+      "count": 16,
+      "lastOffenseAt": 1783312239625,
+      "muteUntil": 1783315839625,
       "lastWord": "หี",
-      "lastSource": "chat",
-      "chat": {
-        "count": 5,
-        "lastAt": 1783224384783,
-        "history": [
-          {
-            "at": 1782664246515,
-            "severity": 6,
-            "matched": "ไอ้เขี้ยยยย",
-            "reason": "คำหยาบชัดเจน",
-            "excerpt": "ไอ้เขี้ยยยย",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1782713843662,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควยๆๆ",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1782738922016,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1782738995421,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "เจอคนควยๆมา",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1783224384783,
-            "severity": 7,
-            "matched": "ไอ้เชี้ยยยยย",
-            "reason": "มีคำหยาบคายที่ใช้ด่าทอโดยตรง",
-            "excerpt": "ไอ้เชี้ยยยยย",
-            "action": "timeout_failed",
-            "source": "ai"
-          }
-        ]
-      }
+      "lastSource": "voice"
     },
     "967120879689551873": {
       "count": 20,
