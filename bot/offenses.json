@@ -99,7 +99,22 @@
       "lastOffenseAt": 1783312239625,
       "muteUntil": 0,
       "lastWord": "หี",
-      "lastSource": "voice"
+      "lastSource": "voice",
+      "chat": {
+        "count": 1,
+        "lastAt": 1783516860711,
+        "history": [
+          {
+            "at": 1783516860711,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควยพี่เล็ก",
+            "action": "timeout_failed",
+            "source": "local"
+          }
+        ]
+      }
     },
     "967120879689551873": {
       "count": 20,
