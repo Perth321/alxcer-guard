@@ -7,8 +7,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 9,
-        "lastAt": 1783515143811,
+        "count": 10,
+        "lastAt": 1783743146199,
         "history": [
           {
             "at": 1782193879821,
@@ -90,6 +90,15 @@
             "excerpt": "Con cặc",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1783743146199,
+            "severity": 7,
+            "matched": "แม่มึง",
+            "reason": "ใช้คำหยาบเรียกบุคคล",
+            "excerpt": "แม่มึงอะ",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
