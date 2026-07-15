@@ -7,8 +7,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 11,
-        "lastAt": 1784107161793,
+        "count": 12,
+        "lastAt": 1784119737938,
         "history": [
           {
             "at": 1782193879821,
@@ -106,6 +106,15 @@
             "matched": "สัส",
             "reason": "ใช้คำต้องห้าม: \"สัส\"",
             "excerpt": "ไอสัส อยู่ๆ นัดเฉย",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1784119737938,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "พวก อยู่สังคมแบบนี้พ่อแม่มันก็คงเป็นพวก สปีชีส เดียวกันนั้นแหละ หลอกพวกเชี้ยนี่ลดประชากร ตายห่า เพราะ มะเร็งควย",
             "action": "timeout_failed",
             "source": "local"
           }
