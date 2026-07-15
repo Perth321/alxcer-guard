@@ -7,8 +7,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 10,
-        "lastAt": 1783743146199,
+        "count": 11,
+        "lastAt": 1784107161793,
         "history": [
           {
             "at": 1782193879821,
@@ -99,6 +99,15 @@
             "excerpt": "แม่มึงอะ",
             "action": "timeout_failed",
             "source": "ai"
+          },
+          {
+            "at": 1784107161793,
+            "severity": 7,
+            "matched": "สัส",
+            "reason": "ใช้คำต้องห้าม: \"สัส\"",
+            "excerpt": "ไอสัส อยู่ๆ นัดเฉย",
+            "action": "timeout_failed",
+            "source": "local"
           }
         ]
       }
