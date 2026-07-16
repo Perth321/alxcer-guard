@@ -7,8 +7,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 13,
-        "lastAt": 1784119808427,
+        "count": 14,
+        "lastAt": 1784198420945,
         "history": [
           {
             "at": 1782193879821,
@@ -124,6 +124,15 @@
             "matched": "โง่",
             "reason": "เป็นการด่าทอและดูถูกเหยียดหยามผู้อื่น",
             "excerpt": "โง่แหละถึงเกิดเป็นพ่อแม่ลูกได้",
+            "action": "timeout_failed",
+            "source": "ai"
+          },
+          {
+            "at": 1784198420944,
+            "severity": 6,
+            "matched": "ไอ้เชี้ย",
+            "reason": "มีคำหยาบที่ใช้เรียกคนอื่น",
+            "excerpt": "ทักคนทั้งคณะเลยไอเชี้ย จำคนที่นั่งข้างๆ เมื่อวานไม่ได้",
             "action": "timeout_failed",
             "source": "ai"
           }
