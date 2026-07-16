@@ -147,14 +147,14 @@
       "lastSource": "voice",
       "chat": {
         "count": 1,
-        "lastAt": 1783516860711,
+        "lastAt": 1784208860702,
         "history": [
           {
-            "at": 1783516860711,
+            "at": 1784208860702,
             "severity": 7,
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควยพี่เล็ก",
+            "excerpt": "ควยเล็กจัง",
             "action": "timeout_failed",
             "source": "local"
           }
