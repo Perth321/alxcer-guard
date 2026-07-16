@@ -226,14 +226,14 @@
       "lastSource": "voice",
       "chat": {
         "count": 1,
-        "lastAt": 1783313400467,
+        "lastAt": 1784188302021,
         "history": [
           {
-            "at": 1783313400467,
+            "at": 1784188302021,
             "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควยพุดไม่ได้จารย์สอนอยุ่",
+            "matched": "สัส",
+            "reason": "ใช้คำต้องห้าม: \"สัส\"",
+            "excerpt": "เน็ตกากสัส",
             "action": "timeout_failed",
             "source": "local"
           }
