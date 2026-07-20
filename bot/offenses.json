@@ -234,8 +234,8 @@
       "lastWord": "หี",
       "lastSource": "voice",
       "chat": {
-        "count": 1,
-        "lastAt": 1784188302021,
+        "count": 2,
+        "lastAt": 1784540032164,
         "history": [
           {
             "at": 1784188302021,
@@ -243,6 +243,15 @@
             "matched": "สัส",
             "reason": "ใช้คำต้องห้าม: \"สัส\"",
             "excerpt": "เน็ตกากสัส",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1784540032164,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "อย่างไวไอเหี้ย",
             "action": "timeout_failed",
             "source": "local"
           }
