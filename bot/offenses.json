@@ -168,8 +168,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 1,
-        "lastAt": 1785490046048,
+        "count": 2,
+        "lastAt": 1785490101927,
         "history": [
           {
             "at": 1785490046048,
@@ -179,6 +179,15 @@
             "excerpt": "คนก็เหี ้ย",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1785490101927,
+            "severity": 7,
+            "matched": "ด่าแม่มึง",
+            "reason": "มีการกล่าวถึงบุพการีในทางที่ไม่ดี",
+            "excerpt": "ด่าแม่มึงอ่ะ",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
