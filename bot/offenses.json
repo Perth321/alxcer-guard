@@ -168,8 +168,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 3,
-        "lastAt": 1785490109716,
+        "count": 4,
+        "lastAt": 1785490160343,
         "history": [
           {
             "at": 1785490046048,
@@ -195,6 +195,15 @@
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
             "excerpt": "ควยไร",
+            "action": "timeout_failed",
+            "source": "local"
+          },
+          {
+            "at": 1785490160343,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "ควยแม่มึงตายหน้าหี",
             "action": "timeout_failed",
             "source": "local"
           }
