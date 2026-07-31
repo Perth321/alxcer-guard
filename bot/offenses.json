@@ -168,24 +168,15 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 2,
-        "lastAt": 1782893839286,
+        "count": 1,
+        "lastAt": 1785490046048,
         "history": [
           {
-            "at": 1782893369745,
+            "at": 1785490046048,
             "severity": 7,
-            "matched": "ไอ้เหรี้ย",
-            "reason": "มีคำหยาบคายที่ใช้เรียกบุคคลโดยตรง",
-            "excerpt": "แม่ใช้เรยไอ้เหรี้ย",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1782893839286,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "คนก็เหี ้ย",
             "action": "timeout_failed",
             "source": "local"
           }
