@@ -1,0 +1,43 @@
+name: Encrypt Deepgram for Onepune
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  encrypt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Encrypt Deepgram secret for Onepune
+        env:
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          ONEPUNE_PUBLIC_KEY: Do8It/taZzj0SOaQ6ED5NqHRKog2Px4ELcqbwfRPLAE=
+        run: |
+          test -n "$DEEPGRAM_API_KEY"
+          python -m pip install --disable-pip-version-check --quiet PyNaCl==1.5.0
+          python - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          from nacl import encoding, public
+
+          public_key = public.PublicKey(
+              os.environ["ONEPUNE_PUBLIC_KEY"].encode("ascii"),
+              encoding.Base64Encoder(),
+          )
+          encrypted = public.SealedBox(public_key).encrypt(
+              os.environ["DEEPGRAM_API_KEY"].encode("utf-8")
+          )
+          output = Path(os.environ["RUNNER_TEMP"]) / "onepune-deepgram-secret.txt"
+          output.write_text(base64.b64encode(encrypted).decode("ascii"), encoding="ascii")
+          PY
+
+      - name: Upload one-time encrypted payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: onepune-encrypted-deepgram
+          path: ${{ runner.temp }}/onepune-deepgram-secret.txt
+          if-no-files-found: error
+          retention-days: 1
