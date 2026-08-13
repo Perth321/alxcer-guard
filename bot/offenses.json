@@ -177,60 +177,15 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 6,
-        "lastAt": 1785490222855,
+        "count": 1,
+        "lastAt": 1786637431879,
         "history": [
           {
-            "at": 1785490046048,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "คนก็เหี ้ย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1785490101927,
-            "severity": 7,
-            "matched": "ด่าแม่มึง",
-            "reason": "มีการกล่าวถึงบุพการีในทางที่ไม่ดี",
-            "excerpt": "ด่าแม่มึงอ่ะ",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1785490109716,
+            "at": 1786637431879,
             "severity": 7,
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควยไร",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1785490160343,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "ควยแม่มึงตายหน้าหี",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1785490175855,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "แล้วมึงเป็นควยไร",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1785490222855,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "เปิดควยมึงอ่ะ",
+            "excerpt": "ควย",
             "action": "timeout_failed",
             "source": "local"
           }
