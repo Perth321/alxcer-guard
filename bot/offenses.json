@@ -177,8 +177,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 2,
-        "lastAt": 1786637506195,
+        "count": 3,
+        "lastAt": 1786772267101,
         "history": [
           {
             "at": 1786637431879,
@@ -195,6 +195,15 @@
             "matched": "ควาย",
             "reason": "มีคำหยาบคายที่ใช้ด่าทอโดยตรง",
             "excerpt": "เบื่อขี้หน้าควาย",
+            "action": "timeout_failed",
+            "source": "ai"
+          },
+          {
+            "at": 1786772267101,
+            "severity": 6,
+            "matched": "แม่มึง",
+            "reason": "มีคำหยาบคายที่ใช้ด่าทอ",
+            "excerpt": "บองแม่มึงอ่ะ",
             "action": "timeout_failed",
             "source": "ai"
           }
