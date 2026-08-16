@@ -22,3 +22,13 @@ test("leading STT noise and short fillers are handled", () => {
   assert.equal(cleanForWake("[เสียงเพลง]  การ์ด"), "การ์ด");
   assert.equal(extractWakeCommand("เอ่อ การ์ด ช่วยหน่อย"), "ช่วยหน่อย");
 });
+
+test("Thai commands still wake when STT removes the word boundary", () => {
+  assert.equal(extractWakeCommand("การ์ดปิดไมค์ทุกคน"), "ปิดไมค์ทุกคน");
+  assert.equal(extractWakeCommand("กาดช่วยสร้างห้องชื่อเกม"), "ช่วยสร้างห้องชื่อเกม");
+  assert.equal(extractWakeCommand("การ์ดวันนี้วันอะไร"), "วันนี้วันอะไร");
+
+  // Keep noun compounds quiet: prefix matching alone is not a wake call.
+  assert.equal(extractWakeCommand("การ์ดเกมใบนี้หายาก"), null);
+  assert.equal(extractWakeCommand("การ์ดจอรุ่นนี้แรง"), null);
+});

@@ -1,21 +1,200 @@
 import { Buffer } from "node:buffer";
 
-const API_KEY = process.env.DEEPGRAM_API_KEY || "";
+const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || "";
 const MODEL = process.env.DEEPGRAM_MODEL || "nova-3";
 const LANGUAGE = process.env.DEEPGRAM_LANGUAGE || "th";
-const ENDPOINT = "https://api.deepgram.com/v1/listen";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const GEMINI_MODEL = process.env.GEMINI_STT_MODEL || "gemini-2.5-flash";
+const DEEPGRAM_ENDPOINT = "https://api.deepgram.com/v1/listen";
+const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
+const DEFAULT_TIMEOUT_MS = 30_000;
+const GEMINI_TRANSCRIPTION_PROMPT = [
+  "Transcribe the provided WAV audio exactly as spoken.",
+  "Return only the transcript in the original spoken language.",
+  "Do not translate, explain, summarize, identify speakers, add timestamps, or use Markdown.",
+  "If there is no intelligible speech, return an empty response.",
+].join(" ");
 
-let lastImportError = API_KEY ? null : "DEEPGRAM_API_KEY env var not set";
-let modelReadyAt = API_KEY ? Date.now() : 0;
+const HAS_TRANSCRIBER = !!(DEEPGRAM_API_KEY || GEMINI_API_KEY);
+let lastImportError = HAS_TRANSCRIBER
+  ? null
+  : "DEEPGRAM_API_KEY and GEMINI_API_KEY env vars are not set";
+let modelReadyAt = HAS_TRANSCRIBER ? Date.now() : 0;
 let totalProcessed = 0;
 let totalEmpty = 0;
 let totalErrors = 0;
 let totalCallbackErrors = 0;
 let lastTextAt = 0;
 let lastError = "";
+let lastProvider = "";
+
+function providerError(provider, message, status, cause) {
+  const error = new Error(message, cause ? { cause } : undefined);
+  error.provider = provider;
+  if (status !== undefined) error.status = status;
+  return error;
+}
+
+async function withTimeout(provider, timeoutMs, request) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await request(controller.signal);
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw providerError(provider, `${provider} transcription timed out`, 408, error);
+    }
+    if (!error?.provider) error.provider = provider;
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readJson(response, provider) {
+  try {
+    return await response.json();
+  } catch (error) {
+    throw providerError(
+      provider,
+      `${provider} returned invalid JSON`,
+      response.status,
+      error,
+    );
+  }
+}
+
+function geminiTranscript(body) {
+  const candidates = Array.isArray(body?.candidates) ? body.candidates : [];
+  for (const candidate of candidates) {
+    const parts = Array.isArray(candidate?.content?.parts)
+      ? candidate.content.parts
+      : [];
+    const text = parts
+      .map((part) => (typeof part?.text === "string" ? part.text : ""))
+      .join("")
+      .trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+// Deepgram is the low-latency primary. Gemini is deliberately an independent
+// fallback so exhausted Deepgram credit cannot silently disable the wake word.
+// The injected fetch makes the provider chain testable without network calls.
+export function createVoiceTranscriber({
+  deepgramApiKey = DEEPGRAM_API_KEY,
+  deepgramModel = MODEL,
+  language = LANGUAGE,
+  geminiApiKey = GEMINI_API_KEY,
+  geminiModel = GEMINI_MODEL,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+} = {}) {
+  async function transcribeDeepgram(wavBuffer) {
+    return withTimeout("deepgram", timeoutMs, async (signal) => {
+      const url =
+        `${DEEPGRAM_ENDPOINT}?model=${encodeURIComponent(deepgramModel)}` +
+        `&language=${encodeURIComponent(language)}`;
+      const response = await fetchImpl(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Token ${deepgramApiKey}`,
+          "Content-Type": "audio/wav",
+        },
+        body: wavBuffer,
+        signal,
+      });
+      if (!response.ok) {
+        throw providerError(
+          "deepgram",
+          `Deepgram HTTP ${response.status}`,
+          response.status,
+        );
+      }
+      const body = await readJson(response, "deepgram");
+      return String(
+        body?.results?.channels?.[0]?.alternatives?.[0]?.transcript || "",
+      ).trim();
+    });
+  }
+
+  async function transcribeGemini(wavBuffer) {
+    return withTimeout("gemini", timeoutMs, async (signal) => {
+      const url = `${GEMINI_ENDPOINT}/${encodeURIComponent(geminiModel)}:generateContent`;
+      const response = await fetchImpl(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": geminiApiKey,
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: GEMINI_TRANSCRIPTION_PROMPT },
+                {
+                  inlineData: {
+                    mimeType: "audio/wav",
+                    data: Buffer.from(wavBuffer).toString("base64"),
+                  },
+                },
+              ],
+            },
+          ],
+          generationConfig: { temperature: 0, maxOutputTokens: 512 },
+        }),
+        signal,
+      });
+      if (!response.ok) {
+        throw providerError(
+          "gemini",
+          `Gemini HTTP ${response.status}`,
+          response.status,
+        );
+      }
+      return geminiTranscript(await readJson(response, "gemini"));
+    });
+  }
+
+  const providers = [];
+  if (deepgramApiKey) providers.push(["deepgram", transcribeDeepgram]);
+  if (geminiApiKey) providers.push(["gemini", transcribeGemini]);
+
+  const transcribe = async (wavBuffer) => {
+    if (!providers.length) return "";
+    const errors = [];
+    for (const [provider, run] of providers) {
+      try {
+        const text = await run(wavBuffer);
+        transcribe.lastProvider = provider;
+        return text;
+      } catch (error) {
+        errors.push(error);
+        console.warn(
+          `[transcribe] ${provider} failed (${error?.status || error?.message || "unknown"})` +
+            (providers.length > 1 ? " — trying fallback" : ""),
+        );
+      }
+    }
+    if (errors.length === 1) throw errors[0];
+    const error = new AggregateError(errors, "All voice transcription providers failed");
+    const finalError = errors.at(-1);
+    error.provider = finalError?.provider;
+    error.status = finalError?.status;
+    throw error;
+  };
+  transcribe.available = providers.length > 0;
+  transcribe.providers = providers.map(([provider]) => provider);
+  transcribe.lastProvider = "";
+  return transcribe;
+}
+
+const transcribeWav = createVoiceTranscriber();
 
 export async function isAvailable() {
-  return !!API_KEY;
+  return transcribeWav.available;
 }
 
 export function importError() {
@@ -23,12 +202,15 @@ export function importError() {
 }
 
 export async function prepareModel() {
-  if (!API_KEY) {
-    console.warn("[transcribe] DEEPGRAM_API_KEY not set — voice STT disabled");
+  if (!transcribeWav.available) {
+    console.warn(
+      "[transcribe] no Deepgram/Gemini API key — voice STT disabled",
+    );
     return false;
   }
   console.log(
-    `[transcribe] ✓ READY — Deepgram model="${MODEL}" lang="${LANGUAGE}" (cloud, no warmup)`,
+    `[transcribe] ✓ READY — providers=${transcribeWav.providers.join("→")} ` +
+      `deepgram="${MODEL}" gemini="${GEMINI_MODEL}" lang="${LANGUAGE}"`,
   );
   return true;
 }
@@ -139,7 +321,7 @@ function schedulePump() {
 }
 
 export function enqueueTranscription(pcmBuffer, callback, meta = {}) {
-  if (!API_KEY) return false;
+  if (!transcribeWav.available) return false;
   const safeMeta = normalizeMeta(meta);
   const guildKey = guildKeyFor(safeMeta);
   const guildQueued = guildQueues.get(guildKey)?.length || 0;
@@ -167,10 +349,13 @@ export function enqueueTranscription(pcmBuffer, callback, meta = {}) {
 
 export function getStatus() {
   return {
-    engine: "deepgram",
+    engine: transcribeWav.providers[0] || "none",
+    providers: [...transcribeWav.providers],
+    lastProvider,
     model: MODEL,
+    geminiModel: GEMINI_MODEL,
     language: LANGUAGE,
-    modelReady: !!API_KEY,
+    modelReady: transcribeWav.available,
     modelReadyAt,
     queued,
     active,
@@ -217,6 +402,7 @@ async function runJob(job) {
   );
   try {
     const text = await transcribePcm(job.pcm);
+    lastProvider = transcribeWav.lastProvider;
     const elapsed = Date.now() - t0;
     totalProcessed++;
     const trimmed = (text || "").trim();
@@ -324,36 +510,8 @@ function normalizeThaiSpacing(s) {
 }
 
 async function transcribePcm(pcm) {
-  if (!API_KEY) return "";
+  if (!transcribeWav.available) return "";
   const monoPcm = downmixAndResample(pcm);
   const wav = pcmToWav(monoPcm);
-  // smart_format & punctuate are tuned for English — for Thai they insert
-  // syllable-level spaces that break downstream text matching, so we skip them.
-  const url =
-    `${ENDPOINT}?model=${encodeURIComponent(MODEL)}` +
-    `&language=${encodeURIComponent(LANGUAGE)}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30_000);
-  let res;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Token ${API_KEY}`,
-        "Content-Type": "audio/wav",
-      },
-      body: wav,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Deepgram HTTP ${res.status}: ${body.slice(0, 200)}`);
-  }
-  const json = await res.json();
-  const transcript =
-    json?.results?.channels?.[0]?.alternatives?.[0]?.transcript || "";
-  return normalizeThaiSpacing(transcript.trim());
+  return normalizeThaiSpacing((await transcribeWav(wav)).trim());
 }

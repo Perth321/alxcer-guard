@@ -3387,7 +3387,10 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
   const channel = msg.channel;
   const guild = msg.guild;
   const cfg = getConfigForGuild(guild.id);
-  const member = msg.member;
+  // Message.member can be absent for an uncached/partial message. Fetching it
+  // here keeps the tool authorization decision tied to the real GuildMember.
+  // Guild-owner checks still work from guild.ownerId if this fetch fails.
+  const member = msg.member || await guild.members.fetch(author.id).catch(() => null);
 
   // Build conversational context — bigger window so the bot follows the
   // thread instead of replying in a vacuum.
@@ -3421,12 +3424,12 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
 
   await channel.sendTyping().catch(() => {});
 
-  // Admin agent path — try first, but if it fails fall through to plain chat
-  let attemptedAgent = false;
-  const canUseAgent = canManageBot(member);
-  console.log('[agent] checking isAdmin for', author.tag, '| allowed:', canUseAgent, '| member perms bitfield:', member?.permissions?.bitfield?.toString(16));
-  if (canUseAgent) {
-    attemptedAgent = true;
+  // Every directly-triggered user enters the agent so conversation, web
+  // search, and read-only server tools keep working for everyone. Mutating
+  // tools are authorized again inside execTool: guild owner/Admin/Manage
+  // Server may change this guild; host/repository tools stay bot-owner-only.
+  console.log('[agent] triggered by', author.tag, '| member perms bitfield:', member?.permissions?.bitfield?.toString(16));
+  {
     // Real-time thinking display
     let thinkingMsg = null;
     const thinkingSteps = [];
@@ -3487,16 +3490,14 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
     }
   }
 
-  // Plain chat reply (also used as fallback for failed admin agent)
+  // Plain chat reply used only as a fallback when the agent throws.
   try {
     const reply = await generateReply({
       history: [
         ...ctxLines,
         { role: "user", content: `${author.username}: ${cleanText}` },
       ],
-      systemExtra: attemptedAgent
-        ? `Trigger: ${triggerReason}. (Admin agent path failed — just chat normally and tell them tools are temporarily unavailable if they were asking for an action.)`
-        : `Trigger: ${triggerReason}. The user is NOT a server admin — do not perform actions, just chat.`,
+      systemExtra: `Trigger: ${triggerReason}. (Agent path failed — just chat normally and tell them tools are temporarily unavailable if they were asking for an action.)`,
       // 500 tokens leaves headroom for a real 3–5 sentence answer when the
       // user asks an actual question (vs. just "hi"). Replies still trend
       // short because PERSONA caps casual chat at 1–2 sentences.

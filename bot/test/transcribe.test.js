@@ -254,3 +254,83 @@ test("keeps legacy callers without guildId working", async () => {
     else process.env.DEEPGRAM_API_KEY = previousKey;
   }
 });
+
+test("falls back to Gemini when Deepgram rejects the request", async () => {
+  const previousConsoleWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const { createVoiceTranscriber } = await importFreshTranscriber();
+    const calls = [];
+    const wav = Buffer.from("test-wav");
+    const transcribe = createVoiceTranscriber({
+      deepgramApiKey: "deepgram-test-key",
+      geminiApiKey: "gemini-test-key",
+      fetchImpl: async (url, options) => {
+        calls.push({ url: String(url), options });
+        if (String(url).includes("deepgram.com")) {
+          return { ok: false, status: 402 };
+        }
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {
+              candidates: [{ content: { parts: [{ text: "การ์ด ปิดไมค์ทุกคน" }] } }],
+            };
+          },
+        };
+      },
+    });
+
+    assert.equal(await transcribe(wav), "การ์ด ปิดไมค์ทุกคน");
+    assert.deepEqual(transcribe.providers, ["deepgram", "gemini"]);
+    assert.equal(transcribe.lastProvider, "gemini");
+    assert.equal(calls.length, 2);
+    assert.match(calls[0].url, /deepgram\.com/);
+    assert.match(calls[1].url, /gemini-2\.5-flash:generateContent/);
+    assert.equal(calls[1].options.headers["x-goog-api-key"], "gemini-test-key");
+    const geminiBody = JSON.parse(calls[1].options.body);
+    assert.equal(
+      geminiBody.contents[0].parts[1].inlineData.data,
+      wav.toString("base64"),
+    );
+  } finally {
+    console.warn = previousConsoleWarn;
+  }
+});
+
+test("supports Gemini-only STT and keeps Deepgram first when healthy", async () => {
+  const { createVoiceTranscriber } = await importFreshTranscriber();
+  const geminiUrls = [];
+  const geminiOnly = createVoiceTranscriber({
+    deepgramApiKey: "",
+    geminiApiKey: "gemini-test-key",
+    fetchImpl: async (url) => {
+      geminiUrls.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { candidates: [{ content: { parts: [{ text: "การ์ด" }] } }] };
+        },
+      };
+    },
+  });
+  assert.equal(await geminiOnly(Buffer.from("wav")), "การ์ด");
+  assert.deepEqual(geminiOnly.providers, ["gemini"]);
+  assert.equal(geminiUrls.length, 1);
+  assert.match(geminiUrls[0], /generativelanguage\.googleapis\.com/);
+
+  let requestCount = 0;
+  const deepgramHealthy = createVoiceTranscriber({
+    deepgramApiKey: "deepgram-test-key",
+    geminiApiKey: "gemini-test-key",
+    fetchImpl: async () => {
+      requestCount++;
+      return deepgramResponse(99);
+    },
+  });
+  assert.equal(await deepgramHealthy(Buffer.from("wav")), "text-99");
+  assert.equal(deepgramHealthy.lastProvider, "deepgram");
+  assert.equal(requestCount, 1, "healthy Deepgram must not call Gemini");
+});

@@ -139,8 +139,16 @@ export async function authorizeAgentTool(toolName, ctx = {}) {
   }
   const fallbackPermissions =
     ctx.authorPermissions || ctx.memberPermissions || ctx.fallbackPermissions || null;
+  // Discord guild ownership is server-management authority, but it is not the
+  // same thing as owning the bot application/host. Keep it on the
+  // canManageGuild side of the policy so a guild owner can moderate their own
+  // server without gaining access to shell, repository, or log tools.
+  const isGuildOwner =
+    !!authorId &&
+    !!ctx.guild?.ownerId &&
+    authorId === String(ctx.guild.ownerId);
   return canExecuteAgentTool(toolName, {
-    canManageGuild: canManageBot(member, fallbackPermissions),
+    canManageGuild: isGuildOwner || canManageBot(member, fallbackPermissions),
   });
 }
 

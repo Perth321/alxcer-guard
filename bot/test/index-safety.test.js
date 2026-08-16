@@ -61,6 +61,15 @@ test("voice agent stays useful while tool authorization receives the real member
   assert.doesNotMatch(wakeHandler, /await generateReply\(\{/);
 });
 
+test("every directly-triggered text user enters the agent", () => {
+  const start = source.indexOf("async function handleAgentOrChatReply");
+  const end = source.indexOf("async function maybeSpontaneousChime", start);
+  const textHandler = source.slice(start, end);
+  assert.match(textHandler, /const member = msg\.member \|\| await guild\.members\.fetch/);
+  assert.match(textHandler, /await runAgent\(\{/);
+  assert.doesNotMatch(textHandler, /if \(canUseAgent\)/);
+});
+
 test("the STT callback awaits the wake handler before releasing its FIFO slot", () => {
   assert.match(source, /await handleWakeCommand\(\{/);
 });
