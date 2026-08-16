@@ -8,6 +8,27 @@ import {
   hasRequiredVoiceConfirmation,
   isMutatingTool,
 } from "../src/agent-auth.js";
+import { TOOLS } from "../src/agent.js";
+
+test("core server-management executors are exposed to the model as tools", () => {
+  const names = new Set(TOOLS.map((tool) => tool?.function?.name));
+  for (const name of [
+    "list_channels",
+    "create_channel",
+    "edit_channel",
+    "delete_channel",
+    "create_category",
+    "lock_channel",
+    "set_slowmode",
+    "set_channel_topic",
+  ]) {
+    assert.equal(names.has(name), true, `${name} must have an OpenAI-compatible tool schema`);
+  }
+
+  const createChannel = TOOLS.find((tool) => tool?.function?.name === "create_channel");
+  assert.deepEqual(createChannel.function.parameters.required, ["name", "type"]);
+  assert.deepEqual(createChannel.function.parameters.properties.type.enum, ["text", "voice"]);
+});
 
 test("read-only tools remain available without server-management permission", () => {
   assert.equal(isMutatingTool("web_search"), false);

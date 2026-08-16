@@ -181,7 +181,7 @@ async function releaseOwnedMute({ guild, member, leaseId, reason }) {
 }
 
 // ===== TOOL DEFINITIONS (OpenAI-compatible JSON schema) =====
-const TOOLS = [
+export const TOOLS = [
   {
     type: "function",
     function: {
@@ -207,6 +207,127 @@ const TOOLS = [
           kind: { type: "string", enum: ["text", "voice", "any"] },
         },
         required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_channels",
+      description: "List the text and voice channels that the requester can see in this Discord server.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_channel",
+      description: "Create one text or voice channel. Use type=voice for a voice room and type=text for a chat room.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "New channel name" },
+          type: { type: "string", enum: ["text", "voice"], description: "Channel kind; defaults to text" },
+          category_name: { type: "string", description: "Optional existing category name" },
+          topic: { type: "string", description: "Optional topic for a text channel" },
+          slowmode: { type: "integer", minimum: 0, maximum: 21600, description: "Text-channel slowmode in seconds" },
+          nsfw: { type: "boolean" },
+        },
+        required: ["name", "type"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit_channel",
+      description: "Rename a channel or update its topic, slowmode, or NSFW setting.",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string" },
+          name: { type: "string", description: "New channel name" },
+          topic: { type: "string" },
+          slowmode: { type: "integer", minimum: 0, maximum: 21600 },
+          nsfw: { type: "boolean" },
+        },
+        required: ["channel_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_channel",
+      description: "Delete one Discord channel after it has been resolved to an exact channel_id.",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["channel_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_category",
+      description: "Create a Discord channel category.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          position: { type: "integer", minimum: 0 },
+        },
+        required: ["name"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "lock_channel",
+      description: "Lock or unlock sending messages for @everyone in a text channel.",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string" },
+          lock: { type: "boolean", description: "true locks; false unlocks" },
+          reason: { type: "string" },
+        },
+        required: ["channel_id", "lock"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "set_slowmode",
+      description: "Set text-channel slowmode in seconds; use 0 to disable it.",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string" },
+          seconds: { type: "integer", minimum: 0, maximum: 21600 },
+        },
+        required: ["channel_id", "seconds"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "set_channel_topic",
+      description: "Set or clear the topic of a text channel.",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string", description: "Defaults to the current text channel" },
+          topic: { type: "string" },
+        },
+        required: ["topic"],
       },
     },
   },
@@ -3564,6 +3685,15 @@ Server-level:
   • "เปลี่ยนชื่อ X เป็น Y" / "ตั้งชื่อ X เป็น Y"             → set_nickname(X, Y)
   • "ให้ยศ Y กับ X" / "เพิ่ม role Y ให้ X"                  → add_role(X, Y)
   • "เอายศ Y ออกจาก X" / "ลบ role Y ของ X"                 → remove_role(X, Y)
+
+Channels / rooms:
+  • "สร้างห้องเสียง X" / "create voice channel X"           → create_channel({name:X, type:"voice"})
+  • "สร้างห้องแชต X" / "สร้างห้องข้อความ X"                 → create_channel({name:X, type:"text"})
+  • "สร้างหมวด X" / "create category X"                     → create_category({name:X})
+  • "เปลี่ยนชื่อห้อง X เป็น Y"                                → resolve_channel(X) → edit_channel({channel_id, name:Y})
+  • "ลบห้อง X"                                                → resolve_channel(X) → delete_channel({channel_id})
+  • "ล็อก/ปลดล็อกห้อง X"                                     → resolve_channel(X, kind:"text") → lock_channel({channel_id, lock:true/false})
+  • "ตั้ง slowmode ห้อง X N วินาที"                            → resolve_channel(X, kind:"text") → set_slowmode({channel_id, seconds:N})
 
 Messages:
   • "ลบ N ข้อความ" / "เคลียร์ N ข้อความ" / "purge N"        → bulk_delete_messages(count=N)
