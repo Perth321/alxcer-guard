@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": 1786880669427,
+  "updatedAt": 1786880687597,
   "items": [
     {
       "id": "7f0c4720-b217-461a-8686-310897243f84",
@@ -9,15 +9,6 @@
       "source": "agent:voice_mute",
       "actorId": "946756535936233542",
       "createdAt": 1786880440526,
-      "expiresAt": null
-    },
-    {
-      "id": "3e678010-27bb-4c23-aab9-d4fe2f98ecfd",
-      "guildId": "1433097119434276925",
-      "userId": "946756535936233542",
-      "source": "agent:voice_mute",
-      "actorId": "946756535936233542",
-      "createdAt": 1786880667919,
       "expiresAt": null
     }
   ]
