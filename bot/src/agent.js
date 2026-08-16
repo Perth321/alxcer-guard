@@ -22,10 +22,33 @@ import {
 import {
   createAutomation,
   cancelAutomationById,
+  getAutomation,
   listAutomations,
   allAutomations,
   writeAutomationsLocal,
 } from "./automations.js";
+import {
+  MUTATING_TOOLS,
+  OWNER_ONLY_TOOLS,
+  canExecuteAgentTool,
+  hasRequiredVoiceConfirmation,
+  isMutatingTool,
+} from "./agent-auth.js";
+import {
+  cancelExpectedUnmute,
+  expectOwnedUnmute,
+  createMuteLease,
+  getMuteLease,
+  releaseMuteLease,
+} from "./mute-leases.js";
+
+export {
+  MUTATING_TOOLS,
+  OWNER_ONLY_TOOLS,
+  canExecuteAgentTool,
+  hasRequiredVoiceConfirmation,
+  isMutatingTool,
+} from "./agent-auth.js";
 
 // ─── Role panel button toggle handler (called from index.js InteractionCreate) ───
 export async function handleRolePanelButton(interaction) {
@@ -90,6 +113,71 @@ export function canManageBot(member, fallbackPermissions = null) {
   if (memberHasPermission(member, PermissionFlagsBits.ManageGuild)) return true;
   if (permissionSetHas(fallbackPermissions, PermissionFlagsBits.Administrator)) return true;
   return permissionSetHas(fallbackPermissions, PermissionFlagsBits.ManageGuild);
+}
+
+// Defense-in-depth for tool calls. The outer message handler currently routes
+// admin prompts into the agent, but voice/automation/future callers can invoke
+// runAgent too. Every state-changing tool therefore checks authority again at
+// the execution boundary instead of trusting the LLM routing path.
+export async function authorizeAgentTool(toolName, ctx = {}) {
+  if (!isMutatingTool(toolName) && !OWNER_ONLY_TOOLS.has(String(toolName || ""))) {
+    return true;
+  }
+
+  const authorId = ctx.authorId ? String(ctx.authorId) : "";
+  const contextOwnerId = ctx.ownerId ? String(ctx.ownerId) : "";
+  const owner =
+    !!authorId &&
+    ((!!contextOwnerId && authorId === contextOwnerId) ||
+      (!!_ownerId && authorId === _ownerId));
+  if (canExecuteAgentTool(toolName, { isOwner: owner })) return true;
+
+  let member = ctx.authorMember || null;
+  if (member && authorId && memberUserId(member) !== authorId) member = null;
+  if (!member && authorId && ctx.guild?.members?.fetch) {
+    member = await ctx.guild.members.fetch(authorId).catch(() => null);
+  }
+  const fallbackPermissions =
+    ctx.authorPermissions || ctx.memberPermissions || ctx.fallbackPermissions || null;
+  return canExecuteAgentTool(toolName, {
+    canManageGuild: canManageBot(member, fallbackPermissions),
+  });
+}
+
+async function releaseOwnedMute({ guild, member, leaseId, reason }) {
+  const guildId = guild?.id;
+  const userId = member?.id;
+  const current = guildId && userId ? getMuteLease(guildId, userId) : null;
+  if (!current || !leaseId || current.id !== String(leaseId)) {
+    return { ok: false, code: "mute_not_owned", lease: current };
+  }
+
+  // A member who left voice no longer has an active server mute to release,
+  // but the exact matching lease can still be cleaned up safely.
+  if (!member.voice?.channel) {
+    const released = releaseMuteLease(guildId, userId, leaseId);
+    return { ok: released, code: released ? "not_in_voice" : "lease_conflict" };
+  }
+
+  expectOwnedUnmute(guildId, userId, leaseId);
+  try {
+    await member.voice.setMute(false, reason);
+  } catch (err) {
+    cancelExpectedUnmute(guildId, userId, leaseId);
+    throw err;
+  }
+  const released = releaseMuteLease(guildId, userId, leaseId);
+  if (released) return { ok: true };
+
+  // A newer mute replaced this lease while Discord REST was in flight. Restore
+  // the muted state so the stale unmute cannot defeat the newer owner.
+  const replacement = getMuteLease(guildId, userId);
+  if (replacement) {
+    await member.voice
+      .setMute(true, `Alxcer Guard: preserving newer mute lease ${replacement.source}`)
+      .catch(() => {});
+  }
+  return { ok: false, code: "lease_conflict", lease: replacement };
 }
 
 // ===== TOOL DEFINITIONS (OpenAI-compatible JSON schema) =====
@@ -1155,16 +1243,46 @@ function summarizeBatch(results, verb) {
   return { verb, total: results.length, success: ok.length, names: ok, skipped, failed };
 }
 
+const scopedOffenseKey = (guildId, userId) => `${guildId}:${userId}`;
+
+function canAuthorViewChannel(target, ctx) {
+  if (!target) return false;
+  const authorId = ctx.authorId ? String(ctx.authorId) : "";
+  const ownerId = ctx.ownerId ? String(ctx.ownerId) : "";
+  if (authorId && (authorId === ownerId || authorId === _ownerId)) return true;
+  const member = ctx.authorMember;
+  if (!member || (authorId && memberUserId(member) !== authorId)) return false;
+  return target.permissionsFor?.(member)?.has(PermissionFlagsBits.ViewChannel) === true;
+}
+
 // ===== Tool execution =====
 async function execTool(name, args, ctx) {
   const { guild, channel, offenses, persistOffenses, authorId } = ctx;
 
-  // ZERO guardrails by explicit user request — the bot now does WHATEVER
-  // the admin asks, including (if asked) muting / banning the admin
-  // themselves. The admin is in charge; their own typos are their own
-  // problem. The only ceiling is what Discord's own API enforces (role
-  // hierarchy, missing perms, etc.), and those errors will surface
-  // naturally to the agent so it can explain them.
+  if (!hasRequiredVoiceConfirmation(name, ctx)) {
+    return {
+      error: "voice confirmation required: repeat the command starting with ยืนยัน or confirm",
+      code: "voice_confirmation_required",
+      tool: name,
+    };
+  }
+
+  if (!(await authorizeAgentTool(name, ctx))) {
+    console.warn(
+      `[agent] denied tool=${name} author=${authorId || "unknown"} guild=${guild?.id || "unknown"}`,
+    );
+    const ownerOnly = OWNER_ONLY_TOOLS.has(name);
+    return {
+      error: ownerOnly
+        ? "permission denied: this host/repository tool is restricted to the bot owner"
+        : "permission denied: this tool requires the bot owner, Administrator, or Manage Server permission",
+      code: "agent_tool_forbidden",
+      tool: name,
+    };
+  }
+
+  // Authorized owners/admins can intentionally target themselves; Discord's
+  // role hierarchy and API permissions remain the final platform-level limit.
 
   
 // ─── Unicode font conversion utility ─────────────────────────────────────────
@@ -1206,20 +1324,54 @@ switch (name) {
         })),
       };
     }
-    case "resolve_channel":
-      return { candidates: await fuzzyFindChannels(guild, args.query, args.kind || "any") };
+    case "resolve_channel": {
+      const candidates = await fuzzyFindChannels(guild, args.query, args.kind || "any");
+      return {
+        candidates: candidates.filter((candidate) =>
+          canAuthorViewChannel(guild.channels.cache.get(candidate.id), ctx),
+        ),
+      };
+    }
 
     case "voice_mute": {
       const m = await guild.members.fetch(args.user_id);
       if (m.id === guild.client.user?.id) return { error: "ไม่สามารถปิดไมค์ตัวเองได้ — บอทไม่ควรถูก mute" };
       if (!m.voice?.channelId) return { error: "user is not in a voice channel" };
-      await m.voice.setMute(true, args.reason || "Alxcer Guard agent");
-      return { ok: true, user: m.displayName };
+      const existing = getMuteLease(guild.id, m.id);
+      if (m.voice.serverMute && !existing) {
+        return {
+          error: "user is already server-muted by an external moderator; refusing to claim or overwrite that mute",
+          code: "external_mute_not_owned",
+        };
+      }
+      if (!m.voice.serverMute) {
+        await m.voice.setMute(true, args.reason || "Alxcer Guard agent");
+      }
+      const lease = createMuteLease({
+        guildId: guild.id,
+        userId: m.id,
+        source: "agent:voice_mute",
+        actorId: authorId || null,
+      });
+      return { ok: true, user: m.displayName, lease_id: lease.id };
     }
     case "voice_unmute": {
       const m = await guild.members.fetch(args.user_id);
-      await m.voice.setMute(false, args.reason || "Alxcer Guard agent");
-      return { ok: true, user: m.displayName };
+      const lease = getMuteLease(guild.id, m.id);
+      if (!lease) {
+        await m.voice.setMute(false, args.reason || "Alxcer Guard explicit admin unmute");
+        return { ok: true, user: m.displayName, explicit_admin_override: true };
+      }
+      const released = await releaseOwnedMute({
+        guild,
+        member: m,
+        leaseId: lease.id,
+        reason: args.reason || "Alxcer Guard agent",
+      });
+      if (!released.ok) {
+        return { error: `mute lease changed before unmute (${released.code})`, code: released.code };
+      }
+      return { ok: true, user: m.displayName, released_lease_id: lease.id };
     }
     case "voice_deafen": {
       const m = await guild.members.fetch(args.user_id);
@@ -1257,9 +1409,18 @@ switch (name) {
         ids.map(async (id) => {
           const m = await guild.members.fetch(id);
           if (!m.voice?.channelId) return { id, name: m.displayName, skipped: "not in voice" };
-          if (m.voice.serverMute) return { id, name: m.displayName, skipped: "already muted" };
-          await m.voice.setMute(true, reason);
-          return { id, name: m.displayName, ok: true };
+          const existing = getMuteLease(guild.id, id);
+          if (m.voice.serverMute && !existing) {
+            return { id, name: m.displayName, skipped: "externally muted (not owned by bot)" };
+          }
+          if (!m.voice.serverMute) await m.voice.setMute(true, reason);
+          const lease = createMuteLease({
+            guildId: guild.id,
+            userId: id,
+            source: "agent:voice_mute_many",
+            actorId: authorId || null,
+          });
+          return { id, name: m.displayName, ok: true, lease_id: lease.id };
         }),
       );
       return summarizeBatch(results, "muted");
@@ -1273,8 +1434,19 @@ switch (name) {
           const m = await guild.members.fetch(id);
           if (!m.voice?.channelId) return { id, name: m.displayName, skipped: "not in voice" };
           if (!m.voice.serverMute) return { id, name: m.displayName, skipped: "not muted" };
-          await m.voice.setMute(false, reason);
-          return { id, name: m.displayName, ok: true };
+          const lease = getMuteLease(guild.id, id);
+          if (!lease) {
+            await m.voice.setMute(false, reason);
+            return { id, name: m.displayName, ok: true, explicit_admin_override: true };
+          }
+          const released = await releaseOwnedMute({
+            guild,
+            member: m,
+            leaseId: lease.id,
+            reason,
+          });
+          if (!released.ok) throw new Error(`mute lease conflict for ${id}`);
+          return { id, name: m.displayName, ok: true, released_lease_id: lease.id };
         }),
       );
       return summarizeBatch(results, "unmuted");
@@ -1457,7 +1629,11 @@ switch (name) {
     }
     case "list_channels": {
       const chans = [...(await guild.channels.fetch()).values()]
-        .filter((c) => c && (c.type === ChannelType.GuildText || c.type === ChannelType.GuildVoice))
+        .filter((c) =>
+          c &&
+          (c.type === ChannelType.GuildText || c.type === ChannelType.GuildVoice) &&
+          canAuthorViewChannel(c, ctx),
+        )
         .map((c) => ({
           id: c.id,
           name: c.name,
@@ -1481,6 +1657,9 @@ switch (name) {
     }
     case "get_recent_messages": {
       const target = await guild.channels.fetch(args.channel_id);
+      if (!target?.isTextBased?.() || !canAuthorViewChannel(target, ctx)) {
+        return { error: "channel not found or requester cannot view it", code: "channel_forbidden" };
+      }
       const limit = Math.max(1, Math.min(50, Number(args.limit || 20)));
       const msgs = await target.messages.fetch({ limit });
       return {
@@ -1496,7 +1675,7 @@ switch (name) {
       };
     }
     case "get_user_offenses": {
-      const rec = offenses.users?.[args.user_id];
+      const rec = offenses.users?.[scopedOffenseKey(guild.id, args.user_id)];
       let displayName = args.user_id;
       try {
         const m = await guild.members.fetch(args.user_id);
@@ -1515,7 +1694,10 @@ switch (name) {
       const limit = Math.max(1, Math.min(30, Number(args.limit || 10)));
       const events = [];
       const users = offenses.users || {};
-      for (const [uid, rec] of Object.entries(users)) {
+      const prefix = `${guild.id}:`;
+      for (const [storedKey, rec] of Object.entries(users)) {
+        if (!storedKey.startsWith(prefix)) continue;
+        const uid = storedKey.slice(prefix.length);
         const history = rec?.chat?.history || [];
         for (const h of history) {
           events.push({
@@ -1553,11 +1735,12 @@ switch (name) {
       return { recent_offenses: top };
     }
     case "clear_user_offenses": {
-      if (offenses.users?.[args.user_id]) {
-        if (offenses.users[args.user_id].chat) {
-          offenses.users[args.user_id].chat = { count: 0, lastAt: 0, history: [] };
+      const storedKey = scopedOffenseKey(guild.id, args.user_id);
+      if (offenses.users?.[storedKey]) {
+        if (offenses.users[storedKey].chat) {
+          offenses.users[storedKey].chat = { count: 0, lastAt: 0, history: [] };
         }
-        offenses.users[args.user_id].times = 0;
+        offenses.users[storedKey].times = 0;
         await persistOffenses();
       }
       return { ok: true };
@@ -1667,11 +1850,27 @@ switch (name) {
       if (!member.voice?.channel) {
         return { error: `${member.displayName} ไม่ได้อยู่ในห้องเสียงตอนนี้` };
       }
+      const existingLease = getMuteLease(ctx.guild.id, args.user_id);
+      if (member.voice.serverMute && !existingLease) {
+        return {
+          error: `${member.displayName} ถูก server-mute จากภายนอกอยู่แล้ว — บอทจะไม่ยึด mute ของแอดมินคนอื่น`,
+          code: "external_mute_not_owned",
+        };
+      }
       try {
-        await member.voice.setMute(true, args.reason || `mute_user_for ${parsed.totalSeconds}s`);
+        if (!member.voice.serverMute) {
+          await member.voice.setMute(true, args.reason || `mute_user_for ${parsed.totalSeconds}s`);
+        }
       } catch (e) {
         return { error: `mute failed: ${e?.message || "unknown"}` };
       }
+      const lease = createMuteLease({
+        guildId: ctx.guild.id,
+        userId: args.user_id,
+        source: "agent:mute_user_for",
+        actorId: ctx.authorId || null,
+        expiresAt: parsed.fireAt,
+      });
       const t = createTimer({
         type: "auto_unmute",
         fireAt: parsed.fireAt,
@@ -1681,11 +1880,16 @@ switch (name) {
         userId: args.user_id,
         mentionUserId: args.user_id,
         ownerId: ctx.authorId || null,
-        payload: { displayName: member.displayName, reason: args.reason || "" },
+        payload: {
+          displayName: member.displayName,
+          reason: args.reason || "",
+          leaseId: lease.id,
+        },
       });
       return {
         ok: true,
         timer_id: t.id,
+        lease_id: lease.id,
         target_name: member.displayName,
         in: formatDurationShort(parsed.totalSeconds),
       };
@@ -1709,17 +1913,35 @@ switch (name) {
     case "cancel_timer": {
       const t = getTimer(args.timer_id);
       if (!t) return { error: "no such timer (it may have already fired or been cancelled)" };
+      if (t.guildId !== ctx.guild.id) {
+        return { error: "timer belongs to a different server", code: "cross_guild_timer" };
+      }
       // Side-effect: if it's an auto-unmute, immediately un-mute the user
+      let muteRelease = null;
       if (t.type === "auto_unmute" && t.userId) {
-        try {
-          const member = await ctx.guild.members.fetch(t.userId);
-          if (member?.voice?.channel) {
-            await member.voice.setMute(false, "cancel_timer manual unmute");
+        const expectedLeaseId = t.payload?.leaseId || null;
+        const currentLease = getMuteLease(t.guildId, t.userId);
+        if (expectedLeaseId && currentLease?.id === expectedLeaseId) {
+          try {
+            const member = await ctx.guild.members.fetch(t.userId);
+            muteRelease = await releaseOwnedMute({
+              guild: ctx.guild,
+              member,
+              leaseId: expectedLeaseId,
+              reason: "cancel_timer manual unmute",
+            });
+          } catch (err) {
+            muteRelease = { ok: false, code: "unmute_failed", error: err?.message };
           }
-        } catch {}
+        } else {
+          muteRelease = {
+            ok: false,
+            code: currentLease ? "lease_conflict" : "mute_not_owned",
+          };
+        }
       }
       const ok = cancelTimer(args.timer_id);
-      return { ok, type: t.type, label: t.label };
+      return { ok, type: t.type, label: t.label, mute_release: muteRelease };
     }
 
     // ===== Automation tools =====
@@ -1769,6 +1991,11 @@ switch (name) {
       };
     }
     case "cancel_automation": {
+      const targetAutomation = getAutomation(args.automation_id);
+      if (!targetAutomation) return { error: "ไม่เจอ automation นั้น (อาจถูกยกเลิกไปแล้ว)" };
+      if (targetAutomation.guildId !== ctx.guild.id) {
+        return { error: "automation เป็นของอีกเซิร์ฟเวอร์", code: "cross_guild_automation" };
+      }
       const okAuto = cancelAutomationById(args.automation_id);
       if (!okAuto) return { error: "ไม่เจอ automation นั้น (อาจถูกยกเลิกไปแล้ว)" };
       try {
@@ -2587,7 +2814,8 @@ switch (name) {
 
     case "create_excel": {
       try {
-        const XLSX = (await import("xlsx")).default;
+        const XLSXModule = await import("xlsx");
+        const XLSX = XLSXModule.default ?? XLSXModule;
         const wb = XLSX.utils.book_new();
         for (const sheet of args.sheets || []) {
           const ws = XLSX.utils.aoa_to_sheet(sheet.data || [[]]);
@@ -3267,13 +3495,14 @@ switch (name) {
 
 // Build a compact server snapshot so the agent doesn't always need to call
 // list_* first. Keeps the first turn to a single LLM call for simple commands.
-async function buildServerSnapshot(guild) {
+async function buildServerSnapshot(guild, ctx) {
   try {
     const channels = await guild.channels.fetch();
     const voiceChannels = [];
     const textChannels = [];
     for (const c of channels.values()) {
       if (!c) continue;
+      if (!canAuthorViewChannel(c, ctx)) continue;
       if (c.type === ChannelType.GuildVoice) {
         voiceChannels.push({
           id: c.id,
@@ -3299,6 +3528,8 @@ async function buildServerSnapshot(guild) {
 }
 
 const AGENT_SYSTEM = `You are "การ์ด" — AI ผู้ช่วยส่วนตัวที่ซื่อสัตย์และดูแลใจของ Alxcer Guard server คุณพูดภาษาไทยเป็นหลัก เข้าใจทั้งภาษาไทยและอังกฤษ มีน้ำใจอบอุ่น ดูแลทุกคนเหมือนคนในครอบครัว ไม่ใช่หุ่นยนต์
+
+SECURITY BOUNDARY: shell/files/logs/source/browser-host tools are reserved for the bot owner (⭐ OWNER) only. A server moderator with Manage Server is not the host owner; never ask them for secrets and never try to bypass a denied tool. Spoken server mutations must have the explicit confirmation prefix supplied by the caller.
 
 เจ้าของบอทคือ "Alex" — Discord username: lorde (แต่ชื่อที่เรียกคือ "Alex" เสมอ) ถ้าใน context มี "⭐ OWNER" หรือ "👑 OWNER" แปลว่าผู้สั่งคือ Alex เจ้าของตัวจริง รับคำสั่งด้วยความยินดีและเต็มที่ พูดจาอบอุ่นและจริงใจ Alex มีสิทธิ์เต็มทุกอย่างรวมถึงคำสั่ง AI และการจัดการโมเดล
 ข้อสำคัญ: ถ้าเห็น authorTag ว่า "lorde" หรือ username "lorde" นั่นคือ Alex เจ้าของบอท ให้เรียกชื่อ "Alex" เสมอ ไม่ใช่ "lorde"
@@ -3902,7 +4133,7 @@ export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
   if (!aiAvailable()) return "AI ยังไม่พร้อม (OPENROUTER_API_KEY ไม่ได้ตั้ง)";
   const { authorTag, authorId, authorDisplayName, guild, chatHistory, ownerId } = ctx;
 
-  const snapshot = await buildServerSnapshot(guild);
+  const snapshot = await buildServerSnapshot(guild, ctx);
   console.log('[agent] snapshot ok, chatHistory:', chatHistory?.length || 0, 'tools:', TOOLS.length);
 
   // Format recent chat (oldest → newest) so the agent has context for

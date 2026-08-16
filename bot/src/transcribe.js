@@ -10,6 +10,7 @@ let modelReadyAt = API_KEY ? Date.now() : 0;
 let totalProcessed = 0;
 let totalEmpty = 0;
 let totalErrors = 0;
+let totalCallbackErrors = 0;
 let lastTextAt = 0;
 let lastError = "";
 
@@ -32,21 +33,135 @@ export async function prepareModel() {
   return true;
 }
 
-const queue = [];
+// Keep a separate waiting queue for each guild and select from them round-robin.
+// A busy guild therefore cannot monopolize every global transcription slot.
+const guildQueues = new Map();
+const guildOrder = [];
+const activeByGuild = new Map();
+const activeStreams = new Set();
 let active = 0;
+let queued = 0;
+let nextGuildIndex = 0;
+let pumpScheduled = false;
+let nextJobId = 1;
 const MAX_CONCURRENT = 4;
+const MAX_CONCURRENT_PER_GUILD = 2;
 const MAX_QUEUE = 32;
+const MAX_QUEUE_PER_GUILD = 16;
+
+const LEGACY_GUILD_KEY = "__legacy__";
+const ANONYMOUS_USER_KEY = "__anonymous__";
+
+function normalizeMeta(meta) {
+  const safeMeta = meta && typeof meta === "object" ? { ...meta } : {};
+  if (safeMeta.guildId != null && safeMeta.guildId !== "") {
+    safeMeta.guildId = String(safeMeta.guildId);
+  }
+  if (safeMeta.userId != null && safeMeta.userId !== "") {
+    safeMeta.userId = String(safeMeta.userId);
+  }
+  return safeMeta;
+}
+
+function guildKeyFor(meta) {
+  return meta.guildId || LEGACY_GUILD_KEY;
+}
+
+function streamKeyFor(guildKey, meta) {
+  return `${guildKey}:${meta.userId || ANONYMOUS_USER_KEY}`;
+}
+
+function enqueueGuildJob(job) {
+  let guildQueue = guildQueues.get(job.guildKey);
+  if (!guildQueue) {
+    guildQueue = [];
+    guildQueues.set(job.guildKey, guildQueue);
+    guildOrder.push(job.guildKey);
+  }
+  guildQueue.push(job);
+  queued++;
+}
+
+function removeGuildAt(index) {
+  const [guildKey] = guildOrder.splice(index, 1);
+  if (guildKey) guildQueues.delete(guildKey);
+  if (index < nextGuildIndex) nextGuildIndex--;
+  if (nextGuildIndex < 0 || nextGuildIndex >= guildOrder.length) {
+    nextGuildIndex = 0;
+  }
+}
+
+// Pick one runnable job while preserving FIFO for each guild+user stream. Jobs
+// for other users in the same guild may pass a blocked stream, which keeps the
+// queue useful without ever running two callbacks for one speaker concurrently.
+function takeNextJob() {
+  if (!guildOrder.length) return null;
+  const guildCount = guildOrder.length;
+
+  for (let checked = 0; checked < guildCount; checked++) {
+    if (!guildOrder.length) return null;
+    const index = (nextGuildIndex + checked) % guildOrder.length;
+    const guildKey = guildOrder[index];
+    if ((activeByGuild.get(guildKey) || 0) >= MAX_CONCURRENT_PER_GUILD) {
+      continue;
+    }
+
+    const guildQueue = guildQueues.get(guildKey);
+    if (!guildQueue?.length) {
+      removeGuildAt(index);
+      return takeNextJob();
+    }
+
+    const jobIndex = guildQueue.findIndex(
+      (job) => !activeStreams.has(job.streamKey),
+    );
+    if (jobIndex === -1) continue;
+
+    const [job] = guildQueue.splice(jobIndex, 1);
+    queued--;
+    if (guildQueue.length === 0) {
+      removeGuildAt(index);
+    } else {
+      nextGuildIndex = (index + 1) % guildOrder.length;
+    }
+    return job;
+  }
+  return null;
+}
+
+function schedulePump() {
+  if (pumpScheduled) return;
+  pumpScheduled = true;
+  queueMicrotask(() => {
+    pumpScheduled = false;
+    pump();
+  });
+}
 
 export function enqueueTranscription(pcmBuffer, callback, meta = {}) {
   if (!API_KEY) return false;
-  if (queue.length >= MAX_QUEUE) {
+  const safeMeta = normalizeMeta(meta);
+  const guildKey = guildKeyFor(safeMeta);
+  const guildQueued = guildQueues.get(guildKey)?.length || 0;
+  if (queued >= MAX_QUEUE || guildQueued >= MAX_QUEUE_PER_GUILD) {
     console.warn(
-      `[transcribe] queue FULL (${queue.length}/${MAX_QUEUE}) — dropping ${meta.userId || ""}`,
+      `[transcribe] queue FULL guild=${safeMeta.guildId || "legacy"} ` +
+        `(guild=${guildQueued}/${MAX_QUEUE_PER_GUILD}, total=${queued}/${MAX_QUEUE}) ` +
+        `— dropping ${safeMeta.userId || ""}`,
     );
     return false;
   }
-  queue.push({ pcm: pcmBuffer, callback, meta, queuedAt: Date.now() });
-  pump();
+  const job = {
+    id: nextJobId++,
+    pcm: pcmBuffer,
+    callback,
+    meta: safeMeta,
+    guildKey,
+    streamKey: streamKeyFor(guildKey, safeMeta),
+    queuedAt: Date.now(),
+  };
+  enqueueGuildJob(job);
+  schedulePump();
   return true;
 }
 
@@ -57,28 +172,48 @@ export function getStatus() {
     language: LANGUAGE,
     modelReady: !!API_KEY,
     modelReadyAt,
-    queued: queue.length,
+    queued,
     active,
     maxConcurrent: MAX_CONCURRENT,
+    maxConcurrentPerGuild: MAX_CONCURRENT_PER_GUILD,
     maxQueue: MAX_QUEUE,
+    maxQueuePerGuild: MAX_QUEUE_PER_GUILD,
+    queuedByGuild: Object.fromEntries(
+      [...guildQueues.entries()].map(([guildKey, jobs]) => [guildKey, jobs.length]),
+    ),
+    activeByGuild: Object.fromEntries(activeByGuild),
     totalProcessed,
     totalEmpty,
     totalErrors,
+    totalCallbackErrors,
     lastTextAt,
     lastError,
     importError: lastImportError,
   };
 }
 
-async function pump() {
-  if (active >= MAX_CONCURRENT) return;
-  const job = queue.shift();
-  if (!job) return;
+function pump() {
+  while (active < MAX_CONCURRENT) {
+    const job = takeNextJob();
+    if (!job) return;
+    startJob(job);
+  }
+}
+
+function startJob(job) {
   active++;
+  activeByGuild.set(job.guildKey, (activeByGuild.get(job.guildKey) || 0) + 1);
+  activeStreams.add(job.streamKey);
+  void runJob(job);
+}
+
+async function runJob(job) {
   const t0 = Date.now();
   const waitMs = t0 - job.queuedAt;
   console.log(
-    `[transcribe] START user=${job.meta.userId} dur=${job.meta.durationSec?.toFixed(1)}s waited=${waitMs}ms (queue=${queue.length}, active=${active})`,
+    `[transcribe] START guild=${job.meta.guildId || "legacy"} user=${job.meta.userId} ` +
+      `dur=${job.meta.durationSec?.toFixed(1)}s waited=${waitMs}ms ` +
+      `(queue=${queued}, active=${active})`,
   );
   try {
     const text = await transcribePcm(job.pcm);
@@ -88,28 +223,40 @@ async function pump() {
     if (trimmed) {
       lastTextAt = Date.now();
       console.log(
-        `[transcribe] OK user=${job.meta.userId} took=${elapsed}ms text="${trimmed.slice(0, 80)}"`,
+        `[transcribe] OK guild=${job.meta.guildId || "legacy"} user=${job.meta.userId} ` +
+          `took=${elapsed}ms text="${trimmed.slice(0, 80)}"`,
       );
     } else {
       totalEmpty++;
       console.log(
-        `[transcribe] EMPTY user=${job.meta.userId} took=${elapsed}ms (silence or non-speech)`,
+        `[transcribe] EMPTY guild=${job.meta.guildId || "legacy"} user=${job.meta.userId} ` +
+          `took=${elapsed}ms (silence or non-speech)`,
       );
     }
     try {
-      job.callback?.(trimmed, job.meta);
+      await job.callback?.(trimmed, job.meta);
     } catch (cbErr) {
-      console.error("[transcribe] callback error", cbErr?.message);
+      totalCallbackErrors++;
+      console.error(
+        `[transcribe] callback error guild=${job.meta.guildId || "legacy"} ` +
+          `user=${job.meta.userId}:`,
+        cbErr?.message,
+      );
     }
   } catch (err) {
     totalErrors++;
     lastError = err?.message || String(err);
     console.error(
-      `[transcribe] job error user=${job.meta.userId}: ${lastError}`,
+      `[transcribe] job error guild=${job.meta.guildId || "legacy"} ` +
+        `user=${job.meta.userId}: ${lastError}`,
     );
   } finally {
     active--;
-    setImmediate(pump);
+    const guildActive = (activeByGuild.get(job.guildKey) || 1) - 1;
+    if (guildActive > 0) activeByGuild.set(job.guildKey, guildActive);
+    else activeByGuild.delete(job.guildKey);
+    activeStreams.delete(job.streamKey);
+    schedulePump();
   }
 }
 
