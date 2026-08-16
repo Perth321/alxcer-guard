@@ -1,15 +1,5 @@
 {
   "version": 1,
-  "updatedAt": 1786881445875,
-  "items": [
-    {
-      "id": "55a51eb6-d5fb-434e-8325-130083ac769e",
-      "guildId": "1433097119434276925",
-      "userId": "603182413660684321",
-      "source": "agent:voice_mute",
-      "actorId": "967120879689551873",
-      "createdAt": 1786881444376,
-      "expiresAt": null
-    }
-  ]
+  "updatedAt": 1786881492148,
+  "items": []
 }
