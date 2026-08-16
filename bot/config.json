@@ -12,6 +12,8 @@
       "inactivityMuteEnabled": false,
       "voiceWordBanEnabled": false,
       "chatVoiceMuteEnabled": false,
+      "joinSoundEnabled": false,
+      "classroomAutomationEnabled": false,
       "aiModerationEnabled": false,
       "spontaneousChatEnabled": false,
       "bannedWords": [

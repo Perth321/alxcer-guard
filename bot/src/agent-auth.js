@@ -119,8 +119,10 @@ export function canExecuteAgentTool(
 }
 
 export function hasRequiredVoiceConfirmation(
-  toolName,
-  { voiceCommand = false, voiceConfirmed = false } = {},
+  _toolName,
+  _context = {},
 ) {
-  return !isMutatingTool(toolName) || voiceCommand !== true || voiceConfirmed === true;
+  // Kept as a compatibility export. Voice commands use the same deterministic
+  // Discord permission gate as text commands and do not require a magic word.
+  return true;
 }

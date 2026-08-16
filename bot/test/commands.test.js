@@ -172,3 +172,38 @@ test("setting component persists, updates, and rejoins only its guild", async ()
   ]);
   assert.ok(update.embeds.length > 0);
 });
+
+test("easy voice mode disables every unsolicited voice action in one click", async () => {
+  let saved = null;
+  const runtime = {
+    getConfig: () => normalizeGuildConfig({
+      inactivityMuteEnabled: true,
+      voiceWordBanEnabled: true,
+      chatVoiceMuteEnabled: true,
+      joinSoundEnabled: true,
+      classroomAutomationEnabled: true,
+    }),
+    async persistConfig(guildId, config) {
+      assert.equal(guildId, "guild-easy");
+      saved = config;
+    },
+    setConfig() {},
+  };
+  const interaction = {
+    customId: "setting:easy-voice",
+    guildId: "guild-easy",
+    member: null,
+    memberPermissions: allowManageGuild(),
+    isButton: () => true,
+    isChannelSelectMenu: () => false,
+    isModalSubmit: () => false,
+    async update() {},
+  };
+
+  assert.equal(await handleSettingComponent(interaction, runtime), true);
+  assert.equal(saved.inactivityMuteEnabled, false);
+  assert.equal(saved.voiceWordBanEnabled, false);
+  assert.equal(saved.chatVoiceMuteEnabled, false);
+  assert.equal(saved.joinSoundEnabled, false);
+  assert.equal(saved.classroomAutomationEnabled, false);
+});

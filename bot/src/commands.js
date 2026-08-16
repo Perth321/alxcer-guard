@@ -341,6 +341,12 @@ function fmtChannel(id) {
 
 export function buildSettingsView(config) {
   const words = config.bannedWords ?? [];
+  const easyVoiceMode =
+    config.inactivityMuteEnabled !== true &&
+    config.voiceWordBanEnabled !== true &&
+    config.chatVoiceMuteEnabled !== true &&
+    config.joinSoundEnabled !== true &&
+    config.classroomAutomationEnabled !== true;
   const wordsDisplay = words.length
     ? words.map((w) => `\`${w}\``).join(", ").slice(0, 512)
     : "_ยังไม่มี_";
@@ -395,6 +401,13 @@ export function buildSettingsView(config) {
         inline: false,
       },
       {
+        name: "🛡️ โหมดเสียงใช้ง่าย",
+        value: easyVoiceMode
+          ? "✅ เปิด — ไม่ส่งเสียงตอนเข้า/ย้ายห้อง และไม่เปลี่ยนไมค์อัตโนมัติ"
+          : "⚠️ ปิด — มีฟีเจอร์เสียง/ไมค์อัตโนมัติเปิดอยู่",
+        inline: false,
+      },
+      {
         name: "🔔 Wake Alarm — เสียงเพลง",
         value: config.wakeMusicUrl ? `[ลิงก์](<${config.wakeMusicUrl}>)` : "_ใช้เสียงบี๊ปเริ่มต้น_",
         inline: true,
@@ -445,7 +458,14 @@ export function buildSettingsView(config) {
       .setStyle(ButtonStyle.Secondary),
   );
 
-  return { embeds: [embed], components: [notifyRow, voiceRow, buttons] };
+  const safetyButtons = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("setting:easy-voice")
+      .setLabel("🛡️ ใช้โหมดง่าย (ปิดอัตโนมัติ)")
+      .setStyle(easyVoiceMode ? ButtonStyle.Success : ButtonStyle.Danger),
+  );
+
+  return { embeds: [embed], components: [notifyRow, voiceRow, buttons, safetyButtons] };
 }
 
 let configPersistQueue = Promise.resolve();
@@ -515,6 +535,21 @@ export async function handleSettingComponent(interaction, runtime) {
       await persist(runtime, guildId, next);
       runtime.setConfig(guildId, next);
       runtime.requestRejoin(guildId);
+      await interaction.update(buildSettingsView(next));
+      return true;
+    }
+
+    if (action === "easy-voice" && interaction.isButton()) {
+      const next = normalize({
+        ...cfg,
+        inactivityMuteEnabled: false,
+        voiceWordBanEnabled: false,
+        chatVoiceMuteEnabled: false,
+        joinSoundEnabled: false,
+        classroomAutomationEnabled: false,
+      });
+      await persist(runtime, guildId, next);
+      runtime.setConfig(guildId, next);
       await interaction.update(buildSettingsView(next));
       return true;
     }

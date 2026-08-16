@@ -112,6 +112,8 @@ test("disruptive guild features default off and require explicit true", () => {
   assert.equal(defaults.inactivityMuteEnabled, false);
   assert.equal(defaults.voiceWordBanEnabled, false);
   assert.equal(defaults.chatVoiceMuteEnabled, false);
+  assert.equal(defaults.joinSoundEnabled, false);
+  assert.equal(defaults.classroomAutomationEnabled, false);
   assert.equal(defaults.aiModerationEnabled, false);
   assert.equal(defaults.spontaneousChatEnabled, false);
 
@@ -119,12 +121,16 @@ test("disruptive guild features default off and require explicit true", () => {
     inactivityMuteEnabled: true,
     voiceWordBanEnabled: true,
     chatVoiceMuteEnabled: true,
+    joinSoundEnabled: true,
+    classroomAutomationEnabled: true,
     aiModerationEnabled: true,
     spontaneousChatEnabled: true,
   });
   assert.equal(enabled.inactivityMuteEnabled, true);
   assert.equal(enabled.voiceWordBanEnabled, true);
   assert.equal(enabled.chatVoiceMuteEnabled, true);
+  assert.equal(enabled.joinSoundEnabled, true);
+  assert.equal(enabled.classroomAutomationEnabled, true);
   assert.equal(enabled.aiModerationEnabled, true);
   assert.equal(enabled.spontaneousChatEnabled, true);
 });

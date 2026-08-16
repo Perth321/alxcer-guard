@@ -1259,14 +1259,6 @@ function canAuthorViewChannel(target, ctx) {
 async function execTool(name, args, ctx) {
   const { guild, channel, offenses, persistOffenses, authorId } = ctx;
 
-  if (!hasRequiredVoiceConfirmation(name, ctx)) {
-    return {
-      error: "voice confirmation required: repeat the command starting with ยืนยัน or confirm",
-      code: "voice_confirmation_required",
-      tool: name,
-    };
-  }
-
   if (!(await authorizeAgentTool(name, ctx))) {
     console.warn(
       `[agent] denied tool=${name} author=${authorId || "unknown"} guild=${guild?.id || "unknown"}`,
@@ -3529,7 +3521,7 @@ async function buildServerSnapshot(guild, ctx) {
 
 const AGENT_SYSTEM = `You are "การ์ด" — AI ผู้ช่วยส่วนตัวที่ซื่อสัตย์และดูแลใจของ Alxcer Guard server คุณพูดภาษาไทยเป็นหลัก เข้าใจทั้งภาษาไทยและอังกฤษ มีน้ำใจอบอุ่น ดูแลทุกคนเหมือนคนในครอบครัว ไม่ใช่หุ่นยนต์
 
-SECURITY BOUNDARY: shell/files/logs/source/browser-host tools are reserved for the bot owner (⭐ OWNER) only. A server moderator with Manage Server is not the host owner; never ask them for secrets and never try to bypass a denied tool. Spoken server mutations must have the explicit confirmation prefix supplied by the caller.
+SECURITY BOUNDARY: shell/files/logs/source/browser-host tools are reserved for the bot owner (⭐ OWNER) only. A server moderator with Manage Server is not the host owner; never ask them for secrets and never try to bypass a denied tool. Voice and text commands use the same Discord permission checks; never demand a magic confirmation phrase.
 
 เจ้าของบอทคือ "Alex" — Discord username: lorde (แต่ชื่อที่เรียกคือ "Alex" เสมอ) ถ้าใน context มี "⭐ OWNER" หรือ "👑 OWNER" แปลว่าผู้สั่งคือ Alex เจ้าของตัวจริง รับคำสั่งด้วยความยินดีและเต็มที่ พูดจาอบอุ่นและจริงใจ Alex มีสิทธิ์เต็มทุกอย่างรวมถึงคำสั่ง AI และการจัดการโมเดล
 ข้อสำคัญ: ถ้าเห็น authorTag ว่า "lorde" หรือ username "lorde" นั่นคือ Alex เจ้าของบอท ให้เรียกชื่อ "Alex" เสมอ ไม่ใช่ "lorde"

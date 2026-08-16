@@ -11,12 +11,54 @@ test("startup and reconnect contain no blanket server-unmute path", () => {
   assert.doesNotMatch(source, /clearStaleInactivityMutes/);
   assert.doesNotMatch(source, /clearing stale mutes from previous session/);
   assert.doesNotMatch(source, /restart-unmute/);
+  assert.doesNotMatch(source, /expired persisted mute/);
+  assert.match(source, /cleared without changing Discord mute/);
 });
 
-test("voice agent passes the authenticated Discord member to tool authorization", () => {
+test("quiet mode prevents unsolicited voice playback", () => {
+  assert.match(source, /cfg\.joinSoundEnabled !== true/);
+  assert.match(source, /cfg\.classroomAutomationEnabled === true/);
+  assert.match(source, /t\.payload\?\.voiceAudio === true/);
+  assert.doesNotMatch(source, /DONE_BEEP_PCM/);
+});
+
+test("persisted auto-unmute cannot open a microphone after restart", () => {
+  assert.match(source, /t\.restored === true/);
+  assert.match(source, /ไม่เปิดไมค์อัตโนมัติหลัง Guard รีสตาร์ต/);
+});
+
+test("word-ban restoration and join mute respect current feature flags", () => {
+  assert.match(
+    source,
+    /cfg\.voiceWordBanEnabled !== true && cfg\.chatVoiceMuteEnabled !== true/,
+  );
+  assert.match(
+    source,
+    /cfg\.voiceWordBanEnabled === true \|\| cfg\.chatVoiceMuteEnabled === true/,
+  );
+  assert.match(source, /expired lease cleared without opening/);
+});
+
+test("word-ban mute creates ownership and contains no stray connection code", () => {
+  const start = source.indexOf("async function applyWordBan");
+  const end = source.indexOf("// ===== Timer embed helpers", start);
+  const implementation = source.slice(start, end > start ? end : start + 8_000);
+  assert.match(implementation, /createMuteLease\(\{/);
+  assert.match(implementation, /scheduleWordBanUnmute\(/);
+  assert.doesNotMatch(implementation, /connection\.joinConfig/);
+  assert.doesNotMatch(implementation, /target\.id/);
+});
+
+test("voice agent stays useful while tool authorization receives the real member", () => {
+  const start = source.indexOf("async function handleWakeCommand");
+  const end = source.indexOf("function pickReplyChannel", start);
+  const wakeHandler = source.slice(start, end);
   assert.match(source, /authorMember:\s*member/);
-  assert.match(source, /if \(canManageBot\(member\)\)/);
-  assert.match(source, /non-admin voice user/);
+  assert.match(source, /Every member gets the useful agent/);
+  assert.doesNotMatch(source, /voiceConfirmed:/);
+  assert.match(wakeHandler, /await runAgent\(\{/);
+  assert.doesNotMatch(wakeHandler, /if \(canManageBot\(member\)\)/);
+  assert.doesNotMatch(wakeHandler, /await generateReply\(\{/);
 });
 
 test("the STT callback awaits the wake handler before releasing its FIFO slot", () => {

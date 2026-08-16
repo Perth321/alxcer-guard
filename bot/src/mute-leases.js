@@ -228,7 +228,7 @@ export function clearMuteLease(guildId, userId) {
 // correlation marker so that event is not mistaken for an external moderator
 // overriding the bot and does not clear a newer lease created while the REST
 // request was in flight.
-export function expectOwnedUnmute(guildId, userId, leaseId, ttlMs = 10_000) {
+export function expectOwnedUnmute(guildId, userId, leaseId, ttlMs = 60_000) {
   const key = leaseKey(guildId, userId);
   const normalizedLeaseId = requiredId(leaseId, "leaseId");
   const ttl = Number(ttlMs);

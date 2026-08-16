@@ -14,13 +14,13 @@ test("read-only tools remain available without server-management permission", ()
   assert.equal(canExecuteAgentTool("web_search"), true);
 });
 
-test("spoken mutation tools require an explicit confirmation word", () => {
+test("spoken tools do not require a magic confirmation word", () => {
   assert.equal(hasRequiredVoiceConfirmation("web_search", { voiceCommand: true }), true);
   assert.equal(hasRequiredVoiceConfirmation("voice_mute", { voiceCommand: false }), true);
   assert.equal(hasRequiredVoiceConfirmation("voice_mute", {
     voiceCommand: true,
     voiceConfirmed: false,
-  }), false);
+  }), true);
   assert.equal(hasRequiredVoiceConfirmation("voice_mute", {
     voiceCommand: true,
     voiceConfirmed: true,
@@ -31,6 +31,7 @@ test("state-changing tools require owner or Manage Guild authority", () => {
   for (const name of [
     "voice_mute",
     "ban_user",
+    "create_channel",
     "delete_channel",
     "trivia",
   ]) {

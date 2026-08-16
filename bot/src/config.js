@@ -18,6 +18,12 @@ export const GUILD_DEFAULTS = Object.freeze({
   inactivityMuteEnabled: false,
   voiceWordBanEnabled: false,
   chatVoiceMuteEnabled: false,
+  // Stay silent when joining/reconnecting. The only default beep is the
+  // acknowledgement after a user explicitly says the wake word.
+  joinSoundEnabled: false,
+  // Teacher join/leave events must not start timers, bells, or TTS unless a
+  // server admin deliberately opts in.
+  classroomAutomationEnabled: false,
   aiModerationEnabled: false,
   spontaneousChatEnabled: false,
   bannedWords: ["หี", "ขอดูหี", "ดูหี"],
@@ -62,6 +68,8 @@ export function normalizeGuildConfig(cfg = {}) {
     inactivityMuteEnabled: cfg.inactivityMuteEnabled === true,
     voiceWordBanEnabled: cfg.voiceWordBanEnabled === true,
     chatVoiceMuteEnabled: cfg.chatVoiceMuteEnabled === true,
+    joinSoundEnabled: cfg.joinSoundEnabled === true,
+    classroomAutomationEnabled: cfg.classroomAutomationEnabled === true,
     aiModerationEnabled: cfg.aiModerationEnabled === true,
     spontaneousChatEnabled: cfg.spontaneousChatEnabled === true,
     bannedWords: normalizeWords(cfg.bannedWords ?? GUILD_DEFAULTS.bannedWords),

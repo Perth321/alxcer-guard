@@ -52,6 +52,7 @@ import {
   setMuteLeaseRemotePersist,
 } from "./mute-leases.js";
 import { shouldMuteForInactivity } from "./inactivity-policy.js";
+import { extractWakeCommand } from "./wake-word.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -311,58 +312,6 @@ const runtimeFor = (guildOrId) =>
 // as the actual command. Concurrent commands are rejected via wakeBusy.
 const WAKE_PENDING_MS = 15_000;
 
-// Wake-word matcher. Be VERY tolerant of whisper transcription noise:
-// - whisper often prepends junk like "อืม", "เอ่อ", "[เสียงเพลง]"
-// - the same Thai word can come back as การ์ด / การด / ก๊าด / กาด / กาดด /
-//   การ์ก / กาด์ / การ์ต / คาด / การ์ด์ depending on diction + accent
-// - English versions: guard / gaurd / gard / god / gar / "hey guard"
-// We match the wake token ANYWHERE in the first ~30 chars of the cleaned text
-// so a leading filler word doesn't kill the trigger.
-const WAKE_TOKEN_RE =
-  /(?:การ[์์]?[ดตก]ดี้?|การ์[ดตก]|กา[รล]?[ดต]|ก[า๊]า?[ดต]|คา[รล]?ด|guard|gaurd|gard|alxcer\s+guard|hey\s+guard)/i;
-const WAKE_LEADING_NOISE_RE = /^[\s,.!?\-:'"`()\[\]{}♪♫\*<>]+/;
-// IMPORTANT: longest variants first — JS regex alternation is left-to-right,
-// not longest-match. "อะ" before "อะนะ" would steal the match and break the
-// stripping pass.
-const WAKE_PROMPT_PREFIX_RE =
-  /^(?:[\s,.;:!?\-]+|alxcer|อันนี้|อะนะ|อืม|เอ่อ|เออ|อ้า|โอ้|อะ|นี่|hey)\s*/i;
-
-function cleanForWake(text) {
-  if (!text) return "";
-  let t = text.trim();
-  // Strip whisper bracket annotations like "[เสียงเพลง]" / "(music)" / "♪♪♪"
-  // FIRST so the regex finds the bracket — order matters because the leading
-  // noise stripper would chew off the opening "[" by itself otherwise.
-  for (let i = 0; i < 3; i++) {
-    const before = t;
-    t = t
-      .replace(/^\[[^\]]{1,60}\]\s*/, "")
-      .replace(/^\([^)]{1,60}\)\s*/, "")
-      .replace(/^♪+[^♪]{0,60}♪+\s*/, "")
-      .replace(WAKE_LEADING_NOISE_RE, "");
-    if (t === before) break;
-  }
-  return t.trim();
-}
-
-function extractWakeCommand(text) {
-  let cleaned = cleanForWake(text);
-  if (!cleaned) return null;
-  // Strip up to two leading filler particles ("อืม การ์ด" → "การ์ด").
-  // After that, the wake token MUST be at position 0 to count as a wake call.
-  // This prevents accidental triggers on sentences like "ผมเอาการ์ดเกม...".
-  for (let i = 0; i < 2; i++) {
-    const before = cleaned;
-    cleaned = cleaned.replace(WAKE_PROMPT_PREFIX_RE, "");
-    if (cleaned === before) break;
-  }
-  const m = cleaned.match(WAKE_TOKEN_RE);
-  if (!m || m.index !== 0) return null;
-  let rest = cleaned.slice(m[0].length).trim();
-  rest = rest.replace(WAKE_PROMPT_PREFIX_RE, "").replace(/^[\s,.;:!?\-]+/, "").trim();
-  return rest;
-}
-
 let pollHandle = null;
 let audioFlushHandle = null;
 let timerHandle = null;
@@ -452,13 +401,12 @@ async function reconcilePersistedMuteLeases(guild) {
       continue;
     }
     if (lease.expiresAt && lease.expiresAt <= Date.now()) {
-      await unmuteOwnedLease(
-        guild,
-        member,
-        lease.id,
-        `Alxcer Guard: expired persisted mute (${lease.source})`,
-      ).catch((err) =>
-        console.warn(`[mute-lease:${guild.id}] expired release failed`, err?.message),
+      // A restart cannot prove who owns the current Discord mute. A moderator
+      // may have applied a newer mute while Guard was offline, so recovery may
+      // clear stale bookkeeping but must never open the microphone itself.
+      clearMuteLease(guild.id, lease.userId);
+      console.log(
+        `[mute-lease:${guild.id}] expired lease ${lease.id} cleared without changing Discord mute`,
       );
     }
   }
@@ -863,18 +811,6 @@ async function handleWakeCommand({ guildId, userId, username, command, raw, isFo
   }
   rt.wakeBusy = true;
   let conn = getVoiceConnection(guildId);
-  let donePlayed = false;
-
-  const playDone = async () => {
-    if (donePlayed) return;
-    donePlayed = true;
-    try {
-      const c = getVoiceConnection(guildId);
-      if (c) await playPcmBeep(c, DONE_BEEP_PCM, "wake-done", 3000);
-    } catch (err) {
-      console.warn("[wake] done beep failed", err?.message);
-    }
-  };
 
   try {
     // Stage 1: only beep on the FIRST wake utterance, not on the follow-up.
@@ -930,33 +866,25 @@ async function handleWakeCommand({ guildId, userId, username, command, raw, isFo
     let result = "";
     let errMsg = "";
     try {
-      if (canManageBot(member)) {
-        result = await runAgent({
-          userPrompt: `[คำสั่งเสียงจาก ${username || userId}]: ${command}`,
-          ctx: {
-            guild,
-            channel: replyChannel,
-            authorTag: username || userId,
-            authorId: userId,
-            authorMember: member,
-            ownerId: cfg.ownerId || config.ownerId || null,
-            markBotKick: (targetId) => runtime.markBotKick(guild.id, targetId),
-            voiceCommand: true,
-            voiceConfirmed: /^(?:ยืนยัน(?:\s|[:,])|confirm\b)/i.test(command.trim()),
-            offenses,
-            persistOffenses: async () => persistOffenses(),
-            chatHistory: [],
-          },
-        });
-      } else {
-        const reply = await generateReply({
-          history: [{ role: "user", content: `${username || userId}: ${command}` }],
-          systemExtra:
-            "This came from a non-admin voice user. Chat naturally in Thai, but do not claim to run tools, access files, or change the Discord server.",
-          max_tokens: 300,
-        });
-        result = _stripThink((reply?.content || "").trim());
-      }
+      // Every member gets the useful agent (chat, web search, read-only server
+      // tools). execTool is still the single source of truth for permissions:
+      // server mutations require owner/Admin/Manage Server and host/repo tools
+      // remain owner-only. No magic confirmation word is required.
+      result = await runAgent({
+        userPrompt: `[คำสั่งเสียงจาก ${username || userId}]: ${command}`,
+        ctx: {
+          guild,
+          channel: replyChannel,
+          authorTag: username || userId,
+          authorId: userId,
+          authorMember: member,
+          ownerId: cfg.ownerId || config.ownerId || null,
+          markBotKick: (targetId) => runtime.markBotKick(guild.id, targetId),
+          offenses,
+          persistOffenses: async () => persistOffenses(),
+          chatHistory: [],
+        },
+      });
     } catch (err) {
       errMsg = err?.message?.slice(0, 200) || "unknown error";
       console.warn("[wake] agent failed:", errMsg);
@@ -990,9 +918,6 @@ async function handleWakeCommand({ guildId, userId, username, command, raw, isFo
   } catch (err) {
     console.error("[wake] outer handler error", err?.message, err?.stack);
   } finally {
-    // ALWAYS play the done beep on success or failure (except for the
-    // pending-acknowledgement path which already returned above)
-    await playDone();
     rt.wakeBusy = false;
   }
 }
@@ -1111,14 +1036,6 @@ const WAKE_BEEP_PCM = generateBeepFromSegments([
   { freq: 1400, ms: 110 },
   { freq: 0, ms: 70 },
   { freq: 1700, ms: 130 },
-  { freq: 0, ms: 80 },
-], 0.55);
-
-// Single longer descending tone — "done, you can speak again"
-const DONE_BEEP_PCM = generateBeepFromSegments([
-  { freq: 0, ms: 30 },
-  { freq: 880, ms: 220 },
-  { freq: 660, ms: 280 },
   { freq: 0, ms: 80 },
 ], 0.55);
 
@@ -1247,6 +1164,7 @@ async function playJoinSignal(connection) {
   if (cid && pendingClassStart.has(cid)) {
     const cls = pendingClassStart.get(cid);
     pendingClassStart.delete(cid);
+    if (cfg.classroomAutomationEnabled !== true) return;
     console.log(`[classroom] playJoinSignal → start-of-class for ${cid}`);
     await playClassStartSequence(connection).catch((err) =>
       console.error("[classroom] start sequence failed", err?.message),
@@ -1254,13 +1172,11 @@ async function playJoinSignal(connection) {
     return;
   }
 
-  // Skip greeting entirely for channels marked as "silent join" (study/class rooms)
-  if (cid && Array.isArray(cfg.silentJoinChannelIds) && cfg.silentJoinChannelIds.includes(cid)) {
-    console.log(`[greet] silent-join channel ${cid} — skipping greeting`);
-    return;
-  }
-  // A single short local beep is the only normal join greeting. It avoids
-  // duplicate TTS/status spam and does not consume an external API credit.
+  // Normal join, reconnect, room switch, and workflow rotation stay silent.
+  // The wake word still produces one acknowledgement beep. Servers that want
+  // a join beep can opt in explicitly.
+  if (cfg.joinSoundEnabled !== true) return;
+  if (cid && Array.isArray(cfg.silentJoinChannelIds) && cfg.silentJoinChannelIds.includes(cid)) return;
   await playJoinBeep(connection);
 }
 
@@ -1655,9 +1571,10 @@ async function fireTimer(t) {
       if (channel?.isTextBased?.()) {
         await channel.send({ content: mention.trim() || undefined, embeds: [embed] }).catch(() => {});
       }
-      // Also chime in voice if the bot is connected
+      // Ordinary timers are text-only. Voice audio must be requested
+      // explicitly; wake_alarm remains the dedicated voice alarm feature.
       const conn = getVoiceConnection(guild.id);
-      if (conn && conn.state.status === VoiceConnectionStatus.Ready) {
+      if (t.payload?.voiceAudio === true && conn?.state.status === VoiceConnectionStatus.Ready) {
         await speakThai(conn, `แจ้งเตือนครับ ${t.label || "ครบเวลาแล้ว"}`, `timer-${t.id}`);
       }
       deleteTimer(t.id);
@@ -1774,7 +1691,12 @@ async function fireTimer(t) {
       try { member = await guild.members.fetch(t.userId); } catch {}
       let outcome = "ℹ️ ผู้ใช้ไม่อยู่แล้ว";
       const expectedLeaseId = t.payload?.leaseId || null;
-      if (member && expectedLeaseId) {
+      if (t.restored === true) {
+        if (expectedLeaseId) {
+          releaseMuteLease(guild.id, t.userId, expectedLeaseId);
+        }
+        outcome = "🛡️ ไม่เปิดไมค์อัตโนมัติหลัง Guard รีสตาร์ต — ให้ผู้ใช้หรือแอดมินเปิดเอง";
+      } else if (member && expectedLeaseId) {
         try {
           const released = await unmuteOwnedLease(
             guild,
@@ -2317,7 +2239,13 @@ function scheduleWordBanUnmute(guild, userId, durationMs, leaseId = null) {
     let released = false;
     try {
       const member = await guild.members.fetch(userId).catch(() => null);
-      if (member && current.leaseId) {
+      const cfg = getConfigForGuild(guild.id);
+      const policyEnabled =
+        cfg.voiceWordBanEnabled === true || cfg.chatVoiceMuteEnabled === true;
+      if (!policyEnabled && current.leaseId) {
+        releaseMuteLease(guild.id, userId, current.leaseId);
+        console.log(`[wordban] policy disabled — expired lease cleared without opening ${userId}`);
+      } else if (member && current.leaseId) {
         const result = await unmuteOwnedLease(
           guild,
           member,
@@ -2350,6 +2278,12 @@ function scheduleWordBanUnmute(guild, userId, durationMs, leaseId = null) {
 }
 
 async function restorePendingWordBans(guild) {
+  const cfg = getConfigForGuild(guild.id);
+  if (cfg.voiceWordBanEnabled !== true && cfg.chatVoiceMuteEnabled !== true) {
+    // Easy/quiet mode: old punishment records must not re-arm a mute or an
+    // auto-unmute after a workflow restart.
+    return;
+  }
   const now = Date.now();
   const prefix = `${guild.id}:`;
   let changed = false;
@@ -2451,15 +2385,8 @@ async function applyWordBan(guild, userId, word, source, transcript) {
           await member.voice.setMute(
             true,
             `Alxcer Guard: banned word "${word}" via ${source} (#${newCount})`,
-      );
-      return;
-    }
-
-    if (
-      getVoiceConnection(guild.id) !== connection ||
-      connection.joinConfig?.channelId !== target.id ||
-      rt.currentChannelId !== target.id
-    ) return;
+          );
+        }
         const lease = createMuteLease({
           guildId: guild.id,
           userId,
@@ -2691,6 +2618,11 @@ client.once(Events.ClientReady, async (c) => {
     setInterval(() => {
       const expired = takeExpiredClasses();
       for (const cls of expired) {
+        const cfg = getConfigForGuild(cls.guildId);
+        if (cfg.classroomAutomationEnabled !== true) {
+          removeClass(cls.channelId);
+          continue;
+        }
         endOfClassPlayback(cls).catch((err) =>
           console.error("[classroom] end playback error", err?.message),
         ).finally(() => removeClass(cls.channelId));
@@ -2770,7 +2702,11 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  if (userId && wordBanTimers.has(banKey)) {
+  if (
+    userId &&
+    (cfg.voiceWordBanEnabled === true || cfg.chatVoiceMuteEnabled === true) &&
+    wordBanTimers.has(banKey)
+  ) {
     const wasInVoice = !!oldState.channelId;
     const nowInVoice = !!newState.channelId;
     if (!wasInVoice && nowInVoice) {
@@ -2849,7 +2785,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
   // ===== Classroom: teacher join → start 1h class; teacher leave → cancel =====
   try {
-    if (cfg.teacherRoleId && newState.member) {
+    if (cfg.classroomAutomationEnabled === true && cfg.teacherRoleId && newState.member) {
       const isTeacher = newState.member.roles?.cache?.has(cfg.teacherRoleId);
       if (isTeacher) {
         const wasIn = !!oldState.channelId;
@@ -2904,7 +2840,11 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     // Fallback: if the bot was already connected to the same channel,
     // reevaluateAndJoin won't call playJoinSignal — fire the start sequence
     // directly so the bell still plays.
-    if (newState.channelId && pendingClassStart.has(newState.channelId)) {
+    if (
+      cfg.classroomAutomationEnabled === true &&
+      newState.channelId &&
+      pendingClassStart.has(newState.channelId)
+    ) {
       const conn = getVoiceConnection(newState.guild.id);
       if (conn && conn.joinConfig?.channelId === newState.channelId) {
         pendingClassStart.delete(newState.channelId);
