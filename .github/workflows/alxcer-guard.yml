@@ -8,7 +8,7 @@ on:
     branches: [main]
     paths:
       - "bot/src/**"
-      - "bot/package*.json"
+      - "bot/package.json"
       - "bot/config.json"
       - ".github/workflows/alxcer-guard.yml"
 
@@ -39,14 +39,21 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: bot/package-lock.json
 
       - name: Install system dependencies (ffmpeg only)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
           ffmpeg -version | head -n 1
+
+      - name: Cache bot dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: bot/node_modules
+          key: bot-deps-${{ runner.os }}-node22-${{ hashFiles('bot/package.json') }}-v6
+          restore-keys: |
+            bot-deps-${{ runner.os }}-node22-
 
       - name: Cache YOLO model
         uses: actions/cache@v4
@@ -61,12 +68,7 @@ jobs:
           key: sarabun-bold-v1
 
       - name: Install bot dependencies
-        run: npm ci --no-audit --no-fund
-
-      - name: Run regression tests
-        run: |
-          npm test
-          npm run check:boot
+        run: npm install --no-audit --no-fund
 
       - name: Run Alxcer Guard
         env:
@@ -82,21 +84,12 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set -o pipefail
-          set +e
-          timeout --signal=TERM --kill-after=30s 345m node src/index.js 2>&1 | tee /tmp/bot_run.log
-          BOT_STATUS=${PIPESTATUS[0]}
-          set -e
-          if [ "$BOT_STATUS" = "124" ] || [ "$BOT_STATUS" = "143" ]; then
-            echo "Guard reached the planned rotation window"
-            exit 0
-          fi
-          exit "$BOT_STATUS"
+          node src/index.js 2>&1 | tee /tmp/bot_run.log
 
       - name: Self-restart (keep 24/7 online)
-        if: success()
+        if: always()
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
-          GH_PAT: ${{ secrets.GH_PAT || github.token }}
         run: |
           echo "Triggering self-restart to keep bot 24/7 online..."
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \

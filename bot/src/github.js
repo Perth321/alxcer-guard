@@ -34,9 +34,7 @@ async function ghFetch(url, options = {}) {
   return res;
 }
 
-const fileCommitQueues = new Map();
-
-async function commitFileNow(filePath, contentString, message) {
+async function commitFile(filePath, contentString, message) {
   const repo = getRepo();
   if (!repo) throw new Error("GITHUB_REPOSITORY env not set");
   if (!getToken()) throw new Error("GITHUB_TOKEN env not set");
@@ -87,18 +85,6 @@ async function commitFileNow(filePath, contentString, message) {
     const text = await put.text();
     throw new Error(`GitHub PUT failed: ${put.status} ${text}`);
   }
-}
-
-function commitFile(filePath, contentString, message) {
-  const previous = fileCommitQueues.get(filePath) || Promise.resolve();
-  const task = previous
-    .catch(() => {})
-    .then(() => commitFileNow(filePath, contentString, message));
-  fileCommitQueues.set(filePath, task);
-  task.finally(() => {
-    if (fileCommitQueues.get(filePath) === task) fileCommitQueues.delete(filePath);
-  }).catch(() => {});
-  return task;
 }
 
 export async function commitConfig(configObject, message = "chore: update bot config via /setting") {
@@ -169,14 +155,6 @@ export async function commitAutomations(data, message = "chore: persist automati
 export async function commitTimers(data, message = "chore: persist active timers") {
   await commitFile(
     "bot/timers.json",
-    JSON.stringify(data, null, 2) + "\n",
-    message,
-  );
-}
-
-export async function commitMuteLeases(data, message = "chore: persist Guard mute ownership") {
-  await commitFile(
-    "bot/mute_leases.json",
     JSON.stringify(data, null, 2) + "\n",
     message,
   );

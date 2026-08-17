@@ -40,7 +40,6 @@ function isValidItem(it) {
     it && typeof it.id === "string" &&
     typeof it.time === "string" && TIME_RE.test(it.time) &&
     typeof it.message === "string" && it.message.length > 0 &&
-    (it.guildId == null || typeof it.guildId === "string") &&
     (it.roleId == null || typeof it.roleId === "string") &&
     (it.channelId == null || typeof it.channelId === "string")
   );
@@ -73,41 +72,17 @@ function normalizeTime(input) {
   return `${String(parseInt(m[1], 10)).padStart(2, "0")}:${m[2]}`;
 }
 
-function normalizeGuildId(guildId) {
-  return guildId == null || guildId === "" ? null : String(guildId);
+export function listNotifications() {
+  return _data.items.map((it) => ({ ...it }));
 }
 
-function belongsToGuild(item, guildId) {
-  const key = normalizeGuildId(guildId);
-  return key == null || item.guildId === key;
-}
-
-export function listNotifications(guildId = null) {
-  return _data.items
-    .filter((it) => belongsToGuild(it, guildId))
-    .map((it) => ({ ...it }));
-}
-
-export function getNotification(id, guildId = null) {
-  const found = _data.items.find(
-    (it) => it.id === id && belongsToGuild(it, guildId),
-  );
+export function getNotification(id) {
+  const found = _data.items.find((it) => it.id === id);
   return found ? { ...found } : null;
 }
 
-export function addNotification({
-  guildId = null,
-  time,
-  label,
-  message,
-  roleId = null,
-  channelId = null,
-}) {
-  const normalizedGuildId = normalizeGuildId(guildId);
-  const guildItemCount = _data.items.filter(
-    (it) => (it.guildId || null) === normalizedGuildId,
-  ).length;
-  if (guildItemCount >= MAX_ITEMS) {
+export function addNotification({ time, label, message, roleId = null, channelId = null }) {
+  if (_data.items.length >= MAX_ITEMS) {
     throw new Error(`มีรายการครบ ${MAX_ITEMS} แล้ว — ลบของเก่าก่อน`);
   }
   const t = normalizeTime(time);
@@ -116,7 +91,6 @@ export function addNotification({
   if (!msg) throw new Error("ต้องมีข้อความแจ้งเตือน");
   const item = {
     id: nextId(),
-    guildId: normalizedGuildId,
     time: t,
     label: String(label || "").trim().slice(0, 60) || `แจ้งเตือน ${t}`,
     message: msg.slice(0, 1500),
@@ -128,10 +102,8 @@ export function addNotification({
   return { ...item };
 }
 
-export function updateNotification(id, patch, guildId = null) {
-  const it = _data.items.find(
-    (x) => x.id === id && belongsToGuild(x, guildId),
-  );
+export function updateNotification(id, patch) {
+  const it = _data.items.find((x) => x.id === id);
   if (!it) return null;
   if (patch.time !== undefined) {
     const t = normalizeTime(patch.time);
@@ -150,28 +122,14 @@ export function updateNotification(id, patch, guildId = null) {
   return { ...it };
 }
 
-export function removeNotification(id, guildId = null) {
+export function removeNotification(id) {
   const before = _data.items.length;
-  _data.items = _data.items.filter(
-    (it) => it.id !== id || !belongsToGuild(it, guildId),
-  );
+  _data.items = _data.items.filter((it) => it.id !== id);
   return _data.items.length < before;
 }
 
-// Explicit migration helper for pre-multiguild records. Legacy records remain
-// inert until an administrator assigns them to exactly one guild.
-export function assignNotificationGuild(id, guildId) {
-  const normalizedGuildId = normalizeGuildId(guildId);
-  if (!normalizedGuildId) throw new Error("guildId is required");
-  const it = _data.items.find((item) => item.id === id);
-  if (!it) return null;
-  it.guildId = normalizedGuildId;
-  it.lastFiredYMD = null;
-  return { ...it };
-}
-
 export function exportData() {
-  return { version: 2, items: _data.items.map((it) => ({ ...it })) };
+  return { items: _data.items.map((it) => ({ ...it })) };
 }
 
 export function persistLocal() {
@@ -180,8 +138,8 @@ export function persistLocal() {
 
 // ─── Scheduler ───────────────────────────────────────────────────────────────
 
-function bangkokYmdHm(now = Date.now()) {
-  const d = new Date(now + 7 * 3600 * 1000);
+function bangkokYmdHm() {
+  const d = new Date(Date.now() + 7 * 3600 * 1000);
   const y = d.getUTCFullYear();
   const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(d.getUTCDate()).padStart(2, "0");
@@ -190,76 +148,55 @@ function bangkokYmdHm(now = Date.now()) {
   return { ymd: `${y}-${mo}-${dd}`, hm: `${hh}:${mm}` };
 }
 
-const _runningGuilds = new Set();
-export async function tickScheduler({
-  client,
-  guildId,
-  defaultChannelId,
-  now = Date.now(),
-  persist = true,
-}) {
-  const guildKey = normalizeGuildId(guildId);
-  if (!guildKey || _runningGuilds.has(guildKey)) return;
-  // Legacy items deliberately do not match any guild. This prevents the same
-  // pre-migration reminder from firing once in every server.
-  const { ymd, hm } = bangkokYmdHm(now);
-  const due = _data.items.filter(
-    (it) =>
-      it.guildId === guildKey &&
-      it.time === hm &&
-      it.lastFiredYMD !== ymd,
-  );
+let _running = false;
+export async function tickScheduler({ client, guildId, defaultChannelId }) {
+  if (_running) return;
+  if (!_data.items.length || !guildId) return;
+  const { ymd, hm } = bangkokYmdHm();
+  const due = _data.items.filter((it) => it.time === hm && it.lastFiredYMD !== ymd);
   if (!due.length) return;
-  _runningGuilds.add(guildKey);
-  try {
-    let guild;
-    try {
-      guild = await client.guilds.fetch(guildKey);
-    } catch (err) {
-      console.error(`[notify:${guildKey}] guild fetch failed`, err?.message);
-      return;
-    }
-
-    let changed = false;
-    for (const it of due) {
-      try {
-        const channelId = it.channelId || defaultChannelId;
-        if (!channelId) {
-          console.warn(`[notify:${it.id}] no channel set and no notifyChannelId — skipping`);
-          continue;
-        }
-        const ch = await guild.channels.fetch(channelId).catch(() => null);
-        if (!ch?.isTextBased?.()) {
-          console.warn(`[notify:${it.id}] channel ${channelId} not text-capable`);
-          continue;
-        }
-        const mention = it.roleId ? `<@&${it.roleId}>` : "";
-        const embed = new EmbedBuilder()
-          .setColor(0xfacc15)
-          .setTitle(`🔔 ${it.label}`)
-          .setDescription(it.message)
-          .setFooter({ text: `เวลา ${it.time} (Asia/Bangkok)` });
-        await ch.send({
-          content: mention || undefined,
-          embeds: [embed],
-          allowedMentions: { roles: it.roleId ? [it.roleId] : [], parse: [] },
-        });
-        it.lastFiredYMD = ymd;
-        changed = true;
-      } catch (err) {
-        console.error(`[notify:${it.id}] send failed`, err?.message);
-      }
-    }
-    if (changed && persist) {
-      try {
-        persistLocal();
-      } catch (err) {
-        console.error("[notify] persist failed", err?.message);
-      }
-    }
-  } finally {
-    _runningGuilds.delete(guildKey);
+  _running = true;
+  let guild;
+  try { guild = await client.guilds.fetch(guildId); }
+  catch (err) {
+    console.error("[notify] guild fetch failed", err?.message);
+    _running = false;
+    return;
   }
+  let changed = false;
+  for (const it of due) {
+    try {
+      const channelId = it.channelId || defaultChannelId;
+      if (!channelId) {
+        console.warn(`[notify:${it.id}] no channel set and no notifyChannelId — skipping`);
+        continue;
+      }
+      const ch = await guild.channels.fetch(channelId).catch(() => null);
+      if (!ch?.isTextBased?.()) {
+        console.warn(`[notify:${it.id}] channel ${channelId} not text-capable`);
+        continue;
+      }
+      const mention = it.roleId ? `<@&${it.roleId}>` : "";
+      const embed = new EmbedBuilder()
+        .setColor(0xfacc15)
+        .setTitle(`🔔 ${it.label}`)
+        .setDescription(it.message)
+        .setFooter({ text: `เวลา ${it.time} (Asia/Bangkok)` });
+      await ch.send({
+        content: mention || undefined,
+        embeds: [embed],
+        allowedMentions: { roles: it.roleId ? [it.roleId] : [], parse: [] },
+      });
+      it.lastFiredYMD = ymd;
+      changed = true;
+    } catch (err) {
+      console.error(`[notify:${it.id}] send failed`, err?.message);
+    }
+  }
+  if (changed) {
+    try { persistLocal(); } catch (err) { console.error("[notify] persist failed", err?.message); }
+  }
+  _running = false;
 }
 
 // ─── UI views & component handler ────────────────────────────────────────────
@@ -270,10 +207,8 @@ function fmtItem(it, i) {
   return `**${i + 1}. \`${it.time}\` — ${it.label}**\n• ยศ: ${role}  ·  ห้อง: ${ch}\n• ข้อความ: ${it.message.slice(0, 140)}${it.message.length > 140 ? "…" : ""}`;
 }
 
-export function buildPanelView(guildId = null) {
-  const items = listNotifications(guildId).sort((a, b) =>
-    a.time.localeCompare(b.time),
-  );
+export function buildPanelView() {
+  const items = _data.items.slice().sort((a, b) => a.time.localeCompare(b.time));
   const embed = new EmbedBuilder()
     .setColor(0x6366f1)
     .setTitle("⏰ การแจ้งเตือนตามเวลา")
@@ -403,15 +338,6 @@ async function persistAndCommit() {
 export async function handleNotifyComponent(interaction) {
   const id = interaction.customId;
   if (!id || (!id.startsWith("notify:"))) return false;
-  const guildId = normalizeGuildId(interaction.guildId);
-
-  if (!guildId) {
-    await interaction.reply({
-      content: "ใช้การแจ้งเตือนได้เฉพาะในเซิร์ฟเวอร์ครับ",
-      ephemeral: true,
-    });
-    return true;
-  }
 
   if (!canManageBot(interaction.member, interaction.memberPermissions)) {
     await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
@@ -421,14 +347,14 @@ export async function handleNotifyComponent(interaction) {
   try {
     // Refresh main panel
     if (id === "notify:refresh" && interaction.isButton()) {
-      await interaction.update(buildPanelView(guildId));
+      await interaction.update(buildPanelView());
       return true;
     }
 
     // Pick an item from the dropdown → show item view
     if (id === "notify:pick" && interaction.isStringSelectMenu()) {
       const itemId = interaction.values[0];
-      const it = getNotification(itemId, guildId);
+      const it = getNotification(itemId);
       if (!it) {
         await interaction.reply({ content: "รายการนี้ไม่อยู่แล้ว", ephemeral: true });
         return true;
@@ -448,7 +374,7 @@ export async function handleNotifyComponent(interaction) {
       const time = interaction.fields.getTextInputValue("time");
       const label = interaction.fields.getTextInputValue("label");
       const message = interaction.fields.getTextInputValue("message");
-      const item = addNotification({ guildId, time, label, message });
+      const item = addNotification({ time, label, message });
       await persistAndCommit();
       await interaction.reply({
         content: `✅ เพิ่มแล้ว: \`${item.time}\` — ${item.label}\nกดเลือกรายการนี้ในเมนูเพื่อตั้งยศ/ห้องที่จะ ping`,
@@ -464,7 +390,7 @@ export async function handleNotifyComponent(interaction) {
 
     if (action === "role" && interaction.isRoleSelectMenu?.()) {
       const role = interaction.values?.[0] ?? null;
-      const updated = updateNotification(itemId, { roleId: role }, guildId);
+      const updated = updateNotification(itemId, { roleId: role });
       if (!updated) { await interaction.reply({ content: "รายการหายไปแล้ว", ephemeral: true }); return true; }
       await persistAndCommit();
       await interaction.update(buildItemView(updated));
@@ -473,7 +399,7 @@ export async function handleNotifyComponent(interaction) {
 
     if (action === "channel" && interaction.isChannelSelectMenu?.()) {
       const ch = interaction.values?.[0] ?? null;
-      const updated = updateNotification(itemId, { channelId: ch }, guildId);
+      const updated = updateNotification(itemId, { channelId: ch });
       if (!updated) { await interaction.reply({ content: "รายการหายไปแล้ว", ephemeral: true }); return true; }
       await persistAndCommit();
       await interaction.update(buildItemView(updated));
@@ -481,7 +407,7 @@ export async function handleNotifyComponent(interaction) {
     }
 
     if (action === "edit" && interaction.isButton()) {
-      const it = getNotification(itemId, guildId);
+      const it = getNotification(itemId);
       if (!it) { await interaction.reply({ content: "รายการหายไปแล้ว", ephemeral: true }); return true; }
       await interaction.showModal(editModal(it));
       return true;
@@ -491,11 +417,7 @@ export async function handleNotifyComponent(interaction) {
       const time = interaction.fields.getTextInputValue("time");
       const label = interaction.fields.getTextInputValue("label");
       const message = interaction.fields.getTextInputValue("message");
-      const updated = updateNotification(
-        itemId,
-        { time, label, message },
-        guildId,
-      );
+      const updated = updateNotification(itemId, { time, label, message });
       if (!updated) { await interaction.reply({ content: "รายการหายไปแล้ว", ephemeral: true }); return true; }
       await persistAndCommit();
       await interaction.reply({ content: `✅ บันทึกแล้ว: \`${updated.time}\` — ${updated.label}`, ephemeral: true });
@@ -503,7 +425,7 @@ export async function handleNotifyComponent(interaction) {
     }
 
     if (action === "delete" && interaction.isButton()) {
-      const ok = removeNotification(itemId, guildId);
+      const ok = removeNotification(itemId);
       await persistAndCommit();
       await interaction.update({
         embeds: [new EmbedBuilder().setColor(0x95a5a6).setTitle(ok ? "🗑️ ลบแล้ว" : "ไม่พบ").setDescription(ok ? "ลบการแจ้งเตือนเรียบร้อย" : "รายการนี้ไม่อยู่แล้ว")],
@@ -529,8 +451,5 @@ export async function handleNotifyCommand(interaction) {
     await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
     return;
   }
-  await interaction.reply({
-    ...buildPanelView(interaction.guildId),
-    ephemeral: true,
-  });
+  await interaction.reply({ ...buildPanelView(), ephemeral: true });
 }

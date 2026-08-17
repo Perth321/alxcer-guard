@@ -65,7 +65,7 @@ export function loadTimers() {
     let restored = 0;
     let dropped = 0;
     for (const raw of list) {
-      const rec = normalizeRecord(raw, { restored: true });
+      const rec = normalizeRecord(raw);
       if (!rec) {
         dropped++;
         continue;
@@ -99,7 +99,7 @@ export function allTimers() {
   return serializeTimers();
 }
 
-function normalizeRecord(raw, { restored = false } = {}) {
+function normalizeRecord(raw) {
   if (!raw || typeof raw !== "object") return null;
   if (!TYPES.has(raw.type)) return null;
   const fireAt = Number(raw.fireAt);
@@ -120,9 +120,6 @@ function normalizeRecord(raw, { restored = false } = {}) {
     fired: false,
     cancelled: false,
     ownerId: raw.ownerId ? String(raw.ownerId) : null,
-    // Runtime-only provenance. It is intentionally not serialized: after any
-    // process restart an auto-unmute must be treated as untrusted recovery.
-    restored: restored === true,
   };
 }
 
@@ -215,7 +212,6 @@ export function createTimer({
     fired: false,
     cancelled: false,
     ownerId,
-    restored: false,
   };
   _timers.set(id, rec);
   persistTimers();

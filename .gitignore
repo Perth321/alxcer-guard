@@ -1,6 +1,0 @@
-node_modules/
-bot/.cache/
-.env
-.env.*
-!.env.example
-*.log

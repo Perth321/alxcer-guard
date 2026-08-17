@@ -52,7 +52,7 @@ function saveLocal() {
   try {
     fs.writeFileSync(
       TRANSCRIPTS_PATH,
-      JSON.stringify({ version: 2, entries: buffer }) + "\n",
+      JSON.stringify({ version: 1, entries: buffer }) + "\n",
     );
   } catch (err) {
     console.error("[transcripts] local save failed", err?.message);
@@ -77,7 +77,7 @@ function scheduleRemoteSave() {
     dirtySinceRemote = false;
     lastRemoteCommitAt = Date.now();
     try {
-      await remoteCallback({ version: 2, entries: buffer });
+      await remoteCallback({ version: 1, entries: buffer });
       console.log(
         `[transcripts] remote save OK (${buffer.length} entries committed)`,
       );
@@ -95,8 +95,6 @@ export function setRemotePersist(fn) {
 export function addTranscript(entry) {
   buffer.push({
     timestamp: Date.now(),
-    guildId: entry.guildId ? String(entry.guildId) : null,
-    channelId: entry.channelId ? String(entry.channelId) : null,
     userId: entry.userId || "unknown",
     username: entry.username || "",
     text: entry.text || "",
@@ -117,8 +115,6 @@ function withinRange(ts, fromMs, toMs) {
 }
 
 export function getRecent({
-  guildId = null,
-  channelId = null,
   userId = null,
   limit = 20,
   flaggedOnly = false,
@@ -126,14 +122,6 @@ export function getRecent({
   toMs = null,
 } = {}) {
   let result = buffer;
-  if (guildId != null && guildId !== "") {
-    const guildKey = String(guildId);
-    result = result.filter((e) => e.guildId === guildKey);
-  }
-  if (channelId != null && channelId !== "") {
-    const channelKey = String(channelId);
-    result = result.filter((e) => e.channelId === channelKey);
-  }
   if (fromMs != null || toMs != null) {
     result = result.filter((e) => withinRange(e.timestamp, fromMs, toMs));
   }
@@ -143,14 +131,7 @@ export function getRecent({
   return result.slice(-limit);
 }
 
-export function getCursingStats({
-  guildId = null,
-  channelId = null,
-  fromMs = null,
-  toMs = null,
-} = {}) {
-  const guildKey = guildId == null || guildId === "" ? null : String(guildId);
-  const channelKey = channelId == null || channelId === "" ? null : String(channelId);
+export function getCursingStats({ fromMs = null, toMs = null } = {}) {
   const perUser = new Map();
   let totalFlagged = 0;
   let totalUtterances = 0;
@@ -158,8 +139,6 @@ export function getCursingStats({
   let latest = null;
 
   for (const e of buffer) {
-    if (guildKey && e.guildId !== guildKey) continue;
-    if (channelKey && e.channelId !== channelKey) continue;
     if (!withinRange(e.timestamp, fromMs, toMs)) continue;
     totalUtterances++;
     if (earliest == null || e.timestamp < earliest) earliest = e.timestamp;
@@ -208,15 +187,8 @@ export function getCursingStats({
   };
 }
 
-export function getStats({ guildId = null, channelId = null } = {}) {
-  const guildKey = guildId == null || guildId === "" ? null : String(guildId);
-  const channelKey = channelId == null || channelId === "" ? null : String(channelId);
-  const entries = buffer.filter((e) => {
-    if (guildKey && e.guildId !== guildKey) return false;
-    if (channelKey && e.channelId !== channelKey) return false;
-    return true;
-  });
-  if (entries.length === 0) {
+export function getStats() {
+  if (buffer.length === 0) {
     return {
       totalEntries: 0,
       flagged: 0,
@@ -226,12 +198,12 @@ export function getStats({ guildId = null, channelId = null } = {}) {
     };
   }
   let flagged = 0;
-  for (const e of entries) if (e.flagged) flagged++;
+  for (const e of buffer) if (e.flagged) flagged++;
   return {
-    totalEntries: entries.length,
+    totalEntries: buffer.length,
     flagged,
-    oldest: entries[0].timestamp,
-    newest: entries[entries.length - 1].timestamp,
+    oldest: buffer[0].timestamp,
+    newest: buffer[buffer.length - 1].timestamp,
     retentionDays: 7,
   };
 }
@@ -257,7 +229,7 @@ export async function flushNow() {
   dirtySinceRemote = false;
   lastRemoteCommitAt = Date.now();
   try {
-    await remoteCallback({ version: 2, entries: buffer });
+    await remoteCallback({ version: 1, entries: buffer });
   } catch (err) {
     console.error("[transcripts] flush failed", err?.message);
   }

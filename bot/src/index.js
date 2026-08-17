@@ -32,27 +32,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import prism from "prism-media";
-import {
-  GuildRuntimeRegistry,
-  disposeGuildRuntime,
-  disposeUserSubscription,
-  resetGuildReceiver,
-} from "./guild-runtime.js";
-import {
-  cancelExpectedUnmute,
-  clearMuteLease,
-  consumeExpectedUnmute,
-  createMuteLease,
-  expectOwnedUnmute,
-  flushMuteLeases,
-  getMuteLease,
-  listMuteLeases,
-  loadMuteLeases,
-  releaseMuteLease,
-  setMuteLeaseRemotePersist,
-} from "./mute-leases.js";
-import { shouldMuteForInactivity } from "./inactivity-policy.js";
-import { extractWakeCommand } from "./wake-word.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,14 +41,7 @@ const PRANK_SOUNDS = {
   jinny: path.join(__dirname, "..", "assets", "jinny.mp3"),
   jan: path.join(__dirname, "..", "assets", "jan.mp3"),
 };
-import {
-  getGuildConfig as resolveGuildConfig,
-  loadConfigStore,
-  setGuildConfig,
-  toLegacyConfig,
-  updateOwnerId,
-  writeConfigStore,
-} from "./config.js";
+import { loadConfig } from "./config.js";
 import {
   registerCommands,
   handleSettingCommand,
@@ -104,7 +76,6 @@ import {
   getClassByTeacher,
   listActive as listActiveClasses,
   takeExpired as takeExpiredClasses,
-  removeClass,
 } from "./classroom.js";
 import {
   handleNotifyCommand,
@@ -127,13 +98,11 @@ import {
 } from "./offenses.js";
 import {
   canPersistRemotely,
-  commitConfig,
   commitOffenses,
   commitTranscripts,
   commitUpdateNotes,
   commitAutomations,
   commitTimers,
-  commitMuteLeases,
 } from "./github.js";
 import {
   loadAutomations,
@@ -249,13 +218,11 @@ if (!transcriptionAvailable) {
   );
 }
 
-let configStore = loadConfigStore();
-let config = toLegacyConfig(configStore);
-if (configStore.ownerId) setOwnerId(configStore.ownerId);
+let config = loadConfig();
+if (config.ownerId) setOwnerId(config.ownerId);
 const TOKEN = process.env.DISCORD_PERSONAL_ACCESS_TOKEN;
-const VALIDATE_ONLY = process.argv.includes("--validate-only");
 
-if (!TOKEN && !VALIDATE_ONLY) {
+if (!TOKEN) {
   throw new Error(
     "DISCORD_PERSONAL_ACCESS_TOKEN environment variable is required.",
   );
@@ -290,38 +257,93 @@ const client = new Client({
   partials: [Partials.Channel],
 });
 
-// Kept as a small compatibility seam while config.json migrates from the
-// original single-guild shape to the v2 `guilds` map. Unknown guilds start in
-// a safe mode: chat and explicit admin tools work, automatic moderation does
-// not mutate members until an admin enables it for that guild.
-function getConfigForGuild(guildId) {
-  const key = guildId ? String(guildId) : "";
-  return {
-    ...resolveGuildConfig(configStore, key),
-    guildId: key,
-    ownerId: configStore.ownerId || "",
-  };
-}
-
-const guildRuntimes = new GuildRuntimeRegistry();
-const runtimeFor = (guildOrId) =>
-  guildRuntimes.get(typeof guildOrId === "string" ? guildOrId : guildOrId?.id);
+const userState = new Map();
+const subscribed = new Set();
+const audioBuffers = new Map();
 
 // Voice wake-word state. When a user says "การ์ด"/"guard" alone, we set their
 // id here so the NEXT transcript from them (within WAKE_PENDING_MS) is treated
 // as the actual command. Concurrent commands are rejected via wakeBusy.
+const pendingWake = new Map();
 const WAKE_PENDING_MS = 15_000;
+let wakeBusy = false;
 
+// Wake-word matcher. Be VERY tolerant of whisper transcription noise:
+// - whisper often prepends junk like "อืม", "เอ่อ", "[เสียงเพลง]"
+// - the same Thai word can come back as การ์ด / การด / ก๊าด / กาด / กาดด /
+//   การ์ก / กาด์ / การ์ต / คาด / การ์ด์ depending on diction + accent
+// - English versions: guard / gaurd / gard / god / gar / "hey guard"
+// We match the wake token ANYWHERE in the first ~30 chars of the cleaned text
+// so a leading filler word doesn't kill the trigger.
+const WAKE_TOKEN_RE =
+  /(?:การ[์์]?[ดตก]ดี้?|การ์[ดตก]|กา[รล]?[ดต]|ก[า๊]า?[ดต]|คา[รล]?ด|guard|gaurd|gard|alxcer\s+guard|hey\s+guard)/i;
+const WAKE_LEADING_NOISE_RE = /^[\s,.!?\-:'"`()\[\]{}♪♫\*<>]+/;
+// IMPORTANT: longest variants first — JS regex alternation is left-to-right,
+// not longest-match. "อะ" before "อะนะ" would steal the match and break the
+// stripping pass.
+const WAKE_PROMPT_PREFIX_RE =
+  /^(?:[\s,.;:!?\-]+|alxcer|อันนี้|อะนะ|อืม|เอ่อ|เออ|อ้า|โอ้|อะ|นี่|hey)\s*/i;
+
+function cleanForWake(text) {
+  if (!text) return "";
+  let t = text.trim();
+  // Strip whisper bracket annotations like "[เสียงเพลง]" / "(music)" / "♪♪♪"
+  // FIRST so the regex finds the bracket — order matters because the leading
+  // noise stripper would chew off the opening "[" by itself otherwise.
+  for (let i = 0; i < 3; i++) {
+    const before = t;
+    t = t
+      .replace(/^\[[^\]]{1,60}\]\s*/, "")
+      .replace(/^\([^)]{1,60}\)\s*/, "")
+      .replace(/^♪+[^♪]{0,60}♪+\s*/, "")
+      .replace(WAKE_LEADING_NOISE_RE, "");
+    if (t === before) break;
+  }
+  return t.trim();
+}
+
+function extractWakeCommand(text) {
+  let cleaned = cleanForWake(text);
+  if (!cleaned) return null;
+  // Strip up to two leading filler particles ("อืม การ์ด" → "การ์ด").
+  // After that, the wake token MUST be at position 0 to count as a wake call.
+  // This prevents accidental triggers on sentences like "ผมเอาการ์ดเกม...".
+  for (let i = 0; i < 2; i++) {
+    const before = cleaned;
+    cleaned = cleaned.replace(WAKE_PROMPT_PREFIX_RE, "");
+    if (cleaned === before) break;
+  }
+  const m = cleaned.match(WAKE_TOKEN_RE);
+  if (!m || m.index !== 0) return null;
+  let rest = cleaned.slice(m[0].length).trim();
+  rest = rest.replace(WAKE_PROMPT_PREFIX_RE, "").replace(/^[\s,.;:!?\-]+/, "").trim();
+  return rest;
+}
+
+let currentChannelId = null;
 let pollHandle = null;
 let audioFlushHandle = null;
 let timerHandle = null;
 // Active wake-alarm sessions: timerId -> { stop: () => void, until: number }
 const wakeSessions = new Map();
-const botKickedUsers = new Set(); // `${guildId}:${userId}` recently disconnected by bot action
+const botKickedUsers = new Set(); // users recently disconnected by bot action (for kick detection)
+let joining = false;
+let reevalQueued = false;
+let activeReceiver = null;
+let lastAnyAudio = Date.now();
+let receiverProven = false;
+let lastSpeakingFlag = 0;
+let lastWatchdogRejoin = 0;
+let receiverHealthLogged = false;
+let notReadyTicks = 0;
 // Timestamp until which the bot's own TTS audio may echo back through room
 // microphones. Any transcription arriving before this time is suppressed to
 // prevent the bot from hearing itself and re-triggering the wake word.
+let botSpeakingUntil = 0;
 const ECHO_SUPPRESS_MS = 3_500; // ms of suppression AFTER bot finishes speaking
+
+const WATCHDOG_SECONDS = 60;
+const WATCHDOG_COOLDOWN_MS = 3 * 60 * 1000;
 
 const PCM_SAMPLE_RATE = 48000;
 const PCM_CHANNELS = 2;
@@ -335,15 +357,12 @@ const IDLE_FLUSH_MS = 1500;
 const offenses = loadOffenses();
 loadAutomations();
 loadTimers();
-loadMuteLeases();
 loadTranscriptsFromDisk();
 if (canPersistRemotely()) {
   setTranscriptRemotePersist((data) => commitTranscripts(data));
   setTimerRemotePersist((data) => commitTimers(data));
-  setMuteLeaseRemotePersist((data) => commitMuteLeases(data));
   console.log("[boot] transcripts will be persisted to repo (7-day retention, auto-prune)");
   console.log("[boot] active timers will be persisted to repo");
-  console.log("[boot] mute ownership will be persisted to repo");
 } else {
   console.log("[boot] transcripts kept in-memory only (no GITHUB_TOKEN to persist)");
   console.log("[boot] active timers kept local only (no GITHUB_TOKEN to persist)");
@@ -351,125 +370,37 @@ if (canPersistRemotely()) {
 const wordBanTimers = new Map();
 let offensesPersistTimer = null;
 
-const guildUserKey = (guildId, userId) => `${guildId}:${userId}`;
-const wordBanKey = guildUserKey;
-
-function offenseKey(guildId, userId) {
-  return guildUserKey(guildId, userId);
-}
-
-function getOffense(guildId, userId) {
-  const scoped = offenses.users[offenseKey(guildId, userId)];
-  if (scoped) return scoped;
-  // One-time compatibility for the original primary guild's user-only keys.
-  if (configStore.primaryGuildId === guildId) {
-    return offenses.users[userId] || null;
-  }
-  return null;
-}
-
-async function unmuteOwnedLease(guild, member, expectedLeaseId, reason) {
-  const current = getMuteLease(guild.id, member.id);
-  if (!current || !expectedLeaseId || current.id !== String(expectedLeaseId)) {
-    return { ok: false, code: current ? "lease_conflict" : "mute_not_owned" };
-  }
-  if (member.voice?.channel && member.voice.serverMute) {
-    expectOwnedUnmute(guild.id, member.id, expectedLeaseId);
-    try {
-      await member.voice.setMute(false, reason);
-    } catch (err) {
-      cancelExpectedUnmute(guild.id, member.id, expectedLeaseId);
-      throw err;
-    }
-  }
-  const released = releaseMuteLease(guild.id, member.id, expectedLeaseId);
-  if (released) return { ok: true };
-  const replacement = getMuteLease(guild.id, member.id);
-  if (replacement && member.voice?.channel) {
-    await member.voice
-      .setMute(true, `Alxcer Guard: preserving newer mute lease ${replacement.source}`)
-      .catch(() => {});
-  }
-  return { ok: false, code: "lease_conflict" };
-}
-
-async function reconcilePersistedMuteLeases(guild) {
-  for (const lease of listMuteLeases({ guildId: guild.id })) {
-    const member = await guild.members.fetch(lease.userId).catch(() => null);
-    if (!member?.voice?.channel || !member.voice.serverMute) {
-      clearMuteLease(guild.id, lease.userId);
-      continue;
-    }
-    if (lease.expiresAt && lease.expiresAt <= Date.now()) {
-      // A restart cannot prove who owns the current Discord mute. A moderator
-      // may have applied a newer mute while Guard was offline, so recovery may
-      // clear stale bookkeeping but must never open the microphone itself.
-      clearMuteLease(guild.id, lease.userId);
-      console.log(
-        `[mute-lease:${guild.id}] expired lease ${lease.id} cleared without changing Discord mute`,
-      );
-    }
-  }
-}
-
-let configPersistQueue = Promise.resolve();
-
-async function persistGuildConfig(guildId, next, message = "chore: update guild config") {
-  const task = configPersistQueue
-    .catch(() => {})
-    .then(async () => {
-      configStore = setGuildConfig(configStore, guildId, next);
-      config = toLegacyConfig(configStore);
-      client.config = config;
-      writeConfigStore(configStore);
-      if (canPersistRemotely()) await commitConfig(configStore, message);
-      return getConfigForGuild(guildId);
-    });
-  configPersistQueue = task;
-  return task;
-}
-
 const runtime = {
-  getConfig: (guildId) => getConfigForGuild(guildId),
-  persistConfig: (guildId, next) => persistGuildConfig(guildId, next),
-  setConfig: (guildId, next) => {
-    // commands.js v2 passes (guildId, next). Preserve the legacy single-arg
-    // form until every caller has migrated.
-    if (next === undefined) {
-      next = guildId;
-      guildId = next?.guildId;
-    }
-    configStore = setGuildConfig(configStore, guildId, next);
-    config = toLegacyConfig(configStore);
+  getConfig: () => config,
+  setConfig: (next) => {
+    config = next;
     client.config = config;
-    if (configStore.ownerId) setOwnerId(configStore.ownerId);
+    if (config.ownerId) setOwnerId(config.ownerId);
   },
-  requestRejoin: (guildId) => {
-    if (!guildId) return;
+  requestRejoin: () => {
+    if (!config.guildId) return;
     client.guilds
-      .fetch(guildId)
+      .fetch(config.guildId)
       .then((g) => reevaluateAndJoin(g))
       .catch((err) => console.error("[rejoin] error", err?.message));
   },
   transcriptionAvailable: () => transcriptionAvailable,
-  getRecentTranscripts: (guildId, opts) => getRecentTranscripts({ ...opts, guildId }),
-  getTranscriptStats: (guildId) => getTranscriptStats({ guildId }),
-  getCursingStats: (guildId, opts) => getCursingStats({ ...opts, guildId }),
-  playPrankSound: (guildId, name) => playPrankSound(guildId, name),
-  markBotKick: (guildId, userId) => {
-    if (!guildId || !userId) return;
-    const key = guildUserKey(guildId, userId);
-    botKickedUsers.add(key);
-    setTimeout(() => botKickedUsers.delete(key), 8_000);
+  getRecentTranscripts: (opts) => getRecentTranscripts(opts),
+  getTranscriptStats: () => getTranscriptStats(),
+  getCursingStats: (opts) => getCursingStats(opts),
+  playPrankSound: (name) => playPrankSound(name),
+  markBotKick: (userId) => {
+    if (!userId) return;
+    botKickedUsers.add(userId);
+    setTimeout(() => botKickedUsers.delete(userId), 8_000);
   },
-  snapshot: (guildId) => {
-    const rt = runtimeFor(guildId);
+  snapshot: () => {
     const now = Date.now();
-    const conn = getVoiceConnection(guildId);
+    const conn = config.guildId ? getVoiceConnection(config.guildId) : null;
     const connStatus = conn?.state?.status ?? "none";
     const allVoiceChannels = [];
-    if (guildId) {
-      const guild = client.guilds.cache.get(guildId);
+    if (config.guildId) {
+      const guild = client.guilds.cache.get(config.guildId);
       if (guild) {
         for (const ch of guild.channels.cache.values()) {
           if (
@@ -486,15 +417,15 @@ const runtime = {
       }
     }
     return {
-      connected: !!rt.currentChannelId,
+      connected: !!currentChannelId,
       connStatus,
-      channelId: rt.currentChannelId,
+      channelId: currentChannelId,
       cryptoLib,
       transcription: transcriptionAvailable,
       transcribeStatus: getTranscribeStatus(),
-      lastAnyAudioAge: Math.round((now - rt.lastAnyAudio) / 1000),
+      lastAnyAudioAge: Math.round((now - lastAnyAudio) / 1000),
       allVoiceChannels,
-      users: [...rt.userState.entries()].map(([id, s]) => ({
+      users: [...userState.entries()].map(([id, s]) => ({
         id,
         heardOnce: s.heardOnce,
         speaking: s.speaking,
@@ -509,9 +440,8 @@ const runtime = {
 client.config = config;
 
 function getNotifyChannel(guild) {
-  const cfg = getConfigForGuild(guild.id);
-  if (!cfg.notifyChannelId) return null;
-  return guild.channels.cache.get(cfg.notifyChannelId) ?? null;
+  if (!config.notifyChannelId) return null;
+  return guild.channels.cache.get(config.notifyChannelId) ?? null;
 }
 
 function canSendToChannel(channel, guild) {
@@ -527,15 +457,14 @@ function canSendToChannel(channel, guild) {
 
 async function findAnnouncementChannel(guild) {
   if (!guild) return null;
-  const cfg = getConfigForGuild(guild.id);
   await guild.members.fetchMe().catch(() => null);
-  if (cfg.notifyChannelId) {
+  if (config.notifyChannelId) {
     const configured = await guild.channels
-      .fetch(cfg.notifyChannelId)
+      .fetch(config.notifyChannelId)
       .catch(() => null);
     if (canSendToChannel(configured, guild)) return configured;
     console.warn(
-      `[announce] configured notify channel ${cfg.notifyChannelId} is unavailable or not sendable`,
+      `[announce] configured notify channel ${config.notifyChannelId} is unavailable or not sendable`,
     );
   }
 
@@ -564,16 +493,15 @@ async function announce(guild, payload) {
 }
 
 function pickBestVoiceChannel(guild) {
-  const cfg = getConfigForGuild(guild.id);
-  if (cfg.voiceChannelId) {
-    const pinned = guild.channels.cache.get(cfg.voiceChannelId);
+  if (config.voiceChannelId) {
+    const pinned = guild.channels.cache.get(config.voiceChannelId);
     if (
       pinned &&
       (pinned.type === ChannelType.GuildVoice ||
         pinned.type === ChannelType.GuildStageVoice)
     ) {
       const humanCount = pinned.members.filter(
-        (m) => !(cfg.ignoreBots && m.user.bot),
+        (m) => !(config.ignoreBots && m.user.bot),
       ).size;
       return humanCount > 0 ? pinned : null;
     }
@@ -589,7 +517,7 @@ function pickBestVoiceChannel(guild) {
   let bestCount = 0;
   for (const ch of candidates.values()) {
     const humanCount = ch.members.filter(
-      (m) => !(cfg.ignoreBots && m.user.bot),
+      (m) => !(config.ignoreBots && m.user.bot),
     ).size;
     if (humanCount > bestCount) {
       bestCount = humanCount;
@@ -602,7 +530,6 @@ function pickBestVoiceChannel(guild) {
 function newUserState(now) {
   return {
     lastSpoke: now,
-    lastPacketAt: 0,
     warned: false,
     muted: false,
     speaking: false,
@@ -611,42 +538,37 @@ function newUserState(now) {
   };
 }
 
-function syncUserState(channel, rt = runtimeFor(channel.guild.id)) {
-  const cfg = getConfigForGuild(channel.guild.id);
+function syncUserState(channel) {
   const now = Date.now();
   const selfId = channel.client?.user?.id;
   for (const [, member] of channel.members) {
     if (selfId && member.id === selfId) continue; // Always exclude bot itself
-    if (cfg.ignoreBots && member.user.bot) continue;
-    if (!rt.userState.has(member.id)) {
+    if (config.ignoreBots && member.user.bot) continue;
+    if (!userState.has(member.id)) {
       const s = newUserState(now);
       s.muted = member.voice?.serverMute ?? false; // Sync actual Discord mute state on join
-      rt.userState.set(member.id, s);
+      userState.set(member.id, s);
     }
   }
 }
 
-function markHeard(rt, userId, source) {
-  // Speaking start/end events are only flags and can fire without any
-  // decodable audio. Only real packets prove that this user's receiver works.
-  if (source !== "packet") return;
-  const s = rt.userState.get(userId);
+function markHeard(userId, source) {
+  const s = userState.get(userId);
   if (!s) return;
   const wasHeard = s.heardOnce;
   s.lastSpoke = Date.now();
-  s.lastPacketAt = s.lastSpoke;
   s.heardOnce = true;
   s.silentTicks = 0;
   if (s.warned) s.warned = false;
   if (source === "packet") {
-    rt.lastAnyAudio = Date.now();
-    if (!rt.receiverProven) {
-      rt.receiverProven = true;
+    lastAnyAudio = Date.now();
+    if (!receiverProven) {
+      receiverProven = true;
       console.log("[health] receiver PROVEN working — first real audio packet decoded");
     }
-    if (rt.receiverHealthLogged) {
+    if (receiverHealthLogged) {
       console.log("[health] receiver recovered — audio flowing again");
-      rt.receiverHealthLogged = false;
+      receiverHealthLogged = false;
     }
   }
   if (!wasHeard) {
@@ -654,23 +576,23 @@ function markHeard(rt, userId, source) {
   }
 }
 
-function appendPcm(rt, userId, pcm) {
-  let buf = rt.audioBuffers.get(userId);
+function appendPcm(userId, pcm) {
+  let buf = audioBuffers.get(userId);
   if (!buf) {
     buf = { chunks: [], totalBytes: 0, lastAppendAt: 0 };
-    rt.audioBuffers.set(userId, buf);
+    audioBuffers.set(userId, buf);
   }
   buf.chunks.push(pcm);
   buf.totalBytes += pcm.length;
   buf.lastAppendAt = Date.now();
   const maxBytes = PCM_BYTES_PER_SECOND * MAX_UTTERANCE_SEC;
   if (buf.totalBytes >= maxBytes) {
-    flushUserAudio(rt, userId, "max-length");
+    flushUserAudio(userId, "max-length");
   }
 }
 
-function flushUserAudio(rt, userId, reason) {
-  const buf = rt.audioBuffers.get(userId);
+function flushUserAudio(userId, reason) {
+  const buf = audioBuffers.get(userId);
   if (!buf || buf.chunks.length === 0) return;
   const pcm = Buffer.concat(buf.chunks);
   buf.chunks = [];
@@ -678,17 +600,11 @@ function flushUserAudio(rt, userId, reason) {
   const durationSec = pcm.length / PCM_BYTES_PER_SECOND;
   if (durationSec < MIN_UTTERANCE_SEC) return;
   if (!transcriptionAvailable) return;
+  if (!config.guildId) return;
   const enqueued = enqueueTranscription(
     pcm,
     handleVoiceTranscript,
-    {
-      guildId: rt.guildId,
-      channelId: rt.currentChannelId,
-      generation: rt.connectionGeneration,
-      userId,
-      durationSec,
-      reason,
-    },
+    { userId, durationSec, reason },
   );
   if (enqueued) {
     console.log(
@@ -705,17 +621,7 @@ async function handleVoiceTranscript(text, meta) {
   // Suppress transcription while bot is speaking (or within echo-decay window).
   // Without this, the bot's own TTS echoes through room mics → gets transcribed
   // → "การ์ด" in the TTS response re-triggers the wake word → infinite loop.
-  if (!meta?.guildId) return;
-  const rt = runtimeFor(meta.guildId);
-  const cfg = getConfigForGuild(meta.guildId);
-  if (
-    meta.generation !== rt.connectionGeneration ||
-    (meta.channelId && meta.channelId !== rt.currentChannelId)
-  ) {
-    console.log(`[transcribe] dropped stale completion guild=${meta.guildId} user=${meta.userId}`);
-    return;
-  }
-  if (Date.now() < rt.botSpeakingUntil) {
+  if (Date.now() < botSpeakingUntil) {
     console.log(`[transcribe] suppressed — bot speaking/echo window user=${meta.userId} text="${trimmed.slice(0, 60)}"`);
     return;
   }
@@ -724,14 +630,16 @@ async function handleVoiceTranscript(text, meta) {
     `[transcribe] user=${meta.userId} dur=${meta.durationSec?.toFixed(1)}s text="${trimmed.slice(0, 200)}"`,
   );
 
-  const word = findBannedWord(trimmed, cfg);
+  const word = findBannedWord(trimmed);
 
   let username = "";
   try {
-    const guild = client.guilds.cache.get(meta.guildId);
-    if (guild) {
-      const member = guild.members.cache.get(meta.userId);
-      if (member) username = member.user.username;
+    if (config.guildId) {
+      const guild = client.guilds.cache.get(config.guildId);
+      if (guild) {
+        const member = guild.members.cache.get(meta.userId);
+        if (member) username = member.user.username;
+      }
     }
   } catch {}
 
@@ -745,16 +653,16 @@ async function handleVoiceTranscript(text, meta) {
   let wakeCommand = null;
   let isFollowUp = false;
 
-  const pending = rt.pendingWake.get(meta.userId);
+  const pending = pendingWake.get(meta.userId);
   if (pending && Date.now() - pending.at < WAKE_PENDING_MS) {
-    rt.pendingWake.delete(meta.userId);
+    pendingWake.delete(meta.userId);
     isWakeFlow = true;
     isFollowUp = true;
     // If the user re-said "การ์ด <cmd>" instead of just <cmd>, strip wake word
     const stripped = extractWakeCommand(trimmed);
     wakeCommand = stripped !== null ? stripped : trimmed;
   } else {
-    rt.pendingWake.delete(meta.userId);
+    pendingWake.delete(meta.userId);
     const cmd = extractWakeCommand(trimmed);
     if (cmd !== null) {
       isWakeFlow = true;
@@ -766,8 +674,6 @@ async function handleVoiceTranscript(text, meta) {
   );
 
   addTranscript({
-    guildId: meta.guildId,
-    channelId: meta.channelId,
     userId: meta.userId,
     username,
     text: trimmed,
@@ -781,8 +687,7 @@ async function handleVoiceTranscript(text, meta) {
   if (isWakeFlow) {
     // Don't apply word-ban to a guard wake-call even if a banned word is in
     // the prompt — the user is talking TO the bot, not in casual chat.
-    await handleWakeCommand({
-      guildId: meta.guildId,
+    handleWakeCommand({
       userId: meta.userId,
       username,
       command: wakeCommand,
@@ -792,25 +697,36 @@ async function handleVoiceTranscript(text, meta) {
     return;
   }
 
-  if (!word || cfg.voiceWordBanEnabled !== true) return;
+  if (!word) return;
+  if (!config.guildId) return;
   try {
-    const guild = await client.guilds.fetch(meta.guildId);
+    const guild = await client.guilds.fetch(config.guildId);
     await applyWordBan(guild, meta.userId, word, "voice", trimmed);
   } catch (err) {
     console.error("[transcribe] wordban dispatch failed", err?.message);
   }
 }
 
-async function handleWakeCommand({ guildId, userId, username, command, raw, isFollowUp }) {
-  if (!guildId) return;
-  const rt = runtimeFor(guildId);
-  const cfg = getConfigForGuild(guildId);
-  if (rt.wakeBusy) {
+async function handleWakeCommand({ userId, username, command, raw, isFollowUp }) {
+  if (!config.guildId) return;
+  if (wakeBusy) {
     console.log(`[wake] busy — ignoring new wake from ${userId}`);
     return;
   }
-  rt.wakeBusy = true;
-  let conn = getVoiceConnection(guildId);
+  wakeBusy = true;
+  let conn = getVoiceConnection(config.guildId);
+  let donePlayed = false;
+
+  const playDone = async () => {
+    if (donePlayed) return;
+    donePlayed = true;
+    try {
+      const c = getVoiceConnection(config.guildId);
+      if (c) await playPcmBeep(c, DONE_BEEP_PCM, "wake-done", 3000);
+    } catch (err) {
+      console.warn("[wake] done beep failed", err?.message);
+    }
+  };
 
   try {
     // Stage 1: only beep on the FIRST wake utterance, not on the follow-up.
@@ -822,14 +738,14 @@ async function handleWakeCommand({ guildId, userId, username, command, raw, isFo
 
     // Stage 2: command body empty → mark pending, await the next utterance
     if (!command) {
-      rt.pendingWake.set(userId, { at: Date.now() });
+      pendingWake.set(userId, { at: Date.now() });
       console.log(
         `[wake] user=${userId} acknowledged — awaiting command (${WAKE_PENDING_MS}ms)`,
       );
       setTimeout(() => {
-        const p = rt.pendingWake.get(userId);
+        const p = pendingWake.get(userId);
         if (p && Date.now() - p.at >= WAKE_PENDING_MS - 100) {
-          rt.pendingWake.delete(userId);
+          pendingWake.delete(userId);
           console.log(`[wake] user=${userId} pending timed out`);
         }
       }, WAKE_PENDING_MS + 100).unref?.();
@@ -838,7 +754,7 @@ async function handleWakeCommand({ guildId, userId, username, command, raw, isFo
 
     console.log(`[wake] user=${userId} command="${command.slice(0, 200)}"`);
 
-    const guild = await client.guilds.fetch(guildId).catch(() => null);
+    const guild = await client.guilds.fetch(config.guildId).catch(() => null);
     if (!guild) {
       console.warn("[wake] guild fetch failed");
       return;
@@ -861,15 +777,15 @@ async function handleWakeCommand({ guildId, userId, username, command, raw, isFo
       }
     }
 
+    // Admin gate removed — voice commands are open to everyone in the server.
+    // The agent itself still enforces role-hierarchy guardrails for any
+    // moderation action it performs (ban / mute / move).
+
     if (replyChannel) await replyChannel.sendTyping().catch(() => {});
 
     let result = "";
     let errMsg = "";
     try {
-      // Every member gets the useful agent (chat, web search, read-only server
-      // tools). execTool is still the single source of truth for permissions:
-      // server mutations require owner/Admin/Manage Server and host/repo tools
-      // remain owner-only. No magic confirmation word is required.
       result = await runAgent({
         userPrompt: `[คำสั่งเสียงจาก ${username || userId}]: ${command}`,
         ctx: {
@@ -877,9 +793,7 @@ async function handleWakeCommand({ guildId, userId, username, command, raw, isFo
           channel: replyChannel,
           authorTag: username || userId,
           authorId: userId,
-          authorMember: member,
-          ownerId: cfg.ownerId || config.ownerId || null,
-          markBotKick: (targetId) => runtime.markBotKick(guild.id, targetId),
+          ownerId: config.ownerId || null,
           offenses,
           persistOffenses: async () => persistOffenses(),
           chatHistory: [],
@@ -918,13 +832,15 @@ async function handleWakeCommand({ guildId, userId, username, command, raw, isFo
   } catch (err) {
     console.error("[wake] outer handler error", err?.message, err?.stack);
   } finally {
-    rt.wakeBusy = false;
+    // ALWAYS play the done beep on success or failure (except for the
+    // pending-acknowledgement path which already returned above)
+    await playDone();
+    wakeBusy = false;
   }
 }
 
 function pickReplyChannel(guild) {
-  const rt = runtimeFor(guild.id);
-  const voiceChan = rt.currentChannelId ? guild.channels.cache.get(rt.currentChannelId) : null;
+  const voiceChan = currentChannelId ? guild.channels.cache.get(currentChannelId) : null;
   const me = guild.members.me;
   const canSend = (ch) => {
     if (!ch || !me) return false;
@@ -939,21 +855,15 @@ function pickReplyChannel(guild) {
   return null;
 }
 
-function subscribeUser(rt, receiver, userId) {
-  if (rt.subscriptions.has(userId)) return;
-  if (!rt.userState.has(userId)) return;
-  if (rt.activeReceiver !== receiver) return;
+function subscribeUser(receiver, userId) {
+  if (subscribed.has(userId)) return;
+  if (!userState.has(userId)) return;
   try {
     const sub = receiver.subscribe(userId, {
       end: { behavior: EndBehaviorType.Manual },
     });
-    const record = { stream: sub, decoder: null };
-    rt.subscriptions.set(userId, record);
-    sub.on("data", () => {
-      if (rt.subscriptions.get(userId) === record && rt.activeReceiver === receiver) {
-        markHeard(rt, userId, "packet");
-      }
-    });
+    subscribed.add(userId);
+    sub.on("data", () => markHeard(userId, "packet"));
 
     if (transcriptionAvailable) {
       const decoder = new prism.opus.Decoder({
@@ -962,22 +872,19 @@ function subscribeUser(rt, receiver, userId) {
         frameSize: 960,
       });
       sub.pipe(decoder);
-      record.decoder = decoder;
-      decoder.on("data", (pcm) => {
-        if (rt.subscriptions.get(userId) === record && rt.activeReceiver === receiver) {
-          appendPcm(rt, userId, pcm);
-        }
-      });
+      decoder.on("data", (pcm) => appendPcm(userId, pcm));
       decoder.on("error", (err) =>
         console.error("[opus] decode error", err?.message),
       );
     }
 
-    let cleaned = false;
     const cleanup = () => {
-      if (cleaned) return;
-      cleaned = true;
-      disposeUserSubscription(rt, userId, record);
+      subscribed.delete(userId);
+      const buf = audioBuffers.get(userId);
+      if (buf) {
+        buf.chunks = [];
+        buf.totalBytes = 0;
+      }
     };
     sub.on("error", cleanup);
     sub.on("end", cleanup);
@@ -1039,15 +946,20 @@ const WAKE_BEEP_PCM = generateBeepFromSegments([
   { freq: 0, ms: 80 },
 ], 0.55);
 
-let cachedBeepPCM = null;
+// Single longer descending tone — "done, you can speak again"
+const DONE_BEEP_PCM = generateBeepFromSegments([
+  { freq: 0, ms: 30 },
+  { freq: 880, ms: 220 },
+  { freq: 660, ms: 280 },
+  { freq: 0, ms: 80 },
+], 0.55);
 
-function runtimeFromConnection(connection) {
-  return runtimeFor(connection?.joinConfig?.guildId);
-}
+let cachedBeepPCM = null;
+let beepPlaying = false;
+const playingFiles = new Set();
 
 async function playSoundFile(connection, filePath, label = "sound", timeoutMs = 30000) {
-  const rt = runtimeFromConnection(connection);
-  if (rt.playingFiles.has(filePath)) {
+  if (playingFiles.has(filePath)) {
     console.log(`[${label}] already playing this file — skipping`);
     return false;
   }
@@ -1076,7 +988,7 @@ async function playSoundFile(connection, filePath, label = "sound", timeoutMs = 
       return false;
     }
   }
-  rt.playingFiles.add(filePath);
+  playingFiles.add(filePath);
   let subscription = null;
   let player = null;
   try {
@@ -1141,7 +1053,7 @@ async function playSoundFile(connection, filePath, label = "sound", timeoutMs = 
     if (subscription) {
       try { subscription.unsubscribe(); } catch {}
     }
-    rt.playingFiles.delete(filePath);
+    playingFiles.delete(filePath);
   }
 }
 
@@ -1157,14 +1069,12 @@ const pendingClassStart = new Map();
 
 async function playJoinSignal(connection) {
   const cid = connection?.joinConfig?.channelId;
-  const cfg = getConfigForGuild(connection?.joinConfig?.guildId);
 
   // If a teacher just joined this channel, play the class-start sequence
   // (bell + TTS) instead of greeting. This consumes the pending flag.
   if (cid && pendingClassStart.has(cid)) {
     const cls = pendingClassStart.get(cid);
     pendingClassStart.delete(cid);
-    if (cfg.classroomAutomationEnabled !== true) return;
     console.log(`[classroom] playJoinSignal → start-of-class for ${cid}`);
     await playClassStartSequence(connection).catch((err) =>
       console.error("[classroom] start sequence failed", err?.message),
@@ -1172,18 +1082,19 @@ async function playJoinSignal(connection) {
     return;
   }
 
-  // Normal join, reconnect, room switch, and workflow rotation stay silent.
-  // The wake word still produces one acknowledgement beep. Servers that want
-  // a join beep can opt in explicitly.
-  if (cfg.joinSoundEnabled !== true) return;
-  if (cid && Array.isArray(cfg.silentJoinChannelIds) && cfg.silentJoinChannelIds.includes(cid)) return;
+  // Skip greeting entirely for channels marked as "silent join" (study/class rooms)
+  if (cid && Array.isArray(config.silentJoinChannelIds) && config.silentJoinChannelIds.includes(cid)) {
+    console.log(`[greet] silent-join channel ${cid} — skipping greeting`);
+    return;
+  }
+  const greeted = await playGreeting(connection);
+  if (greeted) return;
   await playJoinBeep(connection);
 }
 
 async function playClassStartSequence(connection) {
   const bell = PRANK_SOUNDS.rung;
-  const cfg = getConfigForGuild(connection?.joinConfig?.guildId);
-  const ttsText = cfg.classStartTtsText ||
+  const ttsText = config.classStartTtsText ||
     "เริ่มคาบเรียนแล้ว ขอให้นักเรียนทุกท่านเตรียมตัวให้พร้อม และตั้งใจเรียน";
   try {
     await playSoundFile(connection, bell, "class-start-bell", 30_000);
@@ -1194,7 +1105,7 @@ async function playClassStartSequence(connection) {
   }
 }
 
-async function playPrankSound(guildId, name) {
+async function playPrankSound(name) {
   const filePath = PRANK_SOUNDS[name];
   if (!filePath) {
     return { ok: false, reason: `ไม่รู้จักเสียง "${name}"` };
@@ -1202,10 +1113,10 @@ async function playPrankSound(guildId, name) {
   if (!fs.existsSync(filePath)) {
     return { ok: false, reason: `ไม่พบไฟล์เสียง "${name}.mp3" ใน assets` };
   }
-  if (!guildId) {
+  if (!config.guildId) {
     return { ok: false, reason: "บอทยังไม่ได้ผูกกับเซิร์ฟเวอร์" };
   }
-  const conn = getVoiceConnection(guildId);
+  const conn = getVoiceConnection(config.guildId);
   if (!conn || conn.state?.status === VoiceConnectionStatus.Destroyed) {
     return { ok: false, reason: "บอทยังไม่ได้อยู่ในห้องเสียง — รอให้มีคนเข้าห้องก่อน" };
   }
@@ -1218,16 +1129,15 @@ async function playPrankSound(guildId, name) {
 }
 
 async function playPcmBeep(connection, pcmBuffer, label = "beep", timeoutMs = 5000) {
+  if (beepPlaying) {
+    console.log(`[${label}] another beep already playing — skipping`);
+    return;
+  }
   if (!connection || connection.state?.status === VoiceConnectionStatus.Destroyed) {
     console.warn(`[${label}] no live voice connection — skipping`);
     return;
   }
-  const rt = runtimeFromConnection(connection);
-  if (rt.beepPlaying) {
-    console.log(`[${label}] another beep already playing — skipping`);
-    return;
-  }
-  rt.beepPlaying = true;
+  beepPlaying = true;
   let subscription = null;
   let player = null;
   try {
@@ -1269,7 +1179,7 @@ async function playPcmBeep(connection, pcmBuffer, label = "beep", timeoutMs = 50
     if (subscription) {
       try { subscription.unsubscribe(); } catch {}
     }
-    rt.beepPlaying = false;
+    beepPlaying = false;
   }
 }
 
@@ -1284,9 +1194,8 @@ const TTS_TMP_DIR = "/tmp/alxcer-tts";
 try { fs.mkdirSync(TTS_TMP_DIR, { recursive: true }); } catch {}
 
 async function speakThai(connection, text, label = "tts") {
-  const rt = runtimeFromConnection(connection);
   // Suppress transcription while bot is synthesizing + playing + echo-decay window.
-  rt.botSpeakingUntil = Date.now() + 45_000;
+  botSpeakingUntil = Date.now() + 45_000;
   try {
     const buf = await synthesizeThai(text);
     const file = path.join(TTS_TMP_DIR, `${label}-${Date.now()}.mp3`);
@@ -1299,7 +1208,7 @@ async function speakThai(connection, text, label = "tts") {
     return false;
   } finally {
     // After TTS finishes (or fails), add a short echo-decay window then release.
-    rt.botSpeakingUntil = Date.now() + ECHO_SUPPRESS_MS;
+    botSpeakingUntil = Date.now() + ECHO_SUPPRESS_MS;
   }
 }
 
@@ -1337,23 +1246,6 @@ const SOFT_CHIME_PCM = generateBeepFromSegments([
   { freq: 0,    ms: 80 },
 ], 0.45);
 
-function beginAuxiliaryVoiceMove(guildId) {
-  const rt = runtimeFor(guildId);
-  rt.auxiliaryVoiceDepth += 1;
-  rt.connectionEpoch += 1;
-  resetGuildReceiver(rt);
-}
-
-async function endAuxiliaryVoiceMove(guild) {
-  const rt = runtimeFor(guild.id);
-  rt.auxiliaryVoiceDepth = Math.max(0, rt.auxiliaryVoiceDepth - 1);
-  if (rt.auxiliaryVoiceDepth > 0) return;
-  rt.reevalQueued = false;
-  await reevaluateAndJoin(guild).catch((err) =>
-    console.warn(`[voice:${guild.id}] monitor restore failed`, err?.message),
-  );
-}
-
 /**
  * Run a wake-alarm session: switch into the target user's voice channel,
  * play TTS + music in a loop until session.stopped is true (or hard timeout).
@@ -1368,9 +1260,7 @@ async function runWakeSession({ guild, member, ttsText, musicUrl, timerId }) {
   // If the bot is already in a different channel, switch.
   let conn = getVoiceConnection(guild.id);
   const sameChannel = conn && conn.joinConfig?.channelId === voiceCh.id;
-  const movedForPlayback = !sameChannel;
   if (!sameChannel) {
-    beginAuxiliaryVoiceMove(guild.id);
     try {
       conn = joinVoiceChannel({
         channelId: voiceCh.id,
@@ -1382,7 +1272,6 @@ async function runWakeSession({ guild, member, ttsText, musicUrl, timerId }) {
       await entersState(conn, VoiceConnectionStatus.Ready, 15_000);
     } catch (err) {
       console.warn(`[wake:${timerId}] join failed: ${err?.message}`);
-      await endAuxiliaryVoiceMove(guild);
       return { ok: false, reason: "could not join voice channel" };
     }
   }
@@ -1438,7 +1327,6 @@ async function runWakeSession({ guild, member, ttsText, musicUrl, timerId }) {
       wakeSessions.delete(timerId);
       if (musicFile) { try { fs.unlinkSync(musicFile); } catch {} }
       console.log(`[wake:${timerId}] session ended after ${iter} iterations`);
-      if (movedForPlayback) await endAuxiliaryVoiceMove(guild);
     }
   })();
 
@@ -1571,10 +1459,9 @@ async function fireTimer(t) {
       if (channel?.isTextBased?.()) {
         await channel.send({ content: mention.trim() || undefined, embeds: [embed] }).catch(() => {});
       }
-      // Ordinary timers are text-only. Voice audio must be requested
-      // explicitly; wake_alarm remains the dedicated voice alarm feature.
+      // Also chime in voice if the bot is connected
       const conn = getVoiceConnection(guild.id);
-      if (t.payload?.voiceAudio === true && conn?.state.status === VoiceConnectionStatus.Ready) {
+      if (conn && conn.state.status === VoiceConnectionStatus.Ready) {
         await speakThai(conn, `แจ้งเตือนครับ ${t.label || "ครบเวลาแล้ว"}`, `timer-${t.id}`);
       }
       deleteTimer(t.id);
@@ -1582,7 +1469,6 @@ async function fireTimer(t) {
     }
 
     if (t.type === "wake_alarm") {
-      const cfg = getConfigForGuild(guild.id);
       // Find the target member; only proceed if they're in voice.
       let member = null;
       try { member = await guild.members.fetch(t.userId); } catch {}
@@ -1598,8 +1484,8 @@ async function fireTimer(t) {
         deleteTimer(t.id);
         return;
       }
-      const ttsText = cfg.wakeTtsText || "ขออนุญาตปลุกนะครับ ตื่นได้แล้วเด้อ";
-      const musicUrl = cfg.wakeMusicUrl || "";
+      const ttsText = config.wakeTtsText || "ขออนุญาตปลุกนะครับ ตื่นได้แล้วเด้อ";
+      const musicUrl = config.wakeMusicUrl || "";
       // Post embed FIRST (with stop button) so user has UI before audio kicks in
       let firedMsg = null;
       if (channel?.isTextBased?.()) {
@@ -1690,28 +1576,13 @@ async function fireTimer(t) {
       let member = null;
       try { member = await guild.members.fetch(t.userId); } catch {}
       let outcome = "ℹ️ ผู้ใช้ไม่อยู่แล้ว";
-      const expectedLeaseId = t.payload?.leaseId || null;
-      if (t.restored === true) {
-        if (expectedLeaseId) {
-          releaseMuteLease(guild.id, t.userId, expectedLeaseId);
-        }
-        outcome = "🛡️ ไม่เปิดไมค์อัตโนมัติหลัง Guard รีสตาร์ต — ให้ผู้ใช้หรือแอดมินเปิดเอง";
-      } else if (member && expectedLeaseId) {
+      if (member?.voice?.channel) {
         try {
-          const released = await unmuteOwnedLease(
-            guild,
-            member,
-            expectedLeaseId,
-            "auto_unmute timer",
-          );
-          outcome = released.ok
-            ? `🔊 เปิดไมค์ ${member.displayName} แล้ว`
-            : `ℹ️ ไม่เปิดไมค์ เพราะ mute นี้ถูกแทนที่หรือไม่ได้เป็นของ Guard`;
+          await member.voice.setMute(false, "auto_unmute timer");
+          outcome = `🔊 เปิดไมค์ ${member.displayName} แล้ว`;
         } catch (err) {
           outcome = `❌ เปิดไมค์ไม่สำเร็จ: ${err?.message?.slice(0, 100)}`;
         }
-      } else if (member?.voice?.channel) {
-        outcome = "ℹ️ ข้ามการเปิดไมค์: timer เก่าไม่มี mute lease";
       } else if (member) {
         outcome = `ℹ️ ${member.displayName} ไม่ได้อยู่ในห้องเสียงแล้ว`;
       }
@@ -1796,72 +1667,61 @@ async function announceNewTimers() {
 }
 
 async function attachReceiver(connection, channel) {
-  const rt = runtimeFor(channel.guild.id);
-  if (
-    getVoiceConnection(channel.guild.id) !== connection ||
-    connection.state?.status !== VoiceConnectionStatus.Ready ||
-    connection.joinConfig?.channelId !== channel.id
-  ) {
-    return false;
-  }
   const receiver = connection.receiver;
-  resetGuildReceiver(rt);
-  rt.activeReceiver = receiver;
-  const generation = rt.connectionGeneration;
+  activeReceiver = receiver;
+  subscribed.clear();
+  audioBuffers.clear();
+  receiverProven = false;
 
   // Reset silence timers so users aren't unfairly muted after a reconnect
   const _attachNow = Date.now();
-  for (const _s of rt.userState.values()) {
+  for (const _s of userState.values()) {
     _s.lastSpoke = _attachNow;
-    _s.lastPacketAt = 0;
-    _s.heardOnce = false;
     _s.warned = false;
     _s.silentTicks = 0;
     _s.speaking = false; // reset stale speaking flag on receiver re-attach
   }
 
   receiver.speaking.on("start", (userId) => {
-    if (rt.connectionGeneration !== generation || rt.activeReceiver !== receiver) return;
-    rt.lastSpeakingFlag = Date.now();
-    const s = rt.userState.get(userId);
+    lastSpeakingFlag = Date.now();
+    const s = userState.get(userId);
     if (s) {
       s.speaking = true;
+      markHeard(userId, "start");
     }
-    subscribeUser(rt, receiver, userId);
+    subscribeUser(receiver, userId);
   });
 
   receiver.speaking.on("end", (userId) => {
-    if (rt.connectionGeneration !== generation || rt.activeReceiver !== receiver) return;
-    rt.lastSpeakingFlag = Date.now();
-    const s = rt.userState.get(userId);
+    lastSpeakingFlag = Date.now();
+    const s = userState.get(userId);
     if (s) {
       s.speaking = false;
+      markHeard(userId, "end");
     }
-    flushUserAudio(rt, userId, "speaking-end");
+    flushUserAudio(userId, "speaking-end");
   });
 
-  for (const userId of rt.userState.keys()) {
-    subscribeUser(rt, receiver, userId);
+  for (const userId of userState.keys()) {
+    subscribeUser(receiver, userId);
   }
 
   console.log(`[voice] receiver attached on #${channel.name}`);
-  return true;
 }
 
-function isReceiverHealthy(connection, rt) {
-  // A quiet room is healthy. Audio recency is not a connection health signal.
-  return (
-    !!connection &&
-    connection.state?.status === VoiceConnectionStatus.Ready &&
-    rt.activeReceiver === connection.receiver
-  );
+function isReceiverHealthy() {
+  // Always require recent audio packets — even after the receiver has been
+  // proven to work once. Previously this returned `true` forever once any
+  // packet arrived, so a silently-dead voice connection would keep
+  // `lastSpoke` stale for everyone and the bot would mass-mute the whole
+  // channel after muteSeconds.
+  const sinceAudio = (Date.now() - lastAnyAudio) / 1000;
+  return sinceAudio < WATCHDOG_SECONDS;
 }
 
 async function checkInactivity(guild) {
-  const rt = runtimeFor(guild.id);
-  const cfg = getConfigForGuild(guild.id);
-  if (!rt.currentChannelId) return;
-  const channel = guild.channels.cache.get(rt.currentChannelId);
+  if (!currentChannelId) return;
+  const channel = guild.channels.cache.get(currentChannelId);
   if (!channel) return;
 
   const now = Date.now();
@@ -1869,16 +1729,17 @@ async function checkInactivity(guild) {
   const _selfId = channel.client?.user?.id;
   for (const [, member] of channel.members) {
     if (_selfId && member.id === _selfId) continue; // Always exclude bot itself
-    if (cfg.ignoreBots && member.user.bot) continue;
-    if (!rt.userState.has(member.id)) {
-      rt.userState.set(member.id, newUserState(now));
+    if (config.ignoreBots && member.user.bot) continue;
+    if (!userState.has(member.id)) {
+      userState.set(member.id, newUserState(now));
       console.log(`[track] added ${member.user.tag}`);
     }
   }
-  for (const userId of [...rt.userState.keys()]) {
+  for (const userId of [...userState.keys()]) {
     if (!channel.members.has(userId)) {
-      rt.userState.delete(userId);
-      disposeUserSubscription(rt, userId);
+      userState.delete(userId);
+      subscribed.delete(userId);
+      audioBuffers.delete(userId);
       console.log(`[track] removed ${userId}`);
     }
   }
@@ -1886,35 +1747,51 @@ async function checkInactivity(guild) {
   const conn = getVoiceConnection(guild.id);
   const connStatus = conn?.state?.status ?? "none";
 
-  if (conn?.joinConfig?.channelId !== rt.currentChannelId) return;
-
   if (conn && connStatus !== VoiceConnectionStatus.Destroyed) {
-    if (rt.activeReceiver !== conn.receiver) {
+    if (activeReceiver !== conn.receiver) {
       console.log(`[voice] receiver changed — re-attaching`);
       await attachReceiver(conn, channel);
     }
   }
 
-  if (!isReceiverHealthy(conn, rt)) {
-    if (!rt.receiverHealthLogged) {
+  const humansInChannel = [...channel.members.values()].filter(
+    (m) => !(config.ignoreBots && m.user.bot),
+  );
+
+  if (humansInChannel.length > 0 && !isReceiverHealthy()) {
+    if (!receiverHealthLogged) {
       console.warn(
-        `[health] voice connection is not Ready (state=${connStatus}) — pausing inactivity decisions`,
+        `[health] receiver has no audio for ${WATCHDOG_SECONDS}s+ — pausing mute decisions until packets flow`,
       );
-      rt.receiverHealthLogged = true;
+      receiverHealthLogged = true;
+    }
+    notReadyTicks++;
+    if (
+      notReadyTicks >= 12 &&
+      Date.now() - lastWatchdogRejoin > WATCHDOG_COOLDOWN_MS
+    ) {
+      console.warn(
+        `[health] receiver dead 1m+ (state=${connStatus}) — background rejoin`,
+      );
+      lastWatchdogRejoin = Date.now();
+      notReadyTicks = 0;
+      if (conn) safeDestroy(conn);
+      currentChannelId = null;
+      activeReceiver = null;
+      subscribed.clear();
+      reevaluateAndJoin(guild).catch((err) =>
+        console.error("[health] background rejoin error", err?.message),
+      );
     }
     return;
   }
-  rt.receiverHealthLogged = false;
+  notReadyTicks = 0;
 
-  // Automatic inactivity muting is intentionally opt-in. New/unknown guilds
-  // monitor and accept explicit admin commands without changing voice state.
-  if (cfg.inactivityMuteEnabled !== true) return;
-
-  for (const [userId, s] of rt.userState) {
+  for (const [userId, s] of userState) {
     const member = channel.members.get(userId);
     if (!member) continue;
 
-    if (wordBanTimers.has(wordBanKey(guild.id, userId))) {
+    if (wordBanTimers.has(userId)) {
       s.muted = true;
       continue;
     }
@@ -1946,20 +1823,17 @@ async function checkInactivity(guild) {
       continue;
     }
 
-    // Never infer silence for a user whose decoder has not produced a packet.
-    if (!s.heardOnce || !s.lastPacketAt) continue;
+    const silentFor = (now - s.lastSpoke) / 1000;
+    s.silentTicks = silentFor >= config.warningSeconds ? s.silentTicks + 1 : 0;
 
-    const silentFor = (now - s.lastPacketAt) / 1000;
-    s.silentTicks = silentFor >= cfg.warningSeconds ? s.silentTicks + 1 : 0;
-
-    if (!s.warned && silentFor >= cfg.warningSeconds) {
+    if (!s.warned && silentFor >= config.warningSeconds) {
       s.warned = true;
       console.log(
         `[warn] ${member.user.tag} silent for ${silentFor.toFixed(0)}s`,
       );
       const remaining = Math.max(
         0,
-        Math.round(cfg.muteSeconds - silentFor),
+        Math.round(config.muteSeconds - silentFor),
       );
       const embed = new EmbedBuilder()
         .setColor(0xfacc15)
@@ -1975,20 +1849,12 @@ async function checkInactivity(guild) {
       } catch {}
     }
 
-    if (shouldMuteForInactivity({
-      enabled: cfg.inactivityMuteEnabled,
-      state: s,
-      voice: member.voice,
-      now,
-      muteSeconds: cfg.muteSeconds,
-    })) {
+    if (
+      !s.muted &&
+      silentFor >= config.muteSeconds
+    ) {
       try {
         await member.voice.setMute(true, "Alxcer Guard: inactive in voice");
-        const lease = createMuteLease({
-          guildId: guild.id,
-          userId,
-          source: "inactivity",
-        });
         s.muted = true;
         console.log(
           `[mute] ${member.user.tag} (silent ${silentFor.toFixed(0)}s)`,
@@ -1996,7 +1862,7 @@ async function checkInactivity(guild) {
 
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setCustomId(`alxcer-unmute:${userId}:${lease.id}`)
+            .setCustomId(`alxcer-unmute:${userId}`)
             .setLabel("🎙️ Unmute ตัวเอง")
             .setStyle(ButtonStyle.Success),
         );
@@ -2004,8 +1870,8 @@ async function checkInactivity(guild) {
           .setColor(0xef4444)
           .setTitle("🔇 ขออนุญาตปิดเสียงนะครับ")
           .setDescription(
-            `<@${userId}> คุณถูกปิดไมค์อัตโนมัติเนื่องจากเงียบนานเกิน ${cfg.muteSeconds} วินาที\n\n` +
-              `ปุ่มปลดไมค์จะทำงานเฉพาะคำสั่งล่าสุดของ Guard เท่านั้น`,
+            `<@${userId}> คุณถูกปิดไมค์อัตโนมัติเนื่องจากเงียบนานเกิน ${config.muteSeconds} วินาที\n\n` +
+              `กดปุ่มด้านล่างเพื่อ unmute ตัวเอง`,
           );
         await announce(guild, {
           content: `<@${userId}>`,
@@ -2032,67 +1898,48 @@ function safeDestroy(conn) {
 }
 
 async function reevaluateAndJoin(guild) {
-  const rt = runtimeFor(guild.id);
-  if (rt.auxiliaryVoiceDepth > 0) {
-    rt.reevalQueued = true;
+  if (joining) {
+    reevalQueued = true;
     return;
   }
-  if (rt.joining) {
-    rt.reevalQueued = true;
-    return;
-  }
-  rt.joining = true;
+  joining = true;
   try {
-    const cfg = getConfigForGuild(guild.id);
-    let target = pickBestVoiceChannel(guild);
-    // In automatic mode stay with the current populated room. Constantly
-    // chasing the largest room caused reconnect churn and repeated join beeps.
-    if (!cfg.voiceChannelId && rt.currentChannelId) {
-      const current = guild.channels.cache.get(rt.currentChannelId);
-      const humans = current?.members?.filter(
-        (member) => !(cfg.ignoreBots && member.user.bot),
-      ).size ?? 0;
-      if (humans > 0) target = current;
-    }
+    const target = pickBestVoiceChannel(guild);
 
     if (!target) {
       const existing = getVoiceConnection(guild.id);
       if (existing) {
         console.log("[voice] no humans in any channel, leaving");
         safeDestroy(existing);
+        currentChannelId = null;
+        userState.clear();
+        subscribed.clear();
+        audioBuffers.clear();
+        activeReceiver = null;
       }
-      disposeGuildRuntime(rt);
       return;
     }
 
-    if (rt.currentChannelId === target.id) {
+    if (currentChannelId === target.id) {
       const existing = getVoiceConnection(guild.id);
       if (
         existing &&
-        existing.joinConfig?.channelId === target.id &&
         existing.state.status !== VoiceConnectionStatus.Destroyed
       ) {
-        if (existing.state.status === VoiceConnectionStatus.Ready) {
-          rt.notReadySince = 0;
-          syncUserState(target, rt);
-          if (rt.activeReceiver !== existing.receiver) {
-            await attachReceiver(existing, target);
-          }
-          return;
+        syncUserState(target);
+        if (activeReceiver !== existing.receiver) {
+          await attachReceiver(existing, target);
+          playJoinSignal(existing).catch((err) =>
+            console.error("[greet] reattach greeting failed:", err?.message),
+          );
         }
-        if (!rt.notReadySince) rt.notReadySince = Date.now();
-        if (Date.now() - rt.notReadySince < 90_000) return;
-        console.warn(
-          `[voice:${guild.id}] connection stayed ${existing.state.status} for 90s — replacing`,
-        );
+        return;
       }
     }
 
+    currentChannelId = target.id;
+
     const existing = getVoiceConnection(guild.id);
-    resetGuildReceiver(rt);
-    rt.connectionEpoch += 1;
-    const connectionEpoch = rt.connectionEpoch;
-    rt.currentChannelId = target.id;
     if (existing) safeDestroy(existing);
 
     console.log(
@@ -2113,10 +1960,6 @@ async function reevaluateAndJoin(guild) {
       console.error("[voice] connection error:", err?.message);
     });
     connection.on(VoiceConnectionStatus.Disconnected, async () => {
-      if (
-        getVoiceConnection(guild.id) !== connection ||
-        rt.connectionEpoch !== connectionEpoch
-      ) return;
       console.log("[voice] disconnected — attempting reconnect");
       try {
         await Promise.race([
@@ -2124,16 +1967,12 @@ async function reevaluateAndJoin(guild) {
           entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
         ]);
       } catch {
-        if (
-          getVoiceConnection(guild.id) !== connection ||
-          rt.connectionEpoch !== connectionEpoch
-        ) return;
         console.log("[voice] real disconnect — destroying & will rejoin next tick");
-        rt.connectionEpoch += 1;
         safeDestroy(connection);
-        rt.currentChannelId = null;
-        rt.notReadySince = 0;
-        resetGuildReceiver(rt);
+        currentChannelId = null;
+        activeReceiver = null;
+        subscribed.clear();
+        audioBuffers.clear();
       }
     });
 
@@ -2152,20 +1991,24 @@ async function reevaluateAndJoin(guild) {
       console.warn(
         `[voice] not Ready after 60s (state=${connection.state.status}) — keeping connection alive, will retry mute decisions when Ready`,
       );
-      rt.notReadySince ||= Date.now();
-      return;
     }
 
-    if (
-      getVoiceConnection(guild.id) !== connection ||
-      connection.joinConfig?.channelId !== target.id ||
-      rt.currentChannelId !== target.id ||
-      rt.connectionEpoch !== connectionEpoch
-    ) return;
+    syncUserState(target);
+    receiverHealthLogged = false;
 
-    syncUserState(target, rt);
-    rt.notReadySince = 0;
-    rt.receiverHealthLogged = false;
+    // On fresh join: release server-mutes left over from a previous bot session.
+    // After a repush/restart the bot loses in-memory state but Discord keeps mutes.
+    // We clear them so users aren't permanently stuck muted across restarts.
+    for (const [, member] of target.members) {
+      if (member.user.bot) continue;
+      if (member.voice?.serverMute) {
+        member.voice.setMute(false, "Alxcer Guard: clearing stale mutes from previous session")
+          .catch(() => {});
+        const _s = userState.get(member.id);
+        if (_s) { _s.muted = false; _s.lastSpoke = Date.now(); _s.warned = false; _s.silentTicks = 0; }
+        console.log(`[restart-unmute] cleared stale mute for ${member.user.tag}`);
+      }
+    }
 
     await attachReceiver(connection, target);
     console.log(`[voice] monitoring #${target.name}`);
@@ -2174,9 +2017,9 @@ async function reevaluateAndJoin(guild) {
       console.error("[greet] join greeting failed:", err?.message),
     );
   } finally {
-    rt.joining = false;
-    if (rt.reevalQueued) {
-      rt.reevalQueued = false;
+    joining = false;
+    if (reevalQueued) {
+      reevalQueued = false;
       setImmediate(() => {
         reevaluateAndJoin(guild).catch((err) =>
           console.error("[voice] queued reeval error", err?.message),
@@ -2205,10 +2048,10 @@ function persistOffenses() {
   }, 5_000);
 }
 
-function findBannedWord(text, cfg = config) {
-  if (!text || !Array.isArray(cfg.bannedWords)) return null;
+function findBannedWord(text) {
+  if (!text || !Array.isArray(config.bannedWords)) return null;
   const lower = text.toLowerCase();
-  for (const word of cfg.bannedWords) {
+  for (const word of config.bannedWords) {
     if (!word) continue;
     const wl = word.toLowerCase();
     // Very short words (<=3 chars, e.g. "หี"): require word-boundary so ASR
@@ -2228,45 +2071,26 @@ function findBannedWord(text, cfg = config) {
   return null;
 }
 
-function scheduleWordBanUnmute(guild, userId, durationMs, leaseId = null) {
-  const key = wordBanKey(guild.id, userId);
-  const existing = wordBanTimers.get(key);
-  if (existing) clearTimeout(existing.handle || existing);
+function scheduleWordBanUnmute(guild, userId, durationMs) {
+  const existing = wordBanTimers.get(userId);
+  if (existing) clearTimeout(existing);
   const handle = setTimeout(async () => {
-    const current = wordBanTimers.get(key);
-    if (!current || (current.handle || current) !== handle) return;
-    wordBanTimers.delete(key);
-    let released = false;
+    wordBanTimers.delete(userId);
     try {
       const member = await guild.members.fetch(userId).catch(() => null);
-      const cfg = getConfigForGuild(guild.id);
-      const policyEnabled =
-        cfg.voiceWordBanEnabled === true || cfg.chatVoiceMuteEnabled === true;
-      if (!policyEnabled && current.leaseId) {
-        releaseMuteLease(guild.id, userId, current.leaseId);
-        console.log(`[wordban] policy disabled — expired lease cleared without opening ${userId}`);
-      } else if (member && current.leaseId) {
-        const result = await unmuteOwnedLease(
-          guild,
-          member,
-          current.leaseId,
-          "Alxcer Guard: word-ban expired",
-        );
-        released = result.ok;
-      }
-      if (released) {
+      if (member && member.voice.channel && member.voice.serverMute) {
+        await member.voice.setMute(false, "Alxcer Guard: word-ban expired");
         console.log(`[wordban] unmuted ${member.user.tag} after timer`);
       }
     } catch (err) {
       console.error("[wordban] auto-unmute failed", err?.message);
     }
-    const rec = getOffense(guild.id, userId);
+    const rec = offenses.users[userId];
     if (rec) {
       rec.muteUntil = 0;
-      rec.muteLeaseId = null;
       persistOffenses();
     }
-    const s = runtimeFor(guild.id).userState.get(userId);
+    const s = userState.get(userId);
     if (s) {
       s.muted = false;
       s.warned = false;
@@ -2274,49 +2098,23 @@ function scheduleWordBanUnmute(guild, userId, durationMs, leaseId = null) {
       s.silentTicks = 0;
     }
   }, Math.max(1_000, durationMs));
-  wordBanTimers.set(key, { handle, leaseId });
+  wordBanTimers.set(userId, handle);
 }
 
 async function restorePendingWordBans(guild) {
-  const cfg = getConfigForGuild(guild.id);
-  if (cfg.voiceWordBanEnabled !== true && cfg.chatVoiceMuteEnabled !== true) {
-    // Easy/quiet mode: old punishment records must not re-arm a mute or an
-    // auto-unmute after a workflow restart.
-    return;
-  }
   const now = Date.now();
-  const prefix = `${guild.id}:`;
-  let changed = false;
-  for (const [storedKey, rec] of Object.entries(offenses.users)) {
-    const isScoped = storedKey.startsWith(prefix);
-    const isLegacyPrimary = !storedKey.includes(":") &&
-      configStore.primaryGuildId === guild.id;
-    if (!isScoped && !isLegacyPrimary) continue;
-    const userId = isScoped ? storedKey.slice(prefix.length) : storedKey;
+  for (const [userId, rec] of Object.entries(offenses.users)) {
     if (!rec || !rec.muteUntil || rec.muteUntil <= now) continue;
     const remaining = rec.muteUntil - now;
     try {
       const member = await guild.members.fetch(userId).catch(() => null);
       if (!member) continue;
-      let leaseId = null;
-      if (member.voice.channel && !member.voice.serverMute) {
+      if (member.voice.channel) {
         try {
           await member.voice.setMute(true, "Alxcer Guard: pending word-ban");
-          const lease = createMuteLease({
-            guildId: guild.id,
-            userId,
-            source: "word-ban:restore",
-            expiresAt: rec.muteUntil,
-          });
-          leaseId = lease.id;
-          rec.muteLeaseId = lease.id;
-          changed = true;
         } catch {}
-      } else if (member.voice.channel && member.voice.serverMute) {
-        const current = getMuteLease(guild.id, userId);
-        if (current?.source?.startsWith("word-ban:")) leaseId = current.id;
       }
-      scheduleWordBanUnmute(guild, userId, remaining, leaseId);
+      scheduleWordBanUnmute(guild, userId, remaining);
       console.log(
         `[wordban] restored mute for ${member.user.tag}, ~${Math.round(remaining / 1000)}s left`,
       );
@@ -2324,9 +2122,25 @@ async function restorePendingWordBans(guild) {
       console.error("[wordban] restore failed", err?.message);
     }
   }
-  if (changed) persistOffenses();
 }
 
+
+async function clearStaleInactivityMutes(guild, channel) {
+  if (!channel) return;
+  for (const [, member] of channel.members) {
+    if (config.ignoreBots && member.user.bot) continue;
+    if (!member.voice.serverMute) continue;
+    if (wordBanTimers.has(member.id)) continue; // wordban mutes are intentional
+    try {
+      await member.voice.setMute(false, "Alxcer Guard: stale inactivity mute from previous run");
+      console.log(`[startup] cleared stale mute for ${member.user.tag}`);
+      const s = userState.get(member.id);
+      if (s) { s.muted = false; s.warned = false; s.lastSpoke = Date.now(); s.silentTicks = 0; }
+    } catch (err) {
+      console.warn(`[startup] unmute failed for ${member.user.tag}: ${err?.message}`);
+    }
+  }
+}
 
 function formatDuration(seconds) {
   if (seconds >= 3600) {
@@ -2342,9 +2156,7 @@ function formatDuration(seconds) {
 
 async function applyWordBan(guild, userId, word, source, transcript) {
   if (!userId) { console.warn("[wordban] userId undefined, skipping"); return; }
-  const cfg = getConfigForGuild(guild.id);
-  const storedKey = offenseKey(guild.id, userId);
-  const prev = getOffense(guild.id, userId) ?? {
+  const prev = offenses.users[userId] ?? {
     count: 0,
     lastOffenseAt: 0,
     muteUntil: 0,
@@ -2354,16 +2166,15 @@ async function applyWordBan(guild, userId, word, source, transcript) {
   const newCount = (prev.count || 0) + 1;
   const isFirst = newCount <= 1;
   const muteSec = isFirst
-    ? cfg.firstOffenseMuteSeconds
-    : cfg.repeatOffenseMuteSeconds;
+    ? config.firstOffenseMuteSeconds
+    : config.repeatOffenseMuteSeconds;
 
-  offenses.users[storedKey] = {
+  offenses.users[userId] = {
     count: newCount,
     lastOffenseAt: Date.now(),
     muteUntil: Date.now() + muteSec * 1000,
     lastWord: word,
     lastSource: source,
-    muteLeaseId: null,
   };
   persistOffenses();
 
@@ -2377,28 +2188,13 @@ async function applyWordBan(guild, userId, word, source, transcript) {
 
   if (member && member.voice.channel) {
     try {
-      const existingLease = getMuteLease(guild.id, userId);
-      if (member.voice.serverMute && !existingLease) {
-        muteError = "ผู้ใช้อยู่ใต้ server-mute ของแอดมินอื่น — Guard จะไม่ยึดสิทธิ์ mute นี้";
-      } else {
-        if (!member.voice.serverMute) {
-          await member.voice.setMute(
-            true,
-            `Alxcer Guard: banned word "${word}" via ${source} (#${newCount})`,
-          );
-        }
-        const lease = createMuteLease({
-          guildId: guild.id,
-          userId,
-          source: `word-ban:${source}`,
-          expiresAt: Date.now() + muteSec * 1000,
-        });
-        offenses.users[storedKey].muteLeaseId = lease.id;
-        persistOffenses();
-        muteApplied = true;
-        scheduleWordBanUnmute(guild, userId, muteSec * 1000, lease.id);
-      }
-      const s = runtimeFor(guild.id).userState.get(userId);
+      await member.voice.setMute(
+        true,
+        `Alxcer Guard: banned word "${word}" via ${source} (#${newCount})`,
+      );
+      muteApplied = true;
+      scheduleWordBanUnmute(guild, userId, muteSec * 1000);
+      const s = userState.get(userId);
       if (s) {
         s.muted = true;
         s.warned = true;
@@ -2409,10 +2205,7 @@ async function applyWordBan(guild, userId, word, source, transcript) {
       console.error("[wordban] setMute failed", err?.message);
     }
   } else {
-    scheduleWordBanUnmute(guild, userId, muteSec * 1000, null);
-  }
-  if (!wordBanTimers.has(wordBanKey(guild.id, userId))) {
-    scheduleWordBanUnmute(guild, userId, muteSec * 1000, null);
+    scheduleWordBanUnmute(guild, userId, muteSec * 1000);
   }
 
   const sourceLabel = source === "voice" ? "พูดในห้องเสียง" : "พิมพ์ในแชท";
@@ -2441,8 +2234,8 @@ async function applyWordBan(guild, userId, word, source, transcript) {
   lines.push("");
   lines.push(
     isFirst
-      ? `*ครั้งแรก: ปิดไมค์ ${formatDuration(cfg.firstOffenseMuteSeconds)} — ครั้งต่อไป: ${formatDuration(cfg.repeatOffenseMuteSeconds)}*`
-      : `*ทำผิดครั้งที่ ${newCount} — โดนเต็มอัตราโทษ ${formatDuration(cfg.repeatOffenseMuteSeconds)}*`,
+      ? `*ครั้งแรก: ปิดไมค์ ${formatDuration(config.firstOffenseMuteSeconds)} — ครั้งต่อไป: ${formatDuration(config.repeatOffenseMuteSeconds)}*`
+      : `*ทำผิดครั้งที่ ${newCount} — โดนเต็มอัตราโทษ ${formatDuration(config.repeatOffenseMuteSeconds)}*`,
   );
 
   const embed = new EmbedBuilder()
@@ -2492,13 +2285,13 @@ client.once(Events.ClientReady, async (c) => {
     }
 
     if (detectedOwnerId) {
-      const changed = configStore.ownerId !== detectedOwnerId;
-      configStore = updateOwnerId(configStore, detectedOwnerId);
-      config = toLegacyConfig(configStore);
+      const changed = config.ownerId !== detectedOwnerId;
+      config.ownerId = detectedOwnerId;
       client.config = config;
       setOwnerId(detectedOwnerId);
       if (changed) {
-        writeConfigStore(configStore);
+        const { writeLocal } = await import("./config.js");
+        writeLocal(config);
       }
       console.log(`[boot] owner: ${detectedName} (id=${detectedOwnerId}) — full admin trust granted`);
     } else {
@@ -2544,38 +2337,69 @@ client.once(Events.ClientReady, async (c) => {
   }
 
   try {
-    const guilds = [...client.guilds.cache.values()];
-    await Promise.allSettled(
-      guilds.map(async (guild) => {
-        runtimeFor(guild.id);
-        await reevaluateAndJoin(guild);
-        await reconcilePersistedMuteLeases(guild);
-        await restorePendingWordBans(guild);
-      }),
+    const guild = config.guildId ? await client.guilds.fetch(config.guildId).catch(() => null) : null;
+    const bootChannel = guild ? await findAnnouncementChannel(guild) : null;
+    if (bootChannel?.isTextBased?.()) {
+      const sha = (process.env.GITHUB_SHA || "").slice(0, 7) || "local";
+      const runId = process.env.GITHUB_RUN_ID || "";
+      const footer = [`commit ${sha}`, runId ? `run ${runId}` : null]
+        .filter(Boolean)
+        .join(" | ");
+      const embed = new EmbedBuilder()
+        .setColor(0x22c55e)
+        .setTitle("Alxcer Guard restarted")
+        .setDescription("รีแล้วครับ - บอทพร้อมรับคำสั่งแล้ว")
+        .setFooter({ text: footer || "ready" })
+        .setTimestamp();
+      await bootChannel.send({
+        content: "✅ รีแล้วครับ - Alxcer Guard พร้อมใช้งาน",
+        embeds: [embed],
+      });
+      console.log("[boot] posted restart announcement to", bootChannel.id);
+    } else {
+      console.warn("[boot] restart announcement skipped: no sendable text channel found");
+    }
+  } catch (err) {
+    console.warn("[boot] restart announcement failed:", err?.message);
+  }
+
+
+  if (!config.guildId) return;
+
+  try {
+    const guild = await client.guilds.fetch(config.guildId);
+    await guild.members.fetch().catch(() => {});
+    await reevaluateAndJoin(guild);
+    await restorePendingWordBans(guild);
+    // Clear any stale server-mutes left over from a previous bot run
+    try {
+      const _ch = currentChannelId ? guild.channels.cache.get(currentChannelId) : null;
+      if (_ch) await clearStaleInactivityMutes(guild, _ch);
+    } catch (err) {
+      console.warn("[startup] clearStaleInactivityMutes failed:", err?.message);
+    }
+    // Pre-load recent chat into the in-memory buffer so the agent has real
+    // context on its very first interaction after a 6h restart.
+    seedRecentFromGuild(guild).catch((err) =>
+      console.warn("[ready] seed failed:", err?.message)
     );
-    console.log(`[ready] initialized ${guilds.length} guild runtime(s)`);
 
     pollHandle = setInterval(async () => {
-      const work = [...client.guilds.cache.values()].map(async (guild) => {
-        await reevaluateAndJoin(guild);
-        await checkInactivity(guild);
-      });
-      const results = await Promise.allSettled(work);
-      for (const result of results) {
-        if (result.status === "rejected") {
-          console.error("[loop] guild error", result.reason?.message);
-        }
+      try {
+        const g = await client.guilds.fetch(config.guildId);
+        await reevaluateAndJoin(g);
+        await checkInactivity(g);
+      } catch (err) {
+        console.error("[loop] error", err?.message);
       }
-    }, 30_000);
+    }, 5_000);
 
     audioFlushHandle = setInterval(() => {
       if (!transcriptionAvailable) return;
       const now = Date.now();
-      for (const rt of guildRuntimes.values()) {
-        for (const [uid, buf] of rt.audioBuffers) {
-          if (buf.totalBytes > 0 && now - buf.lastAppendAt > IDLE_FLUSH_MS) {
-            flushUserAudio(rt, uid, "idle");
-          }
+      for (const [uid, buf] of audioBuffers) {
+        if (buf.totalBytes > 0 && now - buf.lastAppendAt > IDLE_FLUSH_MS) {
+          flushUserAudio(uid, "idle");
         }
       }
     }, 1_000);
@@ -2602,14 +2426,11 @@ client.once(Events.ClientReady, async (c) => {
     // Scheduled notifications tick — every 30s. Items fire once per day at
     // their configured Asia/Bangkok time.
     setInterval(() => {
-      for (const guild of client.guilds.cache.values()) {
-        const cfg = getConfigForGuild(guild.id);
-        tickNotifyScheduler({
-          client,
-          guildId: guild.id,
-          defaultChannelId: cfg.notifyChannelId,
-        }).catch((err) => console.error(`[notify:${guild.id}] tick error`, err?.message));
-      }
+      tickNotifyScheduler({
+        client,
+        guildId: config.guildId,
+        defaultChannelId: config.notifyChannelId,
+      }).catch((err) => console.error("[notify] tick error", err?.message));
     }, 30_000);
 
     // Classroom end-of-class tick — every 15s. When a class timer expires,
@@ -2618,82 +2439,40 @@ client.once(Events.ClientReady, async (c) => {
     setInterval(() => {
       const expired = takeExpiredClasses();
       for (const cls of expired) {
-        const cfg = getConfigForGuild(cls.guildId);
-        if (cfg.classroomAutomationEnabled !== true) {
-          removeClass(cls.channelId);
-          continue;
-        }
         endOfClassPlayback(cls).catch((err) =>
           console.error("[classroom] end playback error", err?.message),
-        ).finally(() => removeClass(cls.channelId));
+        );
       }
     }, 15_000);
 
     setInterval(() => {
-      for (const rt of guildRuntimes.values()) {
-        if (!rt.currentChannelId) continue;
-        const lines = [];
-        for (const [uid, s] of rt.userState) {
-          const age = Math.round((Date.now() - s.lastSpoke) / 1000);
-          lines.push(
-            `${uid} heard=${s.heardOnce} speak=${s.speaking} silent=${age}s warn=${s.warned} mute=${s.muted}`,
-          );
-        }
-        console.log(`[stats:${rt.guildId}] ${lines.length} tracked\n  ` + lines.join("\n  "));
+      if (!currentChannelId) return;
+      const lines = [];
+      for (const [uid, s] of userState) {
+        const age = Math.round((Date.now() - s.lastSpoke) / 1000);
+        lines.push(
+          `${uid} heard=${s.heardOnce} speak=${s.speaking} silent=${age}s warn=${s.warned} mute=${s.muted}`,
+        );
       }
+      console.log(`[stats] ${lines.length} tracked\n  ` + lines.join("\n  "));
     }, 30_000);
   } catch (err) {
     console.error("[ready] guild init failed", err?.message);
   }
 });
 
-client.on(Events.GuildCreate, async (guild) => {
-  runtimeFor(guild.id);
-  try {
-    await reevaluateAndJoin(guild);
-    await reconcilePersistedMuteLeases(guild);
-    await restorePendingWordBans(guild);
-    console.log(`[guild] initialized ${guild.id}`);
-  } catch (err) {
-    console.error(`[guild:${guild.id}] initialize failed`, err?.message);
-  }
-});
-
-client.on(Events.GuildDelete, (guild) => {
-  safeDestroy(getVoiceConnection(guild.id));
-  guildRuntimes.delete(guild.id);
-  for (const lease of listMuteLeases({ guildId: guild.id })) {
-    clearMuteLease(guild.id, lease.userId);
-  }
-  console.log(`[guild] removed runtime ${guild.id}`);
-});
-
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
-  const guild = newState.guild || oldState.guild;
-  if (!guild) return;
-  const rt = runtimeFor(guild.id);
-  const cfg = getConfigForGuild(guild.id);
+  if (!config.guildId) return;
+  if (newState.guild.id !== config.guildId) return;
   if (newState.member?.id === client.user?.id) return;
   if (oldState.member?.id === client.user?.id) return;
 
   const userId = newState.member?.id ?? oldState.member?.id;
-  const banKey = userId ? wordBanKey(guild.id, userId) : null;
-  if (userId && oldState.serverMute && !newState.serverMute) {
-    const expected = consumeExpectedUnmute(guild.id, userId);
-    if (!expected) {
-      clearMuteLease(guild.id, userId);
-      const rec = getOffense(guild.id, userId);
-      if (rec?.muteLeaseId) {
-        rec.muteLeaseId = null;
-        persistOffenses();
-      }
-    }
-  }
-  if (userId && rt.userState.has(userId)) {
-    const wasMuted = oldState.selfMute || oldState.serverMute;
-    const isMuted = newState.selfMute || newState.serverMute;
-    if (wasMuted && !isMuted) {
-      const s = rt.userState.get(userId);
+  if (userId && userState.has(userId)) {
+    const wasSelfMuted = oldState.selfMute || oldState.serverMute;
+    const isSelfMuted = newState.selfMute || newState.serverMute;
+    if (wasSelfMuted && !isSelfMuted && !wordBanTimers.has(userId)) {
+      const s = userState.get(userId);
       s.lastSpoke = Date.now();
       s.warned = false;
       s.muted = false;
@@ -2702,11 +2481,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
   }
 
-  if (
-    userId &&
-    (cfg.voiceWordBanEnabled === true || cfg.chatVoiceMuteEnabled === true) &&
-    wordBanTimers.has(banKey)
-  ) {
+  if (userId && wordBanTimers.has(userId)) {
     const wasInVoice = !!oldState.channelId;
     const nowInVoice = !!newState.channelId;
     if (!wasInVoice && nowInVoice) {
@@ -2714,19 +2489,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         const member = newState.member;
         if (member && !member.voice.serverMute) {
           await member.voice.setMute(true, "Alxcer Guard: word-ban active");
-          const rec = getOffense(guild.id, userId);
-          const lease = createMuteLease({
-            guildId: guild.id,
-            userId,
-            source: "word-ban:join",
-            expiresAt: rec?.muteUntil || null,
-          });
-          const timer = wordBanTimers.get(banKey);
-          if (timer) timer.leaseId = lease.id;
-          if (rec) {
-            rec.muteLeaseId = lease.id;
-            persistOffenses();
-          }
           console.log(`[wordban] applied mute on join for ${member.user.tag}`);
         }
       } catch (err) {
@@ -2755,9 +2517,8 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           .setTimestamp(new Date());
         console.log(`[voice-track] JOIN: ${_name} → ${newState.channel?.name}`);
       } else if (_wasIn && !_nowIn) {
-        const _kickKey = guildUserKey(guild.id, userId);
-        const _wasKicked = botKickedUsers.has(_kickKey);
-        if (_wasKicked) botKickedUsers.delete(_kickKey);
+        const _wasKicked = botKickedUsers.has(userId);
+        if (_wasKicked) botKickedUsers.delete(userId);
         _voiceEmbed = new EmbedBuilder()
           .setColor(_wasKicked ? 0xe74c3c : 0x95a5a6)
           .setAuthor({ name: _name, iconURL: _avatar })
@@ -2777,7 +2538,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         console.log(`[voice-track] MOVE: ${_name}: ${oldState.channel?.name} → ${newState.channel?.name}`);
       }
 
-      if (_voiceEmbed && cfg.notifyChannelId) {
+      if (_voiceEmbed && config.notifyChannelId) {
         announce(_guild, { embeds: [_voiceEmbed] }).catch(() => {});
       }
     }
@@ -2785,8 +2546,8 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
   // ===== Classroom: teacher join → start 1h class; teacher leave → cancel =====
   try {
-    if (cfg.classroomAutomationEnabled === true && cfg.teacherRoleId && newState.member) {
-      const isTeacher = newState.member.roles?.cache?.has(cfg.teacherRoleId);
+    if (config.teacherRoleId && newState.member) {
+      const isTeacher = newState.member.roles?.cache?.has(config.teacherRoleId);
       if (isTeacher) {
         const wasIn = !!oldState.channelId;
         const nowIn = !!newState.channelId;
@@ -2797,20 +2558,17 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         if (nowIn && oldState.channelId !== newState.channelId) {
           // If teacher had a class running in old channel, cancel it
           if (wasIn) {
-            pendingClassStart.delete(oldState.channelId);
             const old = getClassByChannel(oldState.channelId);
-            if (old && old.teacherId === teacherId) {
-              stopClass(oldState.channelId);
-            }
+            if (old && old.teacherId === teacherId) stopClass(oldState.channelId);
           }
           const cls = startClass({
             guildId,
             channelId: newState.channelId,
             teacherId,
-            durationMinutes: cfg.classDurationMinutes || 60,
+            durationMinutes: config.classDurationMinutes || 60,
           });
           console.log(
-            `[classroom] start: teacher ${newState.member.user.tag} in ${newState.channel?.name} for ${cfg.classDurationMinutes}m`,
+            `[classroom] start: teacher ${newState.member.user.tag} in ${newState.channel?.name} for ${config.classDurationMinutes}m`,
           );
           announceClassStart(newState.guild, cls, newState.channel, newState.member).catch(() => {});
           // Mark this channel as "pending class start" so the next playJoinSignal
@@ -2820,11 +2578,9 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
         // Left voice entirely → cancel class
         if (wasIn && !nowIn) {
-          pendingClassStart.delete(oldState.channelId);
           const cls = getClassByTeacher(guildId, teacherId);
           if (cls) {
             stopClass(cls.channelId);
-            pendingClassStart.delete(cls.channelId);
             console.log(`[classroom] cancelled — teacher ${newState.member.user.tag} left voice`);
             announceClassCancel(newState.guild, cls, newState.member).catch(() => {});
           }
@@ -2840,11 +2596,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     // Fallback: if the bot was already connected to the same channel,
     // reevaluateAndJoin won't call playJoinSignal — fire the start sequence
     // directly so the bell still plays.
-    if (
-      cfg.classroomAutomationEnabled === true &&
-      newState.channelId &&
-      pendingClassStart.has(newState.channelId)
-    ) {
+    if (newState.channelId && pendingClassStart.has(newState.channelId)) {
       const conn = getVoiceConnection(newState.guild.id);
       if (conn && conn.joinConfig?.channelId === newState.channelId) {
         pendingClassStart.delete(newState.channelId);
@@ -2967,9 +2719,8 @@ async function handleProfanityChat(msg, detection) {
   if (!msg.author?.id) { console.warn("[profanity] msg.author undefined, skipping"); return; }
   const userId = msg.author.id;
   const guild = msg.guild;
-  const storedUserId = offenseKey(guild.id, userId);
   // Existing chat-offense count (with 7-day decay)
-  const prevCount = getOffenseCount(offenses, storedUserId);
+  const prevCount = getOffenseCount(offenses, userId);
   const seconds = nextEscalationSeconds(prevCount);
 
   // Delete the offending message (best-effort)
@@ -2992,7 +2743,7 @@ async function handleProfanityChat(msg, detection) {
   }
 
   // Record + persist
-  const newCount = recordOffense(offenses, storedUserId, {
+  const newCount = recordOffense(offenses, userId, {
     at: Date.now(),
     severity: detection.severity ?? null,
     matched: detection.matched ?? null,
@@ -3386,11 +3137,7 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
   const author = msg.author;
   const channel = msg.channel;
   const guild = msg.guild;
-  const cfg = getConfigForGuild(guild.id);
-  // Message.member can be absent for an uncached/partial message. Fetching it
-  // here keeps the tool authorization decision tied to the real GuildMember.
-  // Guild-owner checks still work from guild.ownerId if this fetch fails.
-  const member = msg.member || await guild.members.fetch(author.id).catch(() => null);
+  const member = msg.member;
 
   // Build conversational context — bigger window so the bot follows the
   // thread instead of replying in a vacuum.
@@ -3424,12 +3171,12 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
 
   await channel.sendTyping().catch(() => {});
 
-  // Every directly-triggered user enters the agent so conversation, web
-  // search, and read-only server tools keep working for everyone. Mutating
-  // tools are authorized again inside execTool: guild owner/Admin/Manage
-  // Server may change this guild; host/repository tools stay bot-owner-only.
-  console.log('[agent] triggered by', author.tag, '| member perms bitfield:', member?.permissions?.bitfield?.toString(16));
-  {
+  // Admin agent path — try first, but if it fails fall through to plain chat
+  let attemptedAgent = false;
+  const canUseAgent = canManageBot(member);
+  console.log('[agent] checking isAdmin for', author.tag, '| allowed:', canUseAgent, '| member perms bitfield:', member?.permissions?.bitfield?.toString(16));
+  if (canUseAgent) {
+    attemptedAgent = true;
     // Real-time thinking display
     let thinkingMsg = null;
     const thinkingSteps = [];
@@ -3454,8 +3201,7 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
         authorMember: member,
         offenses,
         persistOffenses: async () => persistOffenses(),
-        ownerId: cfg.ownerId || config.ownerId || null,
-        markBotKick: (targetId) => runtime.markBotKick(guild.id, targetId),
+        ownerId: config.ownerId || null,
         chatHistory: recent.slice(-50).map((m) => ({
           author: m.author,
           authorId: m.authorId,
@@ -3490,14 +3236,16 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
     }
   }
 
-  // Plain chat reply used only as a fallback when the agent throws.
+  // Plain chat reply (also used as fallback for failed admin agent)
   try {
     const reply = await generateReply({
       history: [
         ...ctxLines,
         { role: "user", content: `${author.username}: ${cleanText}` },
       ],
-      systemExtra: `Trigger: ${triggerReason}. (Agent path failed — just chat normally and tell them tools are temporarily unavailable if they were asking for an action.)`,
+      systemExtra: attemptedAgent
+        ? `Trigger: ${triggerReason}. (Admin agent path failed — just chat normally and tell them tools are temporarily unavailable if they were asking for an action.)`
+        : `Trigger: ${triggerReason}. The user is NOT a server admin — do not perform actions, just chat.`,
       // 500 tokens leaves headroom for a real 3–5 sentence answer when the
       // user asks an actual question (vs. just "hi"). Replies still trend
       // short because PERSONA caps casual chat at 1–2 sentences.
@@ -3555,7 +3303,7 @@ async function maybeSpontaneousChime(msg) {
 client.on(Events.MessageCreate, async (msg) => {
   try {
     if (!msg.guild) return;
-    const cfg = getConfigForGuild(msg.guild.id);
+    if (!config.guildId || msg.guild.id !== config.guildId) return;
     if (!msg.content) return;
 
     // Track ALL messages (including the bot's own replies) so the agent has
@@ -3577,25 +3325,21 @@ client.on(Events.MessageCreate, async (msg) => {
     if (msg.author?.bot) return;
 
     // ===== EXISTING: legacy voice-mute on configured banned word (PRESERVED) =====
-    const legacyWord = findBannedWord(msg.content, cfg);
-    if (legacyWord && cfg.chatVoiceMuteEnabled === true) {
+    const legacyWord = findBannedWord(msg.content);
+    if (legacyWord) {
       await applyWordBan(msg.guild, msg.author.id, legacyWord, "chat");
       return; // Stop here — don't also run extended profanity (prevents double message)
     }
 
-    // Extended chat moderation is opt-in per guild. This gates both the
-    // local word matcher and the LLM path; a newly joined guild must never
-    // delete/timeout people before an admin enables the feature.
-    if (cfg.aiModerationEnabled === true) {
-      const detection = await detectProfanity({
-        content: msg.content,
-        extraWords: cfg.bannedWords,
-        useAI: aiAvailable(),
-      });
-      if (detection.profane) {
-        await handleProfanityChat(msg, detection);
-        return;
-      }
+    // ===== NEW: extended profanity detection (multi-language + AI) =====
+    const detection = await detectProfanity({
+      content: msg.content,
+      extraWords: config.bannedWords,
+      useAI: aiAvailable(),
+    });
+    if (detection.profane) {
+      await handleProfanityChat(msg, detection);
+      return;
     }
 
     // ===== NEW: AI reply when the bot is addressed =====
@@ -3621,9 +3365,7 @@ client.on(Events.MessageCreate, async (msg) => {
     }
 
     // ===== NEW: spontaneous chime-in (rare, throttled) =====
-    if (cfg.spontaneousChatEnabled === true) {
-      await maybeSpontaneousChime(msg);
-    }
+    await maybeSpontaneousChime(msg);
   } catch (err) {
     console.error("[message] handler error", err?.message);
   }
@@ -3632,11 +3374,10 @@ client.on(Events.MessageCreate, async (msg) => {
 // ─── /study command + button handlers ────────────────────────────────────────
 
 async function announceStudyAvailable(guildId, quiz, byUserId) {
-  const cfg = getConfigForGuild(guildId);
-  if (!cfg.notifyChannelId) return;
+  if (!config.notifyChannelId) return;
   try {
     const guild = await client.guilds.fetch(guildId);
-    const ch = await guild.channels.fetch(cfg.notifyChannelId).catch(() => null);
+    const ch = await guild.channels.fetch(config.notifyChannelId).catch(() => null);
     if (!ch?.isTextBased?.()) return;
     const embed = new EmbedBuilder()
       .setColor(0x6366f1)
@@ -3645,12 +3386,12 @@ async function announceStudyAvailable(guildId, quiz, byUserId) {
         `<@${byUserId}> ได้อัพไฟล์ **${quiz.fileName}** และให้บอทสร้างข้อสอบ **${quiz.questions.length} ข้อ** แล้ว\n\n` +
           `▶️ พิมพ์ \`/study\` แล้วกดปุ่ม **เริ่มทำข้อสอบ** ได้เลย — ทุกคนทำชุดเดียวกัน คะแนนของแต่ละคนเป็นของส่วนตัว`,
       );
-    const content = cfg.studentRoleId ? `📣 <@&${cfg.studentRoleId}> มีข้อสอบใหม่!` : "";
+    const content = config.studentRoleId ? `📣 <@&${config.studentRoleId}> มีข้อสอบใหม่!` : "";
     await ch.send({
       content,
       embeds: [embed],
-      allowedMentions: cfg.studentRoleId
-        ? { roles: [cfg.studentRoleId] }
+      allowedMentions: config.studentRoleId
+        ? { roles: [config.studentRoleId] }
         : { parse: [] },
     });
   } catch (err) {
@@ -3842,18 +3583,17 @@ async function _legacy_handleStudyCommandSubcommand(interaction) {
     }
     await interaction.deferReply({ ephemeral: true });
     try {
-      const cfg = getConfigForGuild(guildId);
       const report = await analyzeWeaknesses(guildId);
-      const payload = buildReportEmbeds(report, { teacherRoleId: cfg.teacherRoleId });
+      const payload = buildReportEmbeds(report, { teacherRoleId: config.teacherRoleId });
       // Send to notify channel so teachers can see it
       let target = null;
-      if (cfg.notifyChannelId) {
+      if (config.notifyChannelId) {
         const guild = await client.guilds.fetch(guildId);
-        target = await guild.channels.fetch(cfg.notifyChannelId).catch(() => null);
+        target = await guild.channels.fetch(config.notifyChannelId).catch(() => null);
       }
       if (target?.isTextBased?.()) {
         await target.send(payload);
-        await interaction.editReply({ content: `✅ ส่งรายงานให้${cfg.teacherRoleId ? "ยศครู" : "ห้องแจ้งเตือน"}แล้ว (จากผู้ส่งคำตอบ ${report.submitters} คน)` });
+        await interaction.editReply({ content: `✅ ส่งรายงานให้${config.teacherRoleId ? "ยศครู" : "ห้องแจ้งเตือน"}แล้ว (จากผู้ส่งคำตอบ ${report.submitters} คน)` });
       } else {
         // No notify channel configured — just dump in the reply
         await interaction.editReply({
@@ -3942,13 +3682,12 @@ async function handleStudyButton(interaction) {
       }
       await interaction.deferReply({ ephemeral: true });
       try {
-        const cfg = getConfigForGuild(guildId);
         const report = await analyzeWeaknesses(guildId);
         if (!report || !report.submitters) {
           await interaction.editReply({ content: "ยังไม่มีคนส่งคำตอบ — รอให้นักเรียนทำเสร็จก่อน" });
           return true;
         }
-        const payload = buildReportEmbeds(report, { teacherRoleId: cfg.teacherRoleId });
+        const payload = buildReportEmbeds(report, { teacherRoleId: config.teacherRoleId });
         await interaction.editReply({ content: `📑 รายงาน + วิเคราะห์โดย AI (จากผู้ส่งคำตอบ ${report.submitters} คน)`, embeds: (payload.embeds ?? []).slice(0, 10), allowedMentions: { parse: [] } });
       } catch (err) {
         console.error("[study:report] error", err?.message);
@@ -4042,11 +3781,10 @@ async function handleStudyButton(interaction) {
 // ─── Classroom command + components + end-of-class playback ─────────────────
 
 async function notifyTeacherSubmission(guildId, user, quiz, progress) {
-  const cfg = getConfigForGuild(guildId);
-  if (!cfg.notifyChannelId) return;
+  if (!config.notifyChannelId) return;
   try {
     const guild = await client.guilds.fetch(guildId);
-    const ch = await guild.channels.fetch(cfg.notifyChannelId).catch(() => null);
+    const ch = await guild.channels.fetch(config.notifyChannelId).catch(() => null);
     if (!ch?.isTextBased?.()) return;
     // Tally wrong topics for this user
     const wrongByTopic = {};
@@ -4075,12 +3813,12 @@ async function notifyTeacherSubmission(guildId, user, quiz, progress) {
           `❌ พลาด: ${wrongList}`,
       )
       .setTimestamp(new Date());
-    const content = cfg.teacherRoleId ? `<@&${cfg.teacherRoleId}>` : "";
+    const content = config.teacherRoleId ? `<@&${config.teacherRoleId}>` : "";
     await ch.send({
       content,
       embeds: [embed],
-      allowedMentions: cfg.teacherRoleId
-        ? { roles: [cfg.teacherRoleId], users: [] }
+      allowedMentions: config.teacherRoleId
+        ? { roles: [config.teacherRoleId], users: [] }
         : { parse: [] },
     });
   } catch (err) {
@@ -4088,11 +3826,10 @@ async function notifyTeacherSubmission(guildId, user, quiz, progress) {
   }
 }
 
-function buildClassroomPanel(guildId) {
-  const cfg = getConfigForGuild(guildId);
-  const studentRole = cfg.studentRoleId ? `<@&${cfg.studentRoleId}>` : "_ยังไม่ตั้ง_";
-  const teacherRole = cfg.teacherRoleId ? `<@&${cfg.teacherRoleId}>` : "_ยังไม่ตั้ง_";
-  const active = listActiveClasses(guildId);
+function buildClassroomPanel() {
+  const studentRole = config.studentRoleId ? `<@&${config.studentRoleId}>` : "_ยังไม่ตั้ง_";
+  const teacherRole = config.teacherRoleId ? `<@&${config.teacherRoleId}>` : "_ยังไม่ตั้ง_";
+  const active = listActiveClasses(config.guildId);
   const activeStr = active.length
     ? active
         .map(
@@ -4101,7 +3838,7 @@ function buildClassroomPanel(guildId) {
         )
         .join("\n")
     : "_ตอนนี้ไม่มีคลาสไหนกำลังเรียนอยู่_";
-  const silentList = (cfg.silentJoinChannelIds || [])
+  const silentList = (config.silentJoinChannelIds || [])
     .map((id) => `<#${id}>`)
     .join(" ") || "_ยังไม่มี — บอทจะทักทายทุกห้อง_";
   const embed = new EmbedBuilder()
@@ -4110,7 +3847,7 @@ function buildClassroomPanel(guildId) {
     .setDescription(
       `**ยศนักเรียน:** ${studentRole}\n` +
         `**ยศครู:** ${teacherRole}\n` +
-        `**เวลาเรียนต่อคลาส:** ${cfg.classDurationMinutes || 60} นาที\n` +
+        `**เวลาเรียนต่อคลาส:** ${config.classDurationMinutes || 60} นาที\n` +
         `**🔇 ห้องเรียน-เงียบ (บอทไม่ทักทายเสียง):**\n${silentList}\n\n` +
         `**คลาสที่กำลังเรียน:**\n${activeStr}\n\n` +
         `_ตั้งยศครูแล้ว เมื่อครูเข้าห้องเสียง บอทจะตั้งเวลาให้อัตโนมัติ — ครบเวลาบอทจะเข้าห้องนั้นแล้วตีกริ่ง + พูด "หมดเวลาเรียน" + ตีกริ่งอีกครั้ง_`,
@@ -4149,7 +3886,7 @@ function buildClassroomPanel(guildId) {
 }
 
 async function handleClassroomCommand(interaction) {
-  await interaction.reply({ ...buildClassroomPanel(interaction.guildId), ephemeral: true });
+  await interaction.reply({ ...buildClassroomPanel(), ephemeral: true });
 }
 
 async function handleClassroomComponent(interaction) {
@@ -4159,13 +3896,10 @@ async function handleClassroomComponent(interaction) {
     await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
     return true;
   }
-  const guildId = interaction.guildId;
-  if (!guildId) return false;
-  const cfg = getConfigForGuild(guildId);
 
   try {
     if (cid === "classroom:refresh") {
-      await interaction.update(buildClassroomPanel(guildId));
+      await interaction.update(buildClassroomPanel());
       return true;
     }
 
@@ -4191,11 +3925,16 @@ async function handleClassroomComponent(interaction) {
         await interaction.reply({ content: "ไม่ได้เลือกยศ", ephemeral: true });
         return true;
       }
-      const next = {
-        ...cfg,
-        [which === "student" ? "studentRoleId" : "teacherRoleId"]: roleId,
-      };
-      await persistGuildConfig(guildId, next, `chore: set classroom ${which} role`);
+      if (which === "student") config.studentRoleId = roleId;
+      else if (which === "teacher") config.teacherRoleId = roleId;
+      const { writeLocal, normalize } = await import("./config.js");
+      const next = normalize(config);
+      Object.assign(config, next);
+      writeLocal(config);
+      const { canPersistRemotely, commitConfig } = await import("./github.js");
+      if (canPersistRemotely()) {
+        commitConfig(config, `chore: set classroom ${which} role`).catch(() => {});
+      }
       await interaction.update({
         content: `✅ ตั้งยศ${which === "student" ? "นักเรียน" : "ครู"}เป็น <@&${roleId}> เรียบร้อย`,
         components: [],
@@ -4221,10 +3960,17 @@ async function handleClassroomComponent(interaction) {
 
     if (cid === "classroom:silent-pick") {
       const ids = interaction.values || [];
-      const set = new Set(cfg.silentJoinChannelIds || []);
+      const set = new Set(config.silentJoinChannelIds || []);
       for (const id of ids) set.add(id);
-      const next = { ...cfg, silentJoinChannelIds: Array.from(set) };
-      await persistGuildConfig(guildId, next, `chore: add ${ids.length} silent-join voice channel(s)`);
+      config.silentJoinChannelIds = Array.from(set);
+      const { writeLocal, normalize } = await import("./config.js");
+      const next = normalize(config);
+      Object.assign(config, next);
+      writeLocal(config);
+      const { canPersistRemotely, commitConfig } = await import("./github.js");
+      if (canPersistRemotely()) {
+        commitConfig(config, `chore: add ${ids.length} silent-join voice channel(s)`).catch(() => {});
+      }
       await interaction.update({
         content: `✅ เพิ่มห้องเงียบแล้ว: ${ids.map((i) => `<#${i}>`).join(" ")}\n_บอทจะไม่เล่นเสียงทักทายในห้องเหล่านี้อีก_`,
         components: [],
@@ -4234,12 +3980,16 @@ async function handleClassroomComponent(interaction) {
     }
 
     if (cid === "classroom:silent-clear") {
-      await persistGuildConfig(
-        guildId,
-        { ...cfg, silentJoinChannelIds: [] },
-        "chore: clear silent-join voice channels",
-      );
-      await interaction.update(buildClassroomPanel(guildId));
+      config.silentJoinChannelIds = [];
+      const { writeLocal, normalize } = await import("./config.js");
+      const next = normalize(config);
+      Object.assign(config, next);
+      writeLocal(config);
+      const { canPersistRemotely, commitConfig } = await import("./github.js");
+      if (canPersistRemotely()) {
+        commitConfig(config, "chore: clear silent-join voice channels").catch(() => {});
+      }
+      await interaction.update(buildClassroomPanel());
       return true;
     }
 
@@ -4252,7 +4002,7 @@ async function handleClassroomComponent(interaction) {
         .setLabel("นาที (5-600)")
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
-        .setValue(String(cfg.classDurationMinutes || 60));
+        .setValue(String(config.classDurationMinutes || 60));
       modal.addComponents(new ActionRowBuilder().addComponents(input));
       await interaction.showModal(modal);
       return true;
@@ -4264,11 +4014,15 @@ async function handleClassroomComponent(interaction) {
         await interaction.reply({ content: "ใส่จำนวนนาทีระหว่าง 5-600", ephemeral: true });
         return true;
       }
-      await persistGuildConfig(
-        guildId,
-        { ...cfg, classDurationMinutes: v },
-        `chore: set classroom duration to ${v}m`,
-      );
+      config.classDurationMinutes = v;
+      const { writeLocal, normalize } = await import("./config.js");
+      const next = normalize(config);
+      Object.assign(config, next);
+      writeLocal(config);
+      const { canPersistRemotely, commitConfig } = await import("./github.js");
+      if (canPersistRemotely()) {
+        commitConfig(config, `chore: set classroom duration to ${v}m`).catch(() => {});
+      }
       await interaction.reply({
         content: `✅ ตั้งเวลาเรียนเป็น **${v} นาที** เรียบร้อย`,
         ephemeral: true,
@@ -4288,10 +4042,9 @@ async function handleClassroomComponent(interaction) {
 }
 
 async function announceClassStart(guild, cls, channel, member) {
-  const cfg = getConfigForGuild(guild.id);
-  if (!cfg.notifyChannelId) return;
+  if (!config.notifyChannelId) return;
   try {
-    const ch = await guild.channels.fetch(cfg.notifyChannelId).catch(() => null);
+    const ch = await guild.channels.fetch(config.notifyChannelId).catch(() => null);
     if (!ch?.isTextBased?.()) return;
     const embed = new EmbedBuilder()
       .setColor(0x10b981)
@@ -4304,12 +4057,12 @@ async function announceClassStart(guild, cls, channel, member) {
         `<@${cls.teacherId}> เริ่มสอนใน <#${cls.channelId}>\n` +
           `⏱️ จะหมดเวลา <t:${Math.floor(cls.endsAt / 1000)}:R> (เวลา <t:${Math.floor(cls.endsAt / 1000)}:t>)`,
       );
-    const content = cfg.studentRoleId ? `<@&${cfg.studentRoleId}>` : "";
+    const content = config.studentRoleId ? `<@&${config.studentRoleId}>` : "";
     await ch.send({
       content,
       embeds: [embed],
-      allowedMentions: cfg.studentRoleId
-        ? { roles: [cfg.studentRoleId] }
+      allowedMentions: config.studentRoleId
+        ? { roles: [config.studentRoleId] }
         : { parse: [] },
     });
   } catch (err) {
@@ -4318,10 +4071,9 @@ async function announceClassStart(guild, cls, channel, member) {
 }
 
 async function announceClassCancel(guild, cls, member) {
-  const cfg = getConfigForGuild(guild.id);
-  if (!cfg.notifyChannelId) return;
+  if (!config.notifyChannelId) return;
   try {
-    const ch = await guild.channels.fetch(cfg.notifyChannelId).catch(() => null);
+    const ch = await guild.channels.fetch(config.notifyChannelId).catch(() => null);
     if (!ch?.isTextBased?.()) return;
     const embed = new EmbedBuilder()
       .setColor(0x95a5a6)
@@ -4354,9 +4106,7 @@ async function startOfClassPlayback(cls) {
 
   let conn = getVoiceConnection(guild.id);
   const sameChannel = conn && conn.joinConfig?.channelId === voiceCh.id;
-  const movedForPlayback = !sameChannel;
   if (!sameChannel) {
-    beginAuxiliaryVoiceMove(guild.id);
     try {
       conn = joinVoiceChannel({
         channelId: voiceCh.id,
@@ -4368,14 +4118,12 @@ async function startOfClassPlayback(cls) {
       await entersState(conn, VoiceConnectionStatus.Ready, 15_000);
     } catch (err) {
       console.warn(`[classroom:start] join voice failed: ${err?.message}`);
-      await endAuxiliaryVoiceMove(guild);
       return;
     }
   }
 
-  const cfg = getConfigForGuild(cls.guildId);
   const bell = PRANK_SOUNDS.rung;
-  const ttsText = cfg.classStartTtsText ||
+  const ttsText = config.classStartTtsText ||
     "เริ่มคาบเรียนแล้ว ขอให้นักเรียนทุกท่านเตรียมตัวให้พร้อม และตั้งใจเรียน";
 
   try {
@@ -4384,8 +4132,6 @@ async function startOfClassPlayback(cls) {
     await speakThai(conn, ttsText, "class-start-tts");
   } catch (err) {
     console.error("[classroom:start] playback error", err?.message);
-  } finally {
-    if (movedForPlayback) await endAuxiliaryVoiceMove(guild);
   }
   console.log(`[classroom] start-of-class sequence finished for ${cls.channelId}`);
 }
@@ -4407,24 +4153,23 @@ async function endOfClassPlayback(cls) {
   }
 
   // Announce in text first
-  const cfg = getConfigForGuild(cls.guildId);
-  if (cfg.notifyChannelId) {
+  if (config.notifyChannelId) {
     try {
-      const tx = await guild.channels.fetch(cfg.notifyChannelId).catch(() => null);
+      const tx = await guild.channels.fetch(config.notifyChannelId).catch(() => null);
       if (tx?.isTextBased?.()) {
         const embed = new EmbedBuilder()
           .setColor(0xef4444)
           .setTitle("🔔 หมดเวลาเรียนแล้ว")
           .setDescription(
-            `คาบเรียนใน <#${cls.channelId}> ครบ ${cfg.classDurationMinutes || 60} นาทีแล้ว — บอทกำลังตีกริ่งในห้อง`,
+            `คาบเรียนใน <#${cls.channelId}> ครบ ${config.classDurationMinutes || 60} นาทีแล้ว — บอทกำลังตีกริ่งในห้อง`,
           );
         const content = [
-          cfg.teacherRoleId ? `<@&${cfg.teacherRoleId}>` : "",
-          cfg.studentRoleId ? `<@&${cfg.studentRoleId}>` : "",
+          config.teacherRoleId ? `<@&${config.teacherRoleId}>` : "",
+          config.studentRoleId ? `<@&${config.studentRoleId}>` : "",
         ]
           .filter(Boolean)
           .join(" ");
-        const roles = [cfg.teacherRoleId, cfg.studentRoleId].filter(Boolean);
+        const roles = [config.teacherRoleId, config.studentRoleId].filter(Boolean);
         await tx.send({
           content,
           embeds: [embed],
@@ -4439,9 +4184,7 @@ async function endOfClassPlayback(cls) {
   // Join the voice channel
   let conn = getVoiceConnection(guild.id);
   const sameChannel = conn && conn.joinConfig?.channelId === voiceCh.id;
-  const movedForPlayback = !sameChannel;
   if (!sameChannel) {
-    beginAuxiliaryVoiceMove(guild.id);
     try {
       conn = joinVoiceChannel({
         channelId: voiceCh.id,
@@ -4453,13 +4196,12 @@ async function endOfClassPlayback(cls) {
       await entersState(conn, VoiceConnectionStatus.Ready, 15_000);
     } catch (err) {
       console.warn(`[classroom] join voice failed: ${err?.message}`);
-      await endAuxiliaryVoiceMove(guild);
       return;
     }
   }
 
   const bell = PRANK_SOUNDS.rung;
-  const ttsText = cfg.classEndTtsText ||
+  const ttsText = config.classEndTtsText ||
     "ตอนนี้เวลานี้ หมดเวลาเรียนของวันนี้แล้ว ขอให้นักเรียนทุกท่าน และอาจารย์ทุกท่านหยุดทำการสอน และขอให้ทุกท่านเดินทางโดยสวัสดิภาพ";
 
   try {
@@ -4479,17 +4221,12 @@ async function endOfClassPlayback(cls) {
     }
   } catch (err) {
     console.error("[classroom] playback error", err?.message);
-  } finally {
-    if (movedForPlayback) await endAuxiliaryVoiceMove(guild);
   }
   console.log(`[classroom] end-of-class sequence finished for ${cls.channelId}`);
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
-    const interactionCfg = interaction.guildId
-      ? getConfigForGuild(interaction.guildId)
-      : config;
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "setting") {
         await handleSettingCommand(interaction, runtime);
@@ -4520,7 +4257,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       if (interaction.commandName === "ai") {
-        await handleAiCommand(interaction, interactionCfg);
+        await handleAiCommand(interaction, config);
         return;
       }
       if (interaction.commandName === "avatar") {
@@ -4571,7 +4308,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       interaction.isButton() &&
       interaction.customId.startsWith("alxcer-unmute:")
     ) {
-      const [, targetUserId, leaseId] = interaction.customId.split(":");
+      const targetUserId = interaction.customId.split(":")[1];
       if (interaction.user.id !== targetUserId) {
         await interaction.reply({
           content: "ปุ่มนี้สำหรับเจ้าของไมค์เท่านั้นครับ",
@@ -4579,15 +4316,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
         return;
       }
-      if (!interaction.guildId || !leaseId) {
-        await interaction.reply({
-          content: "ปุ่มนี้เป็นปุ่มเก่าหรือหมดอายุแล้ว — Guard จะไม่เปิดไมค์โดยไม่มีรหัสสิทธิ์ล่าสุดครับ",
-          ephemeral: true,
-        });
-        return;
-      }
-      if (wordBanTimers.has(wordBanKey(interaction.guildId, targetUserId))) {
-        const rec = getOffense(interaction.guildId, targetUserId);
+      if (wordBanTimers.has(targetUserId)) {
+        const rec = offenses.users[targetUserId];
         const remaining = rec?.muteUntil
           ? Math.max(0, Math.round((rec.muteUntil - Date.now()) / 1000))
           : 0;
@@ -4597,7 +4327,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
         return;
       }
-      const guild = interaction.guild || await client.guilds.fetch(interaction.guildId);
+      const guild = await client.guilds.fetch(config.guildId);
       const member = await guild.members.fetch(targetUserId);
       if (!member.voice.channel) {
         await interaction.reply({
@@ -4606,21 +4336,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
         return;
       }
-      const released = await unmuteOwnedLease(
-        guild,
-        member,
-        leaseId,
-        "Alxcer Guard: user requested unmute",
-      );
-      if (!released.ok) {
-        await interaction.reply({
-          content: "ปุ่มนี้หมดอายุแล้ว หรือมีคำสั่ง mute ใหม่กว่า — จึงไม่เปิดไมค์ทับคำสั่งล่าสุดครับ",
-          ephemeral: true,
-        });
-        return;
-      }
+      await member.voice.setMute(false, "Alxcer Guard: user requested unmute");
 
-      const s = runtimeFor(guild.id).userState.get(targetUserId);
+      const s = userState.get(targetUserId);
       if (s) {
         s.muted = false;
         s.warned = false;
@@ -4647,14 +4365,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           await interaction.reply({ content: "ตัวจับเวลานี้หายไปแล้ว (ครบเวลา หรือถูกยกเลิกไปก่อนหน้านี้)", ephemeral: true });
           return;
         }
-        if (!interaction.guildId || t.guildId !== interaction.guildId) {
-          await interaction.reply({ content: "timer นี้เป็นของอีกเซิร์ฟเวอร์", ephemeral: true });
-          return;
-        }
-        if (interaction.user.id !== t.ownerId && interaction.user.id !== t.userId && !isAdmin(interaction.member)) {
-          await interaction.reply({ content: "ปุ่มนี้สำหรับเจ้าของ timer หรือแอดมินเท่านั้น", ephemeral: true });
-          return;
-        }
         cancelTimer(id);
         await interaction.update({
           embeds: [
@@ -4674,10 +4384,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const t = getTimer(id);
         if (!t) {
           await interaction.reply({ content: "Sleep mode นี้หมดอายุไปแล้ว", ephemeral: true });
-          return;
-        }
-        if (!interaction.guildId || t.guildId !== interaction.guildId) {
-          await interaction.reply({ content: "timer นี้เป็นของอีกเซิร์ฟเวอร์", ephemeral: true });
           return;
         }
         // Only the targeted user (or an admin) can cancel
@@ -4704,10 +4410,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const t = getTimer(id);
         if (!t) {
           await interaction.reply({ content: "Group sleep นี้หมดอายุไปแล้ว", ephemeral: true });
-          return;
-        }
-        if (!interaction.guildId || t.guildId !== interaction.guildId) {
-          await interaction.reply({ content: "timer นี้เป็นของอีกเซิร์ฟเวอร์", ephemeral: true });
           return;
         }
         if (!isAdmin(interaction.member)) {
@@ -4739,20 +4441,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
           await interaction.reply({ content: "ปุ่มนี้สำหรับแอดมินหรือคนที่สั่ง mute เท่านั้น", ephemeral: true });
           return;
         }
-        if (!interaction.guildId || t.guildId !== interaction.guildId) {
-          await interaction.reply({ content: "timer นี้เป็นของอีกเซิร์ฟเวอร์ จึงยกเลิกจากที่นี่ไม่ได้", ephemeral: true });
-          return;
-        }
-        let released = { ok: false, code: "mute_not_owned" };
         try {
           const guild = await client.guilds.fetch(t.guildId);
           const member = await guild.members.fetch(t.userId);
-          released = await unmuteOwnedLease(
-            guild,
-            member,
-            t.payload?.leaseId,
-            "manual cancel via button",
-          );
+          if (member.voice?.channel) {
+            await member.voice.setMute(false, "manual cancel via button");
+          }
         } catch (err) {
           console.warn("[cancel-mute] unmute failed", err?.message);
         }
@@ -4761,10 +4455,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           embeds: [
             new EmbedBuilder()
               .setColor(0x2ecc71)
-              .setTitle(released.ok ? "🔊 เปิดไมค์แล้ว" : "🛡️ ไม่เปิดไมค์")
-              .setDescription(released.ok
-                ? "ปลด mute เรียบร้อยครับ"
-                : "timer นี้เก่ากว่า mute ปัจจุบัน หรือ mute ไม่ได้เป็นของ Guard จึงไม่เปิดทับครับ"),
+              .setTitle("🔊 เปิดไมค์แล้ว")
+              .setDescription("ปลด mute เรียบร้อยครับ"),
           ],
           components: [],
         }).catch(() => {});
@@ -4776,16 +4468,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const id = cid.split(":")[1];
         const t = getTimer(id);
         const session = wakeSessions.get(id);
-        if (!t) {
-          await interaction.reply({ content: "การปลุกนี้หมดอายุไปแล้ว", ephemeral: true });
-          return;
-        }
-        if (!interaction.guildId || t.guildId !== interaction.guildId) {
-          await interaction.reply({ content: "การปลุกนี้เป็นของอีกเซิร์ฟเวอร์", ephemeral: true });
-          return;
-        }
         // Either the user being woken or an admin can stop it
-        if (interaction.user.id !== t.userId && !isAdmin(interaction.member)) {
+        if (t && interaction.user.id !== t.userId && !isAdmin(interaction.member)) {
           await interaction.reply({ content: "ปุ่มนี้สำหรับคนที่ถูกปลุก (หรือแอดมิน) เท่านั้น", ephemeral: true });
           return;
         }
@@ -4811,30 +4495,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const minutes = Number(parts[2]) || 5;
         const t = getTimer(id);
         const session = wakeSessions.get(id);
-        if (!t) {
-          await interaction.reply({ content: "การปลุกนี้หมดอายุไปแล้ว", ephemeral: true });
-          return;
-        }
-        if (!interaction.guildId || t.guildId !== interaction.guildId) {
-          await interaction.reply({ content: "การปลุกนี้เป็นของอีกเซิร์ฟเวอร์", ephemeral: true });
-          return;
-        }
-        if (interaction.user.id !== t.userId && !isAdmin(interaction.member)) {
+        if (t && interaction.user.id !== t.userId && !isAdmin(interaction.member)) {
           await interaction.reply({ content: "ปุ่มนี้สำหรับคนที่ถูกปลุกเท่านั้น", ephemeral: true });
           return;
         }
         if (session) session.stop();
         const { createTimer: createTimerFn } = await import("./timers.js");
         const next = createTimerFn({
-          type: t.type === "wake_alarm" ? "wake_alarm" : "alarm",
+          type: t?.type === "wake_alarm" ? "wake_alarm" : "alarm",
           fireAt: Date.now() + minutes * 60 * 1000,
-          label: `${t.label || "Alarm"} (snooze ${minutes}น)`,
+          label: `${t?.label || "Alarm"} (snooze ${minutes}น)`,
           guildId: interaction.guildId,
           channelId: interaction.channelId,
-          userId: t.userId || interaction.user.id,
-          mentionUserId: t.mentionUserId || interaction.user.id,
-          ownerId: t.ownerId || interaction.user.id,
-          payload: t.payload || {},
+          userId: t?.userId || interaction.user.id,
+          mentionUserId: t?.mentionUserId || interaction.user.id,
+          ownerId: t?.ownerId || interaction.user.id,
+          payload: t?.payload || {},
         });
         await interaction.update({
           embeds: [
@@ -4868,19 +4544,13 @@ async function shutdown(signal) {
     try { session.stop(); } catch {}
   }
   wakeSessions.clear();
-  for (const value of wordBanTimers.values()) clearTimeout(value.handle || value);
+  for (const handle of wordBanTimers.values()) clearTimeout(handle);
   wordBanTimers.clear();
   try {
     await flushTranscripts();
     console.log("[shutdown] transcripts flushed");
   } catch (err) {
     console.error("[shutdown] transcript flush failed", err?.message);
-  }
-  try {
-    await flushMuteLeases();
-    console.log("[shutdown] mute ownership flushed");
-  } catch (err) {
-    console.error("[shutdown] mute ownership flush failed", err?.message);
   }
   for (const guildId of client.guilds.cache.keys()) {
     const conn = getVoiceConnection(guildId);
@@ -4891,8 +4561,4 @@ async function shutdown(signal) {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-if (VALIDATE_ONLY) {
-  console.log("[validate] boot imports and initialization completed; Discord login skipped");
-} else {
-  client.login(TOKEN);
-}
+client.login(TOKEN);
