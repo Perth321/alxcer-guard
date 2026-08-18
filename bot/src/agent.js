@@ -27,6 +27,67 @@ import {
   writeAutomationsLocal,
 } from "./automations.js";
 
+const _guildOpLocks = new Map();
+
+function withGuildLock(guildId, fn) {
+  const key = String(guildId || "");
+  const prev = _guildOpLocks.get(key) || Promise.resolve();
+  const next = prev.catch(() => {}).then(fn);
+  let tracked;
+  tracked = next.finally(() => {
+    if (_guildOpLocks.get(key) === tracked) _guildOpLocks.delete(key);
+  });
+  _guildOpLocks.set(key, tracked);
+  return tracked;
+}
+
+function normalizeChannelKey(name) {
+  return String(name || "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\s\-_—–―]+/g, " ")
+    .replace(/[|┃]/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function validateChannelName(name) {
+  const value = String(name || "").trim();
+  if (!value) return "channel name required";
+  if (value.length > 100) return "channel name must be 100 characters or fewer";
+  return "";
+}
+
+function normalizeChannelType(type) {
+  const value = String(type || "text").toLowerCase().trim();
+  if (value === "voice") return ChannelType.GuildVoice;
+  if (value === "category") return ChannelType.GuildCategory;
+  if (value === "text") return ChannelType.GuildText;
+  return null;
+}
+
+function rememberChannel(channels, channel) {
+  if (channel?.id && typeof channels?.set === "function") {
+    channels.set(channel.id, channel);
+  }
+}
+
+async function getGuildChannelsOnce(guild) {
+  const cached = guild.channels.cache;
+  if (cached?.size) return cached;
+  return await guild.channels.fetch();
+}
+
+function findMatchingChannel(channels, { name, type, parentId = null }) {
+  const targetKey = normalizeChannelKey(name);
+  return [...channels.values()].find((c) => {
+    if (!c || c.type !== type) return false;
+    if ((parentId || null) !== (c.parentId || null)) return false;
+    return normalizeChannelKey(c.name) === targetKey;
+  }) || null;
+}
+
 // ─── Role panel button toggle handler (called from index.js InteractionCreate) ───
 export async function handleRolePanelButton(interaction) {
   // customId = "role_panel:<role_id>"
@@ -2008,22 +2069,47 @@ switch (name) {
     }
 
     case "create_channel": {
-      const chType =
-        (args.type || "text").toLowerCase() === "voice" ? ChannelType.GuildVoice : ChannelType.GuildText;
-      const createOpts = { name: args.name, type: chType };
+      const nameError = validateChannelName(args.name);
+      if (nameError) return { error: nameError };
+      const chType = normalizeChannelType(args.type);
+      if (!chType || chType === ChannelType.GuildCategory) {
+        return { error: "type must be text or voice" };
+      }
+      const createOpts = { name: String(args.name).trim(), type: chType };
       if (args.topic && chType === ChannelType.GuildText) createOpts.topic = args.topic;
       if (args.nsfw) createOpts.nsfw = true;
-      if (args.slowmode !== undefined) createOpts.rateLimitPerUser = Number(args.slowmode);
-      if (args.category_name) {
-        const cats = await guild.channels.fetch();
-        const cat = [...cats.values()].find(
-          (c) => c?.type === ChannelType.GuildCategory &&
-            c.name.toLowerCase().includes(args.category_name.toLowerCase()),
-        );
-        if (cat) createOpts.parent = cat.id;
+      if (args.slowmode !== undefined) {
+        const slowmode = Number(args.slowmode);
+        if (!Number.isFinite(slowmode) || slowmode < 0 || slowmode > 21600) {
+          return { error: "slowmode must be between 0 and 21600 seconds" };
+        }
+        createOpts.rateLimitPerUser = Math.trunc(slowmode);
       }
-      const created = await guild.channels.create(createOpts);
-      return { ok: true, channel_id: created.id, name: created.name, type: args.type || "text" };
+      return await withGuildLock(guild.id, async () => {
+        const channels = await getGuildChannelsOnce(guild);
+        if (args.category_name) {
+          const cat = findMatchingChannel(channels, {
+            name: args.category_name,
+            type: ChannelType.GuildCategory,
+          });
+          if (!cat) return { error: `category not found: ${args.category_name}` };
+          createOpts.parent = cat.id;
+        }
+        const existing = findMatchingChannel(channels, {
+          name: createOpts.name,
+          type: chType,
+          parentId: createOpts.parent || null,
+        });
+        const created = existing || await guild.channels.create(createOpts);
+        rememberChannel(channels, created);
+        return {
+          ok: true,
+          reused: Boolean(existing),
+          channel_id: created.id,
+          name: created.name,
+          type: args.type || "text",
+        };
+      });
     }
 
     case "edit_channel": {
@@ -2047,12 +2133,27 @@ switch (name) {
     }
 
     case "create_category": {
-      const newCat = await guild.channels.create({
-        name: args.name,
-        type: ChannelType.GuildCategory,
-        ...(args.position !== undefined ? { position: Number(args.position) } : {}),
+      const nameError = validateChannelName(args.name);
+      if (nameError) return { error: nameError };
+      return await withGuildLock(guild.id, async () => {
+        const channels = await getGuildChannelsOnce(guild);
+        const existing = findMatchingChannel(channels, {
+          name: String(args.name).trim(),
+          type: ChannelType.GuildCategory,
+        });
+        const newCat = existing || await guild.channels.create({
+          name: String(args.name).trim(),
+          type: ChannelType.GuildCategory,
+          ...(args.position !== undefined ? { position: Number(args.position) } : {}),
+        });
+        rememberChannel(channels, newCat);
+        return {
+          ok: true,
+          reused: Boolean(existing),
+          category_id: newCat.id,
+          name: newCat.name,
+        };
       });
-      return { ok: true, category_id: newCat.id, name: newCat.name };
     }
 
     case "rebuild_server": {
@@ -2158,29 +2259,47 @@ switch (name) {
         ).join("\n\n");
         return { dry_run: true, preview, total_channels: plan.reduce((s, p) => s + p.chs.length, 0) };
       }
-      // clear_existing: delete all non-essential channels/categories before rebuilding
-      if (args.clear_existing) {
-        const allCh = [...guild.channels.cache.values()];
-        for (const ch of allCh) {
-          try { await ch.delete("rebuild_server clear_existing"); await new Promise(r => setTimeout(r, 400)); } catch {}
+      const result = { categories: [], channels: [], reused: [], deleted: [] };
+      return await withGuildLock(guild.id, async () => {
+        const channels = await getGuildChannelsOnce(guild);
+        if (args.clear_existing) {
+          for (const ch of [...channels.values()]) {
+            if (!ch || ch.managed) continue;
+            if (![ChannelType.GuildText, ChannelType.GuildVoice, ChannelType.GuildCategory].includes(ch.type)) continue;
+            try {
+              await ch.delete("rebuild_server clear_existing");
+              result.deleted.push(ch.name);
+            } catch (e) {
+              result.deleted.push(`failed:${ch.name}`);
+            }
+          }
         }
-      }
-      const result = { categories: [], channels: [] };
-      for (const section of plan) {
-        const catCh = await guild.channels.create({ name: section.cat, type: ChannelType.GuildCategory });
-        result.categories.push(section.cat);
-        for (const ch of section.chs) {
-          await guild.channels.create({
-            name: ch.n,
-            type: ch.v ? ChannelType.GuildVoice : ChannelType.GuildText,
-            parent: catCh.id,
-            ...(ch.t ? { topic: ch.t } : {}),
-          });
-          result.channels.push(ch.n);
-          await new Promise((r) => setTimeout(r, 700));
+        const refreshed = await getGuildChannelsOnce(guild);
+        for (const section of plan) {
+          const catName = String(section.cat).trim();
+          const catCh = findMatchingChannel(refreshed, { name: catName, type: ChannelType.GuildCategory }) ||
+            await guild.channels.create({ name: catName, type: ChannelType.GuildCategory });
+          rememberChannel(refreshed, catCh);
+          result.categories.push(catCh.name);
+          for (const ch of section.chs) {
+            const chType = ch.v ? ChannelType.GuildVoice : ChannelType.GuildText;
+            const existing = findMatchingChannel(refreshed, { name: ch.n, type: chType, parentId: catCh.id });
+            if (existing) {
+              result.reused.push(existing.name);
+              continue;
+            }
+            const created = await guild.channels.create({
+              name: String(ch.n).trim(),
+              type: chType,
+              parent: catCh.id,
+              ...(ch.t ? { topic: ch.t } : {}),
+            });
+            rememberChannel(refreshed, created);
+            result.channels.push(created.name);
+          }
         }
-      }
-      return { ok: true, theme: args.theme, ...result };
+        return { ok: true, theme: args.theme, ...result };
+      });
     }
 
     // ─── setup_role_panel ────────────────────────────────────────────────────
@@ -2265,8 +2384,10 @@ switch (name) {
     // ─── full_server_setup ───────────────────────────────────────────────────
     case "full_server_setup": {
       const { ChannelType: _CT, PermissionsBitField: _PBF, ActionRowBuilder: _ARB, ButtonBuilder: _BB, ButtonStyle: _BS, EmbedBuilder: _FSEmbed } = await import("discord.js");
-      const log = [];
-      const roleMap = {}; // name → role object
+      return await withGuildLock(guild.id, async () => {
+        const log = [];
+        const channelsOnce = await getGuildChannelsOnce(guild);
+        const roleMap = {}; // name → role object
 
       // Step 1: Create roles
       for (const roleDef of (args.roles || [])) {
@@ -2294,17 +2415,18 @@ switch (name) {
       for (const catDef of (args.categories || [])) {
         let cat;
         try {
-          cat = guild.channels.cache.find(c => c.name === catDef.name && c.type === _CT.GuildCategory);
+            cat = findMatchingChannel(channelsOnce, { name: catDef.name, type: _CT.GuildCategory });
           if (!cat) {
             cat = await guild.channels.create({ name: catDef.name, type: _CT.GuildCategory, reason: "full_server_setup" });
             log.push(`✅ หมวด: ${cat.name}`);
           }
+          rememberChannel(channelsOnce, cat);
         } catch(e) { log.push(`❌ หมวด ${catDef.name}: ${e.message}`); continue; }
 
         for (const chDef of (catDef.channels || [])) {
           try {
             const chType = (chDef.type||"text")==="voice" ? _CT.GuildVoice : _CT.GuildText;
-            let ch = guild.channels.cache.find(c => c.name === chDef.name && c.parentId === cat.id);
+            let ch = findMatchingChannel(channelsOnce, { name: chDef.name, type: chDef.type === "voice" ? _CT.GuildVoice : _CT.GuildText, parentId: cat.id });
             if (!ch) {
               ch = await guild.channels.create({
                 name: chDef.name, type: chType, parent: cat.id,
@@ -2312,6 +2434,7 @@ switch (name) {
               });
               log.push(`✅ ห้อง: ${ch.name}`);
             }
+            rememberChannel(channelsOnce, ch);
             channelMap[chDef.name] = ch;
             // Apply permissions
             if (chDef.deny_roles) {
@@ -2368,7 +2491,8 @@ switch (name) {
         }
       }
 
-      return { ok: true, steps: log.length, log: log.slice(0, 30) };
+        return { ok: true, steps: log.length, log: log.slice(0, 30) };
+      });
     }
 
 

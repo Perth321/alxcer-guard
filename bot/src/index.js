@@ -41,7 +41,7 @@ const PRANK_SOUNDS = {
   jinny: path.join(__dirname, "..", "assets", "jinny.mp3"),
   jan: path.join(__dirname, "..", "assets", "jan.mp3"),
 };
-import { loadConfig } from "./config.js";
+import { loadConfig, loadConfigForGuild } from "./config.js";
 import {
   registerCommands,
   handleSettingCommand,
@@ -371,14 +371,24 @@ const wordBanTimers = new Map();
 let offensesPersistTimer = null;
 
 const runtime = {
-  getConfig: () => config,
-  setConfig: (next) => {
-    config = next;
-    client.config = config;
-    if (config.ownerId) setOwnerId(config.ownerId);
+  getConfig: (guildId = config.guildId) => {
+    if (guildId && guildId !== config.guildId) {
+      return loadConfigForGuild(guildId);
+    }
+    return config;
   },
-  requestRejoin: () => {
-    if (!config.guildId) return;
+  setConfig: (next, guildId = config.guildId) => {
+    // The voice worker is still intentionally single-connection for now, so
+    // only the active guild changes its live runtime. Other guilds retain
+    // their settings on disk without interrupting the active voice session.
+    if (!guildId || guildId === config.guildId) {
+      config = next;
+      client.config = config;
+      if (config.ownerId) setOwnerId(config.ownerId);
+    }
+  },
+  requestRejoin: (guildId = config.guildId) => {
+    if (!config.guildId || (guildId && guildId !== config.guildId)) return;
     client.guilds
       .fetch(config.guildId)
       .then((g) => reevaluateAndJoin(g))

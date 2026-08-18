@@ -62,6 +62,26 @@ GitHub repo → **Actions → Alxcer Guard → Run workflow**
 
 The workflow is also scheduled to relaunch every 6 hours so the bot stays online.
 
+## Multi-server behavior
+
+- Slash commands are registered globally, so the bot can be used in every guild
+  where it is installed. Global Discord commands can take a short time to
+  propagate after the first deployment.
+- `/setting` is stored per guild under `guilds[guildId]` in `bot/config.json`.
+  Existing flat config files remain valid and continue to act as the legacy
+  primary guild configuration.
+- Admin channel tools reuse an existing category/channel when the normalized
+  name, channel type, and parent category match. Repeated setup commands are
+  therefore safe to run and do not create duplicates.
+- `rebuild_server` and `full_server_setup` serialize channel creation per guild
+  and reuse the channel cache for the operation. `clear_existing` is still
+  destructive and only runs when explicitly requested.
+
+The voice guard itself still maintains one live voice connection per process.
+The multi-server changes above cover global commands, per-guild settings, and
+all admin setup/channel operations; simultaneous voice monitoring in multiple
+guilds requires a separate per-guild voice-state refactor.
+
 ## Local testing (optional)
 
 ```bash

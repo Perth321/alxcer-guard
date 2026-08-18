@@ -13,7 +13,12 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
-import { writeLocal, normalize } from "./config.js";
+import {
+  loadConfigForGuild,
+  normalize,
+  writeGuildConfig,
+  writeLocal,
+} from "./config.js";
 import { getModelStatus, getAllModels, forceModel, clearForceModel } from "./ai.js";
 import { canPersistRemotely, commitConfig } from "./github.js";
 import { canManageBot } from "./agent.js";
@@ -234,18 +239,28 @@ export async function handleAvatarCommand(interaction) {
 export async function registerCommands(client) {
   const rest = new REST({ version: "10" }).setToken(client.token);
   const appId = client.application?.id ?? client.user.id;
-  const guildId = client.config.guildId;
   const body = [SETTING_COMMAND, DEBUG_COMMAND, STUDY_COMMAND, STUDY_UPLOAD_COMMAND, CLASSROOM_COMMAND, NOTIFY_COMMAND, AI_COMMAND, AVATAR_COMMAND, ...PRANK_COMMANDS];
   const list = ["setting", "debug", "study", "study-upload", "classroom", "notify", "ai", "avatar", ...PRANK_COMMAND_DEFS.map((p) => p.name)]
     .map((n) => "/" + n)
     .join(" ");
 
-  if (guildId) {
-    await rest.put(Routes.applicationGuildCommands(appId, guildId), { body });
-    console.log(`[commands] registered ${list} on guild ${guildId}`);
-  } else {
-    await rest.put(Routes.applicationCommands(appId), { body });
-    console.log(`[commands] registered ${list} globally`);
+  // Global registration is the only mode that supports every guild the
+  // account joins. Guild-scoped registration made the old single-guild config
+  // silently hide commands everywhere else.
+  await rest.put(Routes.applicationCommands(appId), { body });
+  console.log(`[commands] registered ${list} globally`);
+
+  // Remove stale guild-scoped commands from the legacy primary guild. This is
+  // best-effort because the bot may have left that guild already.
+  const legacyGuildId = client.config?.guildId;
+  if (legacyGuildId) {
+    await rest
+      .put(Routes.applicationGuildCommands(appId, legacyGuildId), { body: [] })
+      .catch((err) =>
+        console.warn(
+          `[commands] could not clear legacy guild commands for ${legacyGuildId}: ${err?.message}`,
+        ),
+      );
   }
 }
 
@@ -442,15 +457,20 @@ export function buildSettingsView(config) {
   return { embeds: [embed], components: [notifyRow, voiceRow, buttons] };
 }
 
-async function persist(config) {
-  writeLocal(config);
+async function persist(config, guildId) {
+  const document = guildId ? writeGuildConfig(guildId, config) : config;
+  if (!guildId) writeLocal(config);
   if (canPersistRemotely()) {
-    await commitConfig(config);
+    await commitConfig(document);
   }
 }
 
 export async function handleSettingCommand(interaction, runtime) {
-  const view = buildSettingsView(runtime.getConfig());
+  const guildId = interaction.guildId;
+  const config = guildId
+    ? loadConfigForGuild(guildId)
+    : runtime.getConfig();
+  const view = buildSettingsView(config);
   await interaction.reply({ ...view, ephemeral: true });
 }
 
@@ -467,13 +487,17 @@ export async function handleSettingComponent(interaction, runtime) {
   }
 
   const action = id.slice("setting:".length);
-  const cfg = runtime.getConfig();
+  const guildId = interaction.guildId;
+  const cfg = guildId ? loadConfigForGuild(guildId) : runtime.getConfig();
+  const save = async (next) => {
+    await persist(next, guildId);
+    runtime.setConfig(next, guildId);
+  };
 
   try {
     if (action === "notify" && interaction.isChannelSelectMenu()) {
       const next = normalize({ ...cfg, notifyChannelId: interaction.values[0] });
-      await persist(next);
-      runtime.setConfig(next);
+      await save(next);
       await interaction.update(buildSettingsView(next));
       return true;
     }
@@ -483,18 +507,16 @@ export async function handleSettingComponent(interaction, runtime) {
         ...cfg,
         voiceChannelId: interaction.values[0] ?? "",
       });
-      await persist(next);
-      runtime.setConfig(next);
-      runtime.requestRejoin();
+      await save(next);
+       runtime.requestRejoin(guildId);
       await interaction.update(buildSettingsView(next));
       return true;
     }
 
     if (action === "auto-voice" && interaction.isButton()) {
       const next = normalize({ ...cfg, voiceChannelId: "" });
-      await persist(next);
-      runtime.setConfig(next);
-      runtime.requestRejoin();
+      await save(next);
+      runtime.requestRejoin(guildId);
       await interaction.update(buildSettingsView(next));
       return true;
     }
@@ -546,8 +568,7 @@ export async function handleSettingComponent(interaction, runtime) {
         return true;
       }
       const next = normalize({ ...cfg, warningSeconds: warning, muteSeconds: mute });
-      await persist(next);
-      runtime.setConfig(next);
+      await save(next);
       await interaction.reply({
         content: `✅ บันทึกแล้ว: เตือน **${next.warningSeconds}s** / ปิดไมค์ **${next.muteSeconds}s**`,
         ephemeral: true,
@@ -608,8 +629,7 @@ export async function handleSettingComponent(interaction, runtime) {
         repeatOffenseMuteSeconds: repeat,
         bannedWords: words,
       });
-      await persist(next);
-      runtime.setConfig(next);
+      await save(next);
       const wordsSummary = next.bannedWords.length
         ? next.bannedWords.map((w) => `\`${w}\``).join(", ")
         : "_ไม่มี_";
@@ -660,8 +680,7 @@ export async function handleSettingComponent(interaction, runtime) {
         return true;
       }
       const next = normalize({ ...cfg, wakeMusicUrl: musicUrl, wakeTtsText: ttsText });
-      await persist(next);
-      runtime.setConfig(next);
+      await save(next);
       await interaction.reply({
         content: `✅ บันทึกแล้ว:\n• เสียงปลุก: ${next.wakeMusicUrl || "_ใช้บี๊ปเริ่มต้น_"}\n• ข้อความ: "${next.wakeTtsText}"`,
         ephemeral: true,

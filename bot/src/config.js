@@ -38,16 +38,55 @@ const DEFAULTS = {
 };
 
 export function loadConfig() {
-  let raw = {};
-  if (fs.existsSync(CONFIG_PATH)) {
-    try {
-      raw = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-    } catch (err) {
-      console.error("[config] failed to parse config.json:", err?.message);
-      raw = {};
-    }
-  }
+  const raw = readRaw();
   return normalize({ ...DEFAULTS, ...raw });
+}
+
+/**
+ * Load settings for a specific guild while keeping the original flat
+ * config.json format backwards compatible. New guild settings live under
+ * `guilds[guildId]`; the legacy top-level object remains the primary guild.
+ */
+export function loadConfigForGuild(guildId) {
+  if (!guildId) return loadConfig();
+  const raw = readRaw();
+  const scoped = raw.guilds?.[String(guildId)];
+  if (scoped && typeof scoped === "object") {
+    return normalize({ ...DEFAULTS, ...scoped, guildId });
+  }
+  if (raw.guildId && String(raw.guildId) === String(guildId)) {
+    return normalize({ ...DEFAULTS, ...raw, guildId });
+  }
+  return normalize({ ...DEFAULTS, guildId });
+}
+
+/**
+ * Write one guild's settings into a multi-guild config document and return
+ * the complete document for remote persistence.
+ */
+export function writeGuildConfig(guildId, cfg) {
+  const id = String(guildId || cfg?.guildId || "");
+  if (!id) {
+    writeLocal(cfg);
+    return cfg;
+  }
+
+  const raw = readRaw();
+  const nextGuildConfig = normalize({ ...cfg, guildId: id });
+  const guilds =
+    raw.guilds && typeof raw.guilds === "object" && !Array.isArray(raw.guilds)
+      ? { ...raw.guilds }
+      : {};
+  guilds[id] = nextGuildConfig;
+
+  const next = { ...raw, guilds };
+  // Keep legacy readers and the current single-guild runtime working. The
+  // first configured guild becomes the legacy primary until migrated fully.
+  if (!raw.guildId || String(raw.guildId) === id) {
+    Object.assign(next, nextGuildConfig);
+  }
+  writeLocal(next);
+  return next;
 }
 
 export function normalize(cfg) {
@@ -107,4 +146,15 @@ function normalizeWords(value) {
 
 export function writeLocal(cfg) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2) + "\n");
+}
+
+function readRaw() {
+  if (!fs.existsSync(CONFIG_PATH)) return {};
+  try {
+    const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  } catch (err) {
+    console.error("[config] failed to parse config.json:", err?.message);
+    return {};
+  }
 }
