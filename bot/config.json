@@ -2,7 +2,7 @@
   "guildId": "1485726181398548490",
   "voiceChannelId": "",
   "notifyChannelId": "1493600696002412554",
-  "warningSeconds": 30,
+  "warningSeconds": 500,
   "muteSeconds": 600,
   "ignoreBots": true,
   "bannedWords": [
@@ -42,6 +42,30 @@
       "teacherRoleId": "",
       "classDurationMinutes": 60,
       "ownerId": "",
+      "silentJoinChannelIds": [],
+      "classEndTtsText": "ตอนนี้เวลานี้ หมดเวลาเรียนของวันนี้แล้ว ขอให้นักเรียนทุกท่าน และอาจารย์ทุกท่านหยุดทำการสอน และขอให้ทุกท่านเดินทางโดยสวัสดิภาพ",
+      "classStartTtsText": "เริ่มคาบเรียนแล้ว ขอให้นักเรียนทุกท่านเตรียมตัวให้พร้อม และตั้งใจเรียน"
+    },
+    "1485726181398548490": {
+      "guildId": "1485726181398548490",
+      "voiceChannelId": "",
+      "notifyChannelId": "1493600696002412554",
+      "warningSeconds": 500,
+      "muteSeconds": 600,
+      "ignoreBots": true,
+      "bannedWords": [
+        "หี",
+        "ขอดูหี",
+        "ดูหี"
+      ],
+      "firstOffenseMuteSeconds": 60,
+      "repeatOffenseMuteSeconds": 3600,
+      "wakeMusicUrl": "",
+      "wakeTtsText": "ขออนุญาตปลุกนะครับ ตื่นได้แล้วเด้อ",
+      "studentRoleId": "1504669835320365106",
+      "teacherRoleId": "1504669659583221980",
+      "classDurationMinutes": 60,
+      "ownerId": "603182413660684321",
       "silentJoinChannelIds": [],
       "classEndTtsText": "ตอนนี้เวลานี้ หมดเวลาเรียนของวันนี้แล้ว ขอให้นักเรียนทุกท่าน และอาจารย์ทุกท่านหยุดทำการสอน และขอให้ทุกท่านเดินทางโดยสวัสดิภาพ",
       "classStartTtsText": "เริ่มคาบเรียนแล้ว ขอให้นักเรียนทุกท่านเตรียมตัวให้พร้อม และตั้งใจเรียน"
