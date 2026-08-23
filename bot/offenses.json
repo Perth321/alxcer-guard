@@ -177,8 +177,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 6,
-        "lastAt": 1787468620534,
+        "count": 7,
+        "lastAt": 1787468642924,
         "history": [
           {
             "at": 1786637431879,
@@ -231,6 +231,15 @@
             "matched": "มึง...ไอ้ควาย",
             "reason": "ผู้ใช้ใช้คำหยาบคายและคำด่าทอโดยตรง",
             "excerpt": "มึงอ่านดีๆดิไอ้ควาย",
+            "action": "timeout_failed",
+            "source": "ai"
+          },
+          {
+            "at": 1787468642924,
+            "severity": 7,
+            "matched": "มึง...ไอ้ kvay",
+            "reason": "ผู้ใช้ใช้คำหยาบคายและคำด่าทอโดยตรง",
+            "excerpt": "มึงอ่านดีๆดิไอ้ kvay",
             "action": "timeout_failed",
             "source": "ai"
           }
