@@ -166,6 +166,10 @@ function _coolMsForError(err) {
   const status = err?.status || 0;
   const msg    = err?.message || "";
   if (status === 429) return 60_000;
+  // GitHub Models can enter a scheduled brownout/retirement window.
+  // Do not burn through every model in the chain while the service is
+  // explicitly unavailable; let the cooldown expire before trying again.
+  if (status === 410 || /retirement_brownout|scheduled.*brownout/i.test(msg)) return 30 * 60_000;
   if (status === 404) return 600_000;
   if (status >= 500)  return 30_000;
   if (/safety|empty response|non-JSON/i.test(msg)) return 20_000;
