@@ -111,6 +111,7 @@ const REQUEST_TIMEOUT_MS = 25_000;
 // Skip recently-failed models to avoid wasting time on guaranteed 429s/404s.
 //   429 → 60s, 404 → 600s, 5xx/network → 30s, safety/empty → 20s
 const _failedModelCache = new Map(); // "provider:model" → expiresAtMs
+const _failedProviderCache = new Map(); // provider → expiresAtMs
 function _coolModel(provider, model, ms) {
   if (!model) return;
   _failedModelCache.set(`${provider}:${model}`, Date.now() + ms);
@@ -123,6 +124,18 @@ function _isCooling(provider, model) {
   return true;
 }
 function _clearCool(provider, model) { _failedModelCache.delete(`${provider}:${model}`); }
+function _coolProvider(provider, ms) {
+  _failedProviderCache.set(provider, Date.now() + ms);
+}
+function _isProviderCooling(provider) {
+  const until = _failedProviderCache.get(provider);
+  if (!until) return false;
+  if (Date.now() >= until) {
+    _failedProviderCache.delete(provider);
+    return false;
+  }
+  return true;
+}
 
 // ─── Owner-controlled forced model ───────────────────────────────────────────
 // When set, this entry is injected at the FRONT of every callAI chain so the
@@ -632,11 +645,14 @@ async function callAI({ geminiModels, openrouterModels, githubModels, interleave
   if (available.length === 0) throw new Error("No AI provider available (set GEMINI_API_KEY, GITHUB_TOKEN, or OPENROUTER_API_KEY)");
 
   // Walk the chain — skip cooling slots, but keep a "coerced" copy as last resort
-  const liveSlots   = available.filter(({ p, m }) => !_isCooling(p, m));
+  const liveSlots   = available.filter(({ p, m }) => !_isProviderCooling(p) && !_isCooling(p, m));
   const slotsToTry  = liveSlots.length ? liveSlots : available;
 
   let lastErr;
   for (const { p, m } of slotsToTry) {
+    // A provider-wide outage (especially GitHub Models 410 brownout) should
+    // skip all of that provider's models and move to the next provider.
+    if (_isProviderCooling(p)) continue;
     try {
       let result;
       if (p === "gemini") {
@@ -659,6 +675,9 @@ async function callAI({ geminiModels, openrouterModels, githubModels, interleave
     } catch (err) {
       lastErr = err;
       _coolModel(p, m, _coolMsForError(err));
+      if (err?.status === 410 || /retirement_brownout|scheduled.*brownout/i.test(err?.message || "")) {
+        _coolProvider(p, 30 * 60_000);
+      }
       console.warn(`[ai] ${p}:${m} failed: ${err.message?.slice(0, 200)}`);
       await new Promise(r => setTimeout(r, 150 + Math.random() * 200));
     }
