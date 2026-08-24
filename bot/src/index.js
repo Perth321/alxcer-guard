@@ -2795,13 +2795,7 @@ async function handleProfanityChat(msg, detection) {
 }
 
 function aiFallbackLine() {
-  const lines = [
-    "ตอนนี้สมองช้านิดหน่อย เซิร์ฟ AI งอแง ลองอีกครั้งครับ 😅",
-    "อึ้งไปแป๊บ — model ฟรีโดน rate-limit อยู่ พิมพ์มาใหม่",
-    "เครื่องคิดงานล้น เดี๋ยวกลับมาตอบนะ",
-    "ฮึ ขอเวลาคิดอีกหน่อย",
-  ];
-  return lines[Math.floor(Math.random() * lines.length)];
+  return "ตอนนี้ระบบ AI ตอบไม่ได้ชั่วคราวครับ คำสั่งยังไม่ได้ทำงาน ลองใหม่อีกครั้งในภายหลัง";
 }
 
 function _stripThink(text) {
