@@ -4022,6 +4022,16 @@ function extractTextualToolCalls(content) {
   return { extracted: calls, cleanedContent: cleaned };
 }
 
+// Some fallback models occasionally ignore the persona and return their
+// internal planning in plain English instead of a user-facing answer.
+// Never expose that planning in Discord. Give the model one clean retry; if
+// it repeats the leak, return a safe Thai response rather than the analysis.
+function looksLikeLeakedAgentReasoning(content) {
+  if (!content || typeof content !== "string") return false;
+  return /(?:^|\n)\s*(?:we need to respond|the user is|they are asking|actually there (?:were|are)|possibly that|i should|let me think)\b/i.test(content)
+    && !/[ก-๙]/.test(content);
+}
+
 export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
   if (!aiAvailable()) return "AI ยังไม่พร้อม (OPENROUTER_API_KEY ไม่ได้ตั้ง)";
   const { authorTag, authorId, authorDisplayName, guild, chatHistory, ownerId } = ctx;
@@ -4086,6 +4096,24 @@ export async function runAgent({ userPrompt, ctx, maxSteps = 12, onToolCall }) {
         console.log(
           `[agent] rescued ${extracted.length} inline tool call(s) from text reply: ${extracted.map((c) => c.name).join(", ")}`,
         );
+      }
+    }
+
+    if (!reply.tool_calls?.length && looksLikeLeakedAgentReasoning(reply.content)) {
+      console.warn("[agent] detected leaked planning; requesting clean final answer");
+      const cleanRetry = await generateReply({
+        history: [
+          ...messages,
+          { role: "assistant", content: reply.content },
+          { role: "user", content: "ตอบผู้ใช้โดยตรงเป็นภาษาไทยเท่านั้น ห้ามแสดงการวิเคราะห์ภายใน ห้ามขึ้นต้นว่า We need to respond หรือ The user is และไม่ต้องอธิบายขั้นตอนการคิด" },
+        ],
+        systemExtra: `${AGENT_SYSTEM}\nสำคัญมาก: ส่งเฉพาะคำตอบสุดท้ายที่ผู้ใช้เห็นได้ ห้ามส่ง chain-of-thought หรือข้อความวิเคราะห์ภายใน`,
+        max_tokens: 300,
+      }).catch(() => null);
+      if (cleanRetry?.content && !looksLikeLeakedAgentReasoning(cleanRetry.content)) {
+        reply.content = cleanRetry.content;
+      } else {
+        reply.content = "ขออภัยครับ เมื่อกี้ระบบประมวลผลคำตอบผิดรูปแบบ ลองถามใหม่อีกครั้งได้เลย";
       }
     }
 
