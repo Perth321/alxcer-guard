@@ -146,8 +146,8 @@
       "lastWord": "หี",
       "lastSource": "voice",
       "chat": {
-        "count": 1,
-        "lastAt": 1787577659724,
+        "count": 2,
+        "lastAt": 1787753939582,
         "history": [
           {
             "at": 1787577659724,
@@ -157,6 +157,15 @@
             "excerpt": "ควยยยยยย",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1787753939582,
+            "severity": 7,
+            "matched": "เน๋ด",
+            "reason": "มีคำหยาบที่สื่อถึงการร่วมเพศ",
+            "excerpt": "เน๋ดหลุก",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
