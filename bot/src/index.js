@@ -2058,10 +2058,10 @@ function persistOffenses() {
   }, 5_000);
 }
 
-function findBannedWord(text) {
-  if (!text || !Array.isArray(config.bannedWords)) return null;
+function findBannedWord(text, runtimeConfig = config) {
+  if (!text || !Array.isArray(runtimeConfig.bannedWords)) return null;
   const lower = text.toLowerCase();
-  for (const word of config.bannedWords) {
+  for (const word of runtimeConfig.bannedWords) {
     if (!word) continue;
     const wl = word.toLowerCase();
     // Very short words (<=3 chars, e.g. "หี"): require word-boundary so ASR
@@ -2164,7 +2164,7 @@ function formatDuration(seconds) {
   return `${seconds} วินาที`;
 }
 
-async function applyWordBan(guild, userId, word, source, transcript) {
+async function applyWordBan(guild, userId, word, source, transcript, runtimeConfig = config) {
   if (!userId) { console.warn("[wordban] userId undefined, skipping"); return; }
   const prev = offenses.users[userId] ?? {
     count: 0,
@@ -2176,8 +2176,8 @@ async function applyWordBan(guild, userId, word, source, transcript) {
   const newCount = (prev.count || 0) + 1;
   const isFirst = newCount <= 1;
   const muteSec = isFirst
-    ? config.firstOffenseMuteSeconds
-    : config.repeatOffenseMuteSeconds;
+    ? runtimeConfig.firstOffenseMuteSeconds
+    : runtimeConfig.repeatOffenseMuteSeconds;
 
   offenses.users[userId] = {
     count: newCount,
@@ -2388,11 +2388,14 @@ client.once(Events.ClientReady, async (c) => {
     } catch (err) {
       console.warn("[startup] clearStaleInactivityMutes failed:", err?.message);
     }
-    // Pre-load recent chat into the in-memory buffer so the agent has real
-    // context on its very first interaction after a 6h restart.
-    seedRecentFromGuild(guild).catch((err) =>
-      console.warn("[ready] seed failed:", err?.message)
-    );
+    // Pre-load recent chat for every guild so each channel starts with its
+    // own context after a restart. The voice worker below remains primary-
+    // guild-only, but text conversations are multi-guild.
+    for (const seededGuild of client.guilds.cache.values()) {
+      seedRecentFromGuild(seededGuild).catch((err) =>
+        console.warn(`[ready] seed failed for ${seededGuild.id}:`, err?.message),
+      );
+    }
 
     pollHandle = setInterval(async () => {
       try {
@@ -2624,16 +2627,35 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 // Bigger window → bot can follow longer threads, references like "คนเดิม",
 // multi-turn admin commands, and stays "in the conversation" rather than
 // snapshotting one isolated message.
-const recentByChannel = new Map(); // channelId -> [{author, authorId, content, at, isBot}]
+const recentByChannel = new Map(); // `${guildId}:${channelId}` -> messages
+// Discord can deliver several messages at once. Serialize work per channel
+// so replies stay ordered, while different channels/guilds remain concurrent.
+const channelWorkQueues = new Map();
 const RECENT_LIMIT = 120;
-function pushRecent(channelId, entry) {
-  if (!recentByChannel.has(channelId)) recentByChannel.set(channelId, []);
-  const arr = recentByChannel.get(channelId);
+function channelKey(guildId, channelId) {
+  return `${guildId || "dm"}:${channelId || "unknown"}`;
+}
+function pushRecent(guildId, channelId, entry) {
+  const key = channelKey(guildId, channelId);
+  if (!recentByChannel.has(key)) recentByChannel.set(key, []);
+  const arr = recentByChannel.get(key);
   arr.push(entry);
   if (arr.length > RECENT_LIMIT) arr.splice(0, arr.length - RECENT_LIMIT);
 }
-function getRecent(channelId) {
-  return recentByChannel.get(channelId) || [];
+function getRecent(guildId, channelId) {
+  return recentByChannel.get(channelKey(guildId, channelId)) || [];
+}
+function enqueueChannelWork(guildId, channelId, work) {
+  const key = channelKey(guildId, channelId);
+  const previous = channelWorkQueues.get(key) || Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(work)
+    .finally(() => {
+      if (channelWorkQueues.get(key) === next) channelWorkQueues.delete(key);
+    });
+  channelWorkQueues.set(key, next);
+  return next;
 }
 
 // On startup, fetch the last ~50 messages from every text channel the bot
@@ -2652,7 +2674,7 @@ async function seedRecentFromGuild(guild) {
       const sorted = [...fetched.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
       for (const m of sorted) {
         if (!m.content) continue;
-        pushRecent(channel.id, {
+        pushRecent(guild.id, channel.id, {
           author: m.author?.username || "unknown",
           authorId: m.author?.id || "",
           content: m.content.slice(0, 500),
@@ -2670,7 +2692,7 @@ async function seedRecentFromGuild(guild) {
 
 // Spontaneous engagement throttle: at most once per ~75s per channel.
 const lastSpontaneousAt = new Map();
-const lastReplyResponseAt = new Map(); // channelId → timestamp, prevents reply-chain loops
+const lastReplyResponseAt = new Map(); // guildId:channelId → timestamp
 const SPONTANEOUS_COOLDOWN_MS = 90 * 1000;
 const SPONTANEOUS_BASE_PROB = 0.07; // 7% chance per qualifying msg (reduced from 18%)
 const SPONTANEOUS_MIN_RECENT = 4; // need at least 4 msgs before chiming
@@ -2686,7 +2708,7 @@ function isBotTriggered(msg) {
         const _words = _txt.split(/\s+/).filter(Boolean).length;
         const _hasQ = _txt.includes("?") || /ไหม|มั้ย|อะไร|ยังไง|ทำไม|เมื่อไร|กี่|ใคร|ที่ไหน|อย่างไร|หรือเปล่า/.test(_txt);
         if (_words < 3 && !_hasQ) return null; // skip "ok", "55555", "อ่อ", short reactions
-        const _lastReply = lastReplyResponseAt.get(msg.channel.id) || 0;
+        const _lastReply = lastReplyResponseAt.get(channelKey(msg.guild?.id, msg.channel.id)) || 0;
         if (Date.now() - _lastReply < 60_000) return null; // 60s cooldown per channel
         return "reply";
       }
@@ -3137,7 +3159,7 @@ function toolArgPreview(toolName, args) {
   }
 }
 
-async function handleAgentOrChatReply(msg, triggerReason, media = null) {
+async function handleAgentOrChatReply(msg, triggerReason, media = null, guildConfig = config) {
   const author = msg.author;
   const channel = msg.channel;
   const guild = msg.guild;
@@ -3145,7 +3167,7 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
 
   // Build conversational context — bigger window so the bot follows the
   // thread instead of replying in a vacuum.
-  const recent = getRecent(channel.id);
+  const recent = getRecent(guild.id, channel.id);
   const ctxLines = recent
     .slice(-40)
     .map((m) => ({
@@ -3205,7 +3227,7 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
         authorMember: member,
         offenses,
         persistOffenses: async () => persistOffenses(),
-        ownerId: config.ownerId || null,
+        ownerId: guildConfig.ownerId || null,
         chatHistory: recent.slice(-50).map((m) => ({
           author: m.author,
           authorId: m.authorId,
@@ -3272,18 +3294,19 @@ async function handleAgentOrChatReply(msg, triggerReason, media = null) {
 async function maybeSpontaneousChime(msg) {
   if (!aiAvailable()) return;
   if (msg.author.bot) return;
+  const key = channelKey(msg.guild?.id, msg.channel.id);
   const now = Date.now();
-  const last = lastSpontaneousAt.get(msg.channel.id) || 0;
+  const last = lastSpontaneousAt.get(key) || 0;
   if (now - last < SPONTANEOUS_COOLDOWN_MS) return;
   if (Math.random() > SPONTANEOUS_BASE_PROB) return;
 
-  const recent = getRecent(msg.channel.id);
+  const recent = getRecent(msg.guild?.id, msg.channel.id);
   if (recent.length < SPONTANEOUS_MIN_RECENT) return;
   const interested = await shouldEngage(recent);
   if (!interested) return;
 
   // Set cooldown BEFORE sending so a long generation doesn't spawn duplicates.
-  lastSpontaneousAt.set(msg.channel.id, now);
+  lastSpontaneousAt.set(key, now);
   try {
     await msg.channel.sendTyping().catch(() => {});
     const reply = await generateReply({
@@ -3297,18 +3320,20 @@ async function maybeSpontaneousChime(msg) {
     });
     const text = (reply?.content || "").trim();
     if (text) { const _ct = _stripThink(text); if (_ct) await msg.channel.send({ content: _ct.slice(0, 500) }); }
-    else lastSpontaneousAt.set(msg.channel.id, 0); // empty result — release cooldown
+    else lastSpontaneousAt.set(key, 0); // empty result — release cooldown
   } catch (err) {
     console.warn("[chime] failed:", err?.message?.slice(0, 200));
-    lastSpontaneousAt.set(msg.channel.id, 0); // failed — release cooldown
+    lastSpontaneousAt.set(key, 0); // failed — release cooldown
   }
 }
 
-client.on(Events.MessageCreate, async (msg) => {
+async function processMessageCreate(msg) {
   try {
     if (!msg.guild) return;
-    if (!config.guildId || msg.guild.id !== config.guildId) return;
     if (!msg.content) return;
+    // Every guild gets its own normalized settings. If no explicit guild
+    // entry exists, loadConfigForGuild returns safe defaults for that guild.
+    const guildConfig = loadConfigForGuild(msg.guild.id);
 
     // Track ALL messages (including the bot's own replies) so the agent has
     // a faithful conversation log to reason over. Without this, when the
@@ -3316,7 +3341,7 @@ client.on(Events.MessageCreate, async (msg) => {
     // questions vanishing into a void.
     const _trackedMember = msg.guild?.members?.cache?.get(msg.author.id);
     const _trackedName = _trackedMember?.displayName || msg.author.globalName || msg.author.username;
-    pushRecent(msg.channel.id, {
+    pushRecent(msg.guild.id, msg.channel.id, {
       author: _trackedName,
       authorId: msg.author.id,
       content: msg.content.slice(0, 500),
@@ -3329,16 +3354,16 @@ client.on(Events.MessageCreate, async (msg) => {
     if (msg.author?.bot) return;
 
     // ===== EXISTING: legacy voice-mute on configured banned word (PRESERVED) =====
-    const legacyWord = findBannedWord(msg.content);
+    const legacyWord = findBannedWord(msg.content, guildConfig);
     if (legacyWord) {
-      await applyWordBan(msg.guild, msg.author.id, legacyWord, "chat");
+      await applyWordBan(msg.guild, msg.author.id, legacyWord, "chat", undefined, guildConfig);
       return; // Stop here — don't also run extended profanity (prevents double message)
     }
 
     // ===== NEW: extended profanity detection (multi-language + AI) =====
     const detection = await detectProfanity({
       content: msg.content,
-      extraWords: config.bannedWords,
+      extraWords: guildConfig.bannedWords,
       useAI: aiAvailable(),
     });
     if (detection.profane) {
@@ -3349,7 +3374,7 @@ client.on(Events.MessageCreate, async (msg) => {
     // ===== NEW: AI reply when the bot is addressed =====
     const triggered = isBotTriggered(msg);
     if (triggered && aiAvailable()) {
-      if (triggered === "reply") lastReplyResponseAt.set(msg.channel.id, Date.now());
+      if (triggered === "reply") lastReplyResponseAt.set(channelKey(msg.guild.id, msg.channel.id), Date.now());
       // If the message has image / video attachments, route through the
       // vision pipeline (YOLO + vision-LLM) instead of plain chat.
       const media = collectMediaAttachments(msg);
@@ -3360,11 +3385,11 @@ client.on(Events.MessageCreate, async (msg) => {
           await handleVisionReply(msg, triggered, media);
         } catch (err) {
           console.warn("[vision] handler crashed:", err?.message?.slice(0, 200));
-          await handleAgentOrChatReply(msg, triggered, media);
+          await handleAgentOrChatReply(msg, triggered, media, guildConfig);
         }
         return;
       }
-      await handleAgentOrChatReply(msg, triggered);
+      await handleAgentOrChatReply(msg, triggered, undefined, guildConfig);
       return;
     }
 
@@ -3373,6 +3398,12 @@ client.on(Events.MessageCreate, async (msg) => {
   } catch (err) {
     console.error("[message] handler error", err?.message);
   }
+}
+
+client.on(Events.MessageCreate, (msg) => {
+  if (!msg.guild || !msg.content) return;
+  enqueueChannelWork(msg.guild.id, msg.channel.id, () => processMessageCreate(msg))
+    .catch((err) => console.error("[message] queued handler error", err?.message));
 });
 
 // ─── /study command + button handlers ────────────────────────────────────────
