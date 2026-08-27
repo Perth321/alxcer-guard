@@ -81,6 +81,7 @@ import {
   handleNotifyCommand,
   handleNotifyComponent,
   tickScheduler as tickNotifyScheduler,
+  setLegacyGuildId as setNotifyLegacyGuildId,
 } from "./notifications.js";
 import {
   addTranscript,
@@ -219,6 +220,7 @@ if (!transcriptionAvailable) {
 }
 
 let config = loadConfig();
+setNotifyLegacyGuildId(config.guildId);
 if (config.ownerId) setOwnerId(config.ownerId);
 const TOKEN = process.env.DISCORD_PERSONAL_ACCESS_TOKEN;
 
@@ -2437,12 +2439,18 @@ client.once(Events.ClientReady, async (c) => {
     }, 60_000);
 
     // Scheduled notifications tick — every 30s. Items fire once per day at
-    // their configured Asia/Bangkok time.
+    // their configured Asia/Bangkok time, independently per guild/channel.
     setInterval(() => {
       tickNotifyScheduler({
         client,
-        guildId: config.guildId,
-        defaultChannelId: config.notifyChannelId,
+        legacyGuildId: config.guildId,
+        guildTargets: [...client.guilds.cache.values()].map((g) => {
+          const guildConfig = loadConfigForGuild(g.id);
+          return {
+            guildId: g.id,
+            defaultChannelId: guildConfig.notifyChannelId,
+          };
+        }),
       }).catch((err) => console.error("[notify] tick error", err?.message));
     }, 30_000);
 
