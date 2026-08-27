@@ -522,7 +522,10 @@ export async function handleSettingComponent(interaction, runtime) {
     }
 
     if (action === "refresh" && interaction.isButton()) {
-      await interaction.update(buildSettingsView(runtime.getConfig()));
+      const refreshed = interaction.guildId
+        ? loadConfigForGuild(interaction.guildId)
+        : runtime.getConfig();
+      await interaction.update(buildSettingsView(refreshed));
       return true;
     }
 
