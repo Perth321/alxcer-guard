@@ -24,7 +24,7 @@
   "guilds": {
     "1433097119434276925": {
       "guildId": "1433097119434276925",
-      "voiceChannelId": "",
+      "voiceChannelId": "1433097120352702477",
       "notifyChannelId": "1537123707460395111",
       "warningSeconds": 180,
       "muteSeconds": 300,
