@@ -34,6 +34,18 @@ const MAX_ITEMS = 25;
 
 let _data = { items: [] };
 let _seq = 1;
+let _legacyGuildId = null;
+
+export function setLegacyGuildId(guildId) {
+  _legacyGuildId = guildId ? String(guildId) : null;
+}
+
+function belongsToGuild(it, guildId) {
+  if (!guildId) return !it.guildId;
+  const id = String(guildId);
+  return String(it.guildId || "") === id ||
+    (!it.guildId && _legacyGuildId === id);
+}
 
 function isValidItem(it) {
   return (
@@ -72,17 +84,20 @@ function normalizeTime(input) {
   return `${String(parseInt(m[1], 10)).padStart(2, "0")}:${m[2]}`;
 }
 
-export function listNotifications() {
-  return _data.items.map((it) => ({ ...it }));
+export function listNotifications(guildId = null) {
+  return _data.items
+    .filter((it) => belongsToGuild(it, guildId))
+    .map((it) => ({ ...it }));
 }
 
-export function getNotification(id) {
-  const found = _data.items.find((it) => it.id === id);
+export function getNotification(id, guildId = null) {
+  const found = _data.items.find((it) => it.id === id && belongsToGuild(it, guildId));
   return found ? { ...found } : null;
 }
 
-export function addNotification({ time, label, message, roleId = null, channelId = null }) {
-  if (_data.items.length >= MAX_ITEMS) {
+export function addNotification({ guildId = null, time, label, message, roleId = null, channelId = null }) {
+  const scopedCount = _data.items.filter((it) => belongsToGuild(it, guildId)).length;
+  if (scopedCount >= MAX_ITEMS) {
     throw new Error(`มีรายการครบ ${MAX_ITEMS} แล้ว — ลบของเก่าก่อน`);
   }
   const t = normalizeTime(time);
@@ -91,6 +106,7 @@ export function addNotification({ time, label, message, roleId = null, channelId
   if (!msg) throw new Error("ต้องมีข้อความแจ้งเตือน");
   const item = {
     id: nextId(),
+    guildId: guildId ? String(guildId) : null,
     time: t,
     label: String(label || "").trim().slice(0, 60) || `แจ้งเตือน ${t}`,
     message: msg.slice(0, 1500),
@@ -102,9 +118,9 @@ export function addNotification({ time, label, message, roleId = null, channelId
   return { ...item };
 }
 
-export function updateNotification(id, patch) {
+export function updateNotification(id, patch, guildId = null) {
   const it = _data.items.find((x) => x.id === id);
-  if (!it) return null;
+  if (!it || !belongsToGuild(it, guildId)) return null;
   if (patch.time !== undefined) {
     const t = normalizeTime(patch.time);
     if (!t) throw new Error("เวลาต้องอยู่ในรูป HH:MM");
@@ -122,7 +138,9 @@ export function updateNotification(id, patch) {
   return { ...it };
 }
 
-export function removeNotification(id) {
+export function removeNotification(id, guildId = null) {
+  const target = _data.items.find((it) => it.id === id && belongsToGuild(it, guildId));
+  if (!target) return false;
   const before = _data.items.length;
   _data.items = _data.items.filter((it) => it.id !== id);
   return _data.items.length < before;
@@ -149,24 +167,37 @@ function bangkokYmdHm() {
 }
 
 let _running = false;
-export async function tickScheduler({ client, guildId, defaultChannelId }) {
+export async function tickScheduler({ client, guildId, defaultChannelId, guildTargets, legacyGuildId }) {
   if (_running) return;
-  if (!_data.items.length || !guildId) return;
+  const targets = guildTargets?.length
+    ? guildTargets
+    : (guildId ? [{ guildId, defaultChannelId }] : []);
+  if (!_data.items.length || !targets.length) return;
   const { ymd, hm } = bangkokYmdHm();
-  const due = _data.items.filter((it) => it.time === hm && it.lastFiredYMD !== ymd);
-  if (!due.length) return;
+  const dueByTarget = targets.map((target) => ({
+    ...target,
+    items: _data.items.filter((it) =>
+      it.time === hm &&
+      it.lastFiredYMD !== ymd &&
+      (String(it.guildId || "") === String(target.guildId) ||
+        (!it.guildId && String(legacyGuildId || _legacyGuildId || "") === String(target.guildId))),
+    ),
+  })).filter((target) => target.items.length);
+  if (!dueByTarget.length) return;
   _running = true;
-  let guild;
-  try { guild = await client.guilds.fetch(guildId); }
-  catch (err) {
-    console.error("[notify] guild fetch failed", err?.message);
-    _running = false;
-    return;
-  }
   let changed = false;
-  for (const it of due) {
-    try {
-      const channelId = it.channelId || defaultChannelId;
+  try {
+    for (const target of dueByTarget) {
+      let guild;
+      try {
+        guild = await client.guilds.fetch(target.guildId);
+      } catch (err) {
+        console.error(`[notify] guild ${target.guildId} fetch failed`, err?.message);
+        continue;
+      }
+      for (const it of target.items) {
+       try {
+       const channelId = it.channelId || target.defaultChannelId;
       if (!channelId) {
         console.warn(`[notify:${it.id}] no channel set and no notifyChannelId — skipping`);
         continue;
@@ -189,14 +220,17 @@ export async function tickScheduler({ client, guildId, defaultChannelId }) {
       });
       it.lastFiredYMD = ymd;
       changed = true;
-    } catch (err) {
-      console.error(`[notify:${it.id}] send failed`, err?.message);
+       } catch (err) {
+        console.error(`[notify:${it.id}] send failed`, err?.message);
+       }
+      }
     }
+    if (changed) {
+      try { persistLocal(); } catch (err) { console.error("[notify] persist failed", err?.message); }
+    }
+  } finally {
+    _running = false;
   }
-  if (changed) {
-    try { persistLocal(); } catch (err) { console.error("[notify] persist failed", err?.message); }
-  }
-  _running = false;
 }
 
 // ─── UI views & component handler ────────────────────────────────────────────
@@ -207,8 +241,9 @@ function fmtItem(it, i) {
   return `**${i + 1}. \`${it.time}\` — ${it.label}**\n• ยศ: ${role}  ·  ห้อง: ${ch}\n• ข้อความ: ${it.message.slice(0, 140)}${it.message.length > 140 ? "…" : ""}`;
 }
 
-export function buildPanelView() {
-  const items = _data.items.slice().sort((a, b) => a.time.localeCompare(b.time));
+export function buildPanelView(guildId = null) {
+  const items = _data.items.filter((it) => belongsToGuild(it, guildId))
+    .slice().sort((a, b) => a.time.localeCompare(b.time));
   const embed = new EmbedBuilder()
     .setColor(0x6366f1)
     .setTitle("⏰ การแจ้งเตือนตามเวลา")
@@ -347,14 +382,14 @@ export async function handleNotifyComponent(interaction) {
   try {
     // Refresh main panel
     if (id === "notify:refresh" && interaction.isButton()) {
-      await interaction.update(buildPanelView());
+      await interaction.update(buildPanelView(interaction.guildId));
       return true;
     }
 
     // Pick an item from the dropdown → show item view
     if (id === "notify:pick" && interaction.isStringSelectMenu()) {
       const itemId = interaction.values[0];
-      const it = getNotification(itemId);
+      const it = getNotification(itemId, interaction.guildId);
       if (!it) {
         await interaction.reply({ content: "รายการนี้ไม่อยู่แล้ว", ephemeral: true });
         return true;
@@ -374,7 +409,7 @@ export async function handleNotifyComponent(interaction) {
       const time = interaction.fields.getTextInputValue("time");
       const label = interaction.fields.getTextInputValue("label");
       const message = interaction.fields.getTextInputValue("message");
-      const item = addNotification({ time, label, message });
+      const item = addNotification({ guildId: interaction.guildId, time, label, message });
       await persistAndCommit();
       await interaction.reply({
         content: `✅ เพิ่มแล้ว: \`${item.time}\` — ${item.label}\nกดเลือกรายการนี้ในเมนูเพื่อตั้งยศ/ห้องที่จะ ping`,
@@ -390,7 +425,7 @@ export async function handleNotifyComponent(interaction) {
 
     if (action === "role" && interaction.isRoleSelectMenu?.()) {
       const role = interaction.values?.[0] ?? null;
-      const updated = updateNotification(itemId, { roleId: role });
+      const updated = updateNotification(itemId, { roleId: role }, interaction.guildId);
       if (!updated) { await interaction.reply({ content: "รายการหายไปแล้ว", ephemeral: true }); return true; }
       await persistAndCommit();
       await interaction.update(buildItemView(updated));
@@ -399,7 +434,7 @@ export async function handleNotifyComponent(interaction) {
 
     if (action === "channel" && interaction.isChannelSelectMenu?.()) {
       const ch = interaction.values?.[0] ?? null;
-      const updated = updateNotification(itemId, { channelId: ch });
+      const updated = updateNotification(itemId, { channelId: ch }, interaction.guildId);
       if (!updated) { await interaction.reply({ content: "รายการหายไปแล้ว", ephemeral: true }); return true; }
       await persistAndCommit();
       await interaction.update(buildItemView(updated));
@@ -407,7 +442,7 @@ export async function handleNotifyComponent(interaction) {
     }
 
     if (action === "edit" && interaction.isButton()) {
-      const it = getNotification(itemId);
+      const it = getNotification(itemId, interaction.guildId);
       if (!it) { await interaction.reply({ content: "รายการหายไปแล้ว", ephemeral: true }); return true; }
       await interaction.showModal(editModal(it));
       return true;
@@ -417,7 +452,7 @@ export async function handleNotifyComponent(interaction) {
       const time = interaction.fields.getTextInputValue("time");
       const label = interaction.fields.getTextInputValue("label");
       const message = interaction.fields.getTextInputValue("message");
-      const updated = updateNotification(itemId, { time, label, message });
+      const updated = updateNotification(itemId, { time, label, message }, interaction.guildId);
       if (!updated) { await interaction.reply({ content: "รายการหายไปแล้ว", ephemeral: true }); return true; }
       await persistAndCommit();
       await interaction.reply({ content: `✅ บันทึกแล้ว: \`${updated.time}\` — ${updated.label}`, ephemeral: true });
@@ -425,7 +460,7 @@ export async function handleNotifyComponent(interaction) {
     }
 
     if (action === "delete" && interaction.isButton()) {
-      const ok = removeNotification(itemId);
+      const ok = removeNotification(itemId, interaction.guildId);
       await persistAndCommit();
       await interaction.update({
         embeds: [new EmbedBuilder().setColor(0x95a5a6).setTitle(ok ? "🗑️ ลบแล้ว" : "ไม่พบ").setDescription(ok ? "ลบการแจ้งเตือนเรียบร้อย" : "รายการนี้ไม่อยู่แล้ว")],
@@ -451,5 +486,5 @@ export async function handleNotifyCommand(interaction) {
     await interaction.reply({ content: "ต้องมีสิทธิ์ Manage Server เท่านั้น", ephemeral: true });
     return;
   }
-  await interaction.reply({ ...buildPanelView(), ephemeral: true });
+  await interaction.reply({ ...buildPanelView(interaction.guildId), ephemeral: true });
 }
