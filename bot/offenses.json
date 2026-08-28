@@ -416,6 +416,23 @@
           }
         ]
       }
+    },
+    "1306591570279006305": {
+      "chat": {
+        "count": 1,
+        "lastAt": 1787928273823,
+        "history": [
+          {
+            "at": 1787928273823,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควยย55",
+            "action": "timeout_failed",
+            "source": "local"
+          }
+        ]
+      }
     }
   }
 }
