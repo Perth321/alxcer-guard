@@ -316,14 +316,14 @@
       "lastSource": "voice",
       "chat": {
         "count": 1,
-        "lastAt": 1786620260836,
+        "lastAt": 1788160679958,
         "history": [
           {
-            "at": 1786620260836,
+            "at": 1788160679958,
             "severity": 7,
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
+            "excerpt": "การ์โ ควยๆๆๆ",
             "action": "timeout_failed",
             "source": "local"
           }
