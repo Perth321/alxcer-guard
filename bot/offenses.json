@@ -7,134 +7,17 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 14,
-        "lastAt": 1784198420945,
+        "count": 1,
+        "lastAt": 1788439761072,
         "history": [
           {
-            "at": 1782193879821,
+            "at": 1788439761072,
             "severity": 7,
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
             "excerpt": "ควย",
             "action": "timeout_failed",
             "source": "local"
-          },
-          {
-            "at": 1782193880540,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1782278281157,
-            "severity": 7,
-            "matched": "สัส",
-            "reason": "ใช้คำต้องห้าม: \"สัส\"",
-            "excerpt": "ไอสัสเน้ตที่โรงอาหารยังกาก",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1782696855018,
-            "severity": 7,
-            "matched": "สัส",
-            "reason": "ใช้คำต้องห้าม: \"สัส\"",
-            "excerpt": "ไอสัส",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1782739329971,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "!th ตัวเหี้ย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1783170940599,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "แต่ว่าอันนี้เป็นคนพูดคนเดียวไอ้เหี้ยโคตรเวอร์อ่ะ",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1783225137210,
-            "severity": 7,
-            "matched": "สัส",
-            "reason": "ใช้คำต้องห้าม: \"สัส\"",
-            "excerpt": "ดาร์คสัส",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1783313577646,
-            "severity": 6,
-            "matched": "ครวย",
-            "reason": "มีการใช้คำหยาบคายที่สื่อถึงอวัยวะเพศ",
-            "excerpt": "ครวยไม่เล้ก",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1783515143811,
-            "severity": 7,
-            "matched": "cặc",
-            "reason": "ใช้คำต้องห้าม: \"cặc\"",
-            "excerpt": "Con cặc",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1783743146199,
-            "severity": 7,
-            "matched": "แม่มึง",
-            "reason": "ใช้คำหยาบเรียกบุคคล",
-            "excerpt": "แม่มึงอะ",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1784107161793,
-            "severity": 7,
-            "matched": "สัส",
-            "reason": "ใช้คำต้องห้าม: \"สัส\"",
-            "excerpt": "ไอสัส อยู่ๆ นัดเฉย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1784119737938,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "พวก อยู่สังคมแบบนี้พ่อแม่มันก็คงเป็นพวก สปีชีส เดียวกันนั้นแหละ หลอกพวกเชี้ยนี่ลดประชากร ตายห่า เพราะ มะเร็งควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1784119808427,
-            "severity": 7,
-            "matched": "โง่",
-            "reason": "เป็นการด่าทอและดูถูกเหยียดหยามผู้อื่น",
-            "excerpt": "โง่แหละถึงเกิดเป็นพ่อแม่ลูกได้",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1784198420944,
-            "severity": 6,
-            "matched": "ไอ้เชี้ย",
-            "reason": "มีคำหยาบที่ใช้เรียกคนอื่น",
-            "excerpt": "ทักคนทั้งคณะเลยไอเชี้ย จำคนที่นั่งข้างๆ เมื่อวานไม่ได้",
-            "action": "timeout_failed",
-            "source": "ai"
           }
         ]
       }
