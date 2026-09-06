@@ -7,8 +7,8 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 2,
-        "lastAt": 1788441361115,
+        "count": 3,
+        "lastAt": 1788691624825,
         "history": [
           {
             "at": 1788439761072,
@@ -27,6 +27,15 @@
             "excerpt": "ควย",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1788691624825,
+            "severity": 6,
+            "matched": "ครวย",
+            "reason": "มีคำหยาบที่แสดงถึงความหงุดหงิด",
+            "excerpt": "ครวยเอ้ย",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
