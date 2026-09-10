@@ -48,25 +48,25 @@
       "lastSource": "voice",
       "chat": {
         "count": 2,
-        "lastAt": 1787753939582,
+        "lastAt": 1789049182428,
         "history": [
           {
-            "at": 1787577659724,
+            "at": 1789049177580,
             "severity": 7,
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควยยยยยย",
+            "excerpt": "ควยๆๆๆๆๆ",
             "action": "timeout_failed",
             "source": "local"
           },
           {
-            "at": 1787753939582,
+            "at": 1789049182428,
             "severity": 7,
-            "matched": "เน๋ด",
-            "reason": "มีคำหยาบที่สื่อถึงการร่วมเพศ",
-            "excerpt": "เน๋ดหลุก",
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควยยยยยยยนรรร",
             "action": "timeout_failed",
-            "source": "ai"
+            "source": "local"
           }
         ]
       }
