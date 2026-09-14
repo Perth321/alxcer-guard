@@ -217,15 +217,15 @@
       "lastSource": "voice",
       "chat": {
         "count": 1,
-        "lastAt": 1788160679958,
+        "lastAt": 1789377308217,
         "history": [
           {
-            "at": 1788160679958,
+            "at": 1789377308217,
             "severity": 7,
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "การ์โ ควยๆๆๆ",
-            "action": "timeout_failed",
+            "excerpt": "<@276060004262477825>  เลิกแบนกุ ควย",
+            "action": "timeout_60s",
             "source": "local"
           }
         ]
