@@ -320,25 +320,16 @@
     },
     "1306591570279006305": {
       "chat": {
-        "count": 2,
-        "lastAt": 1788369964831,
+        "count": 1,
+        "lastAt": 1789835736731,
         "history": [
           {
-            "at": 1787928273823,
+            "at": 1789835736731,
             "severity": 7,
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควยย55",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1788369964831,
-            "severity": 7,
-            "matched": "สัส",
-            "reason": "ใช้คำต้องห้าม: \"สัส\"",
-            "excerpt": "ไอสัสไม่หลับไม่นอน เจ็ดแหม๋",
-            "action": "timeout_failed",
+            "excerpt": "ควย5555 มุงสรรหาพิมพ์เนอะ555",
+            "action": "timeout_60s",
             "source": "local"
           }
         ]
