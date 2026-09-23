@@ -78,98 +78,17 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 10,
-        "lastAt": 1787627191368,
+        "count": 1,
+        "lastAt": 1790172401466,
         "history": [
           {
-            "at": 1786637431879,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1786637506195,
-            "severity": 7,
-            "matched": "ควาย",
-            "reason": "มีคำหยาบคายที่ใช้ด่าทอโดยตรง",
-            "excerpt": "เบื่อขี้หน้าควาย",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1786772267101,
+            "at": 1790172401466,
             "severity": 6,
-            "matched": "แม่มึง",
-            "reason": "มีคำหยาบคายที่ใช้ด่าทอ",
-            "excerpt": "บองแม่มึงอ่ะ",
+            "matched": "มึง",
+            "reason": "มีคำหยาบที่ใช้เรียกบุคคล",
+            "excerpt": "มึงไม่ต้องกดหรอกมึงอ่ะ",
             "action": "timeout_failed",
             "source": "ai"
-          },
-          {
-            "at": 1787202719001,
-            "severity": 7,
-            "matched": "ครวย",
-            "reason": "มีคำหยาบคายที่รุนแรง",
-            "excerpt": "ครวยยยยยยยย",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1787380407604,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1787468620534,
-            "severity": 7,
-            "matched": "มึง...ไอ้ควาย",
-            "reason": "ผู้ใช้ใช้คำหยาบคายและคำด่าทอโดยตรง",
-            "excerpt": "มึงอ่านดีๆดิไอ้ควาย",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1787468642924,
-            "severity": 7,
-            "matched": "มึง...ไอ้ kvay",
-            "reason": "ผู้ใช้ใช้คำหยาบคายและคำด่าทอโดยตรง",
-            "excerpt": "มึงอ่านดีๆดิไอ้ kvay",
-            "action": "timeout_failed",
-            "source": "ai"
-          },
-          {
-            "at": 1787626706333,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1787627165262,
-            "severity": 7,
-            "matched": "หี",
-            "reason": "ใช้คำต้องห้าม: \"หี\"",
-            "excerpt": "ตัวเหี้ยไรว่ะนั้น",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1787627191368,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
           }
         ]
       }
