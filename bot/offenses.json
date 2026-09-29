@@ -7,35 +7,17 @@
       "lastWord": "ขอดูหี",
       "lastSource": "voice",
       "chat": {
-        "count": 3,
-        "lastAt": 1788691624825,
+        "count": 1,
+        "lastAt": 1790659839323,
         "history": [
           {
-            "at": 1788439761072,
+            "at": 1790659839323,
             "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
+            "matched": "สัส",
+            "reason": "ใช้คำต้องห้าม: \"สัส\"",
+            "excerpt": "ไอสัส พื้นที่ส่วนตัว",
             "action": "timeout_failed",
             "source": "local"
-          },
-          {
-            "at": 1788441361115,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควย",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1788691624825,
-            "severity": 6,
-            "matched": "ครวย",
-            "reason": "มีคำหยาบที่แสดงถึงความหงุดหงิด",
-            "excerpt": "ครวยเอ้ย",
-            "action": "timeout_failed",
-            "source": "ai"
           }
         ]
       }
