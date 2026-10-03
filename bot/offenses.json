@@ -38,24 +38,15 @@
       "lastWord": "หี",
       "lastSource": "voice",
       "chat": {
-        "count": 2,
-        "lastAt": 1789049182428,
+        "count": 1,
+        "lastAt": 1791009531586,
         "history": [
           {
-            "at": 1789049177580,
+            "at": 1791009531586,
             "severity": 7,
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควยๆๆๆๆๆ",
-            "action": "timeout_failed",
-            "source": "local"
-          },
-          {
-            "at": 1789049182428,
-            "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควยยยยยยยนรรร",
+            "excerpt": "ควยๆๆๆๆๆๆๆๆ",
             "action": "timeout_failed",
             "source": "local"
           }
