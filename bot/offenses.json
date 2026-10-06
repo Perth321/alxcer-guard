@@ -61,16 +61,16 @@
       "lastSource": "chat",
       "chat": {
         "count": 1,
-        "lastAt": 1790172401466,
+        "lastAt": 1791289523040,
         "history": [
           {
-            "at": 1790172401466,
-            "severity": 6,
-            "matched": "มึง",
-            "reason": "มีคำหยาบที่ใช้เรียกบุคคล",
-            "excerpt": "มึงไม่ต้องกดหรอกมึงอ่ะ",
+            "at": 1791289523040,
+            "severity": 7,
+            "matched": "ควย",
+            "reason": "ใช้คำต้องห้าม: \"ควย\"",
+            "excerpt": "ควยเถอะ",
             "action": "timeout_failed",
-            "source": "ai"
+            "source": "local"
           }
         ]
       }
