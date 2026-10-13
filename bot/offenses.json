@@ -61,14 +61,14 @@
       "lastSource": "chat",
       "chat": {
         "count": 1,
-        "lastAt": 1791289523040,
+        "lastAt": 1791908879988,
         "history": [
           {
-            "at": 1791289523040,
+            "at": 1791908879988,
             "severity": 7,
             "matched": "ควย",
             "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควยเถอะ",
+            "excerpt": "ควยเอ่ย",
             "action": "timeout_failed",
             "source": "local"
           }
