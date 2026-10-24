@@ -60,8 +60,8 @@
       "lastWord": "หี",
       "lastSource": "chat",
       "chat": {
-        "count": 1,
-        "lastAt": 1792846748336,
+        "count": 2,
+        "lastAt": 1792846778432,
         "history": [
           {
             "at": 1792846748336,
@@ -71,6 +71,15 @@
             "excerpt": "เพราะเปิดหีคนไม่ได้",
             "action": "timeout_failed",
             "source": "local"
+          },
+          {
+            "at": 1792846778432,
+            "severity": 7,
+            "matched": "หี",
+            "reason": "มีคำหยาบที่สื่อถึงอวัยวะเพศหญิง",
+            "excerpt": "เพราะเปิดหee คนบ่ได้",
+            "action": "timeout_failed",
+            "source": "ai"
           }
         ]
       }
