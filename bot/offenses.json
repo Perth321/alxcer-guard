@@ -39,14 +39,14 @@
       "lastSource": "voice",
       "chat": {
         "count": 1,
-        "lastAt": 1791009531586,
+        "lastAt": 1792846710268,
         "history": [
           {
-            "at": 1791009531586,
+            "at": 1792846710268,
             "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควยๆๆๆๆๆๆๆๆ",
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "มันบอกจะเปิดหีหมา",
             "action": "timeout_failed",
             "source": "local"
           }
