@@ -61,14 +61,14 @@
       "lastSource": "chat",
       "chat": {
         "count": 1,
-        "lastAt": 1791908879988,
+        "lastAt": 1792846748336,
         "history": [
           {
-            "at": 1791908879988,
+            "at": 1792846748336,
             "severity": 7,
-            "matched": "ควย",
-            "reason": "ใช้คำต้องห้าม: \"ควย\"",
-            "excerpt": "ควยเอ่ย",
+            "matched": "หี",
+            "reason": "ใช้คำต้องห้าม: \"หี\"",
+            "excerpt": "เพราะเปิดหีคนไม่ได้",
             "action": "timeout_failed",
             "source": "local"
           }
